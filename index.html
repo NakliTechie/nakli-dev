@@ -43,11 +43,9 @@ input{font:inherit; color:inherit;}
 /* ── DESKTOP CHROME ── */
 #desktop{
   width:100%; height:100vh; position:relative;
-  background:
-    radial-gradient(ellipse 80% 60% at 15% 8%, color-mix(in srgb, var(--brand) 10%, transparent) 0%, transparent 55%),
-    radial-gradient(ellipse 60% 50% at 90% 95%, color-mix(in srgb, var(--act) 8%, transparent) 0%, transparent 60%),
-    var(--body);
+  background:var(--wallpaper, var(--body));
 }
+#desktop.wp-light{color-scheme:light;}
 
 #topbar{
   position:absolute; top:0; left:0; right:0; height:var(--topbar-h);
@@ -262,6 +260,23 @@ input{font:inherit; color:inherit;}
   font-size:9px; padding:1px 5px; border-radius:4px;
   background:color-mix(in srgb, var(--brand) 30%, transparent);
   color:var(--brand); margin-left:6px; font-weight:600;
+}
+.nw-wp-grid{
+  display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;
+}
+.nw-wp{
+  cursor:pointer; border-radius:8px; overflow:hidden;
+  border:2px solid transparent;
+  transition:transform 0.12s;
+}
+.nw-wp:hover{transform:translateY(-1px);}
+.nw-wp.is-active{border-color:var(--brand);}
+.nw-wp-preview{height:50px;}
+.nw-wp-label{
+  font-size:9px; padding:3px 4px;
+  text-align:center; background:var(--row);
+  color:var(--muted); font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .nw-palette-grid{
   display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;
@@ -659,12 +674,35 @@ const PALETTES = [
 ];
 
 // ════════════════════════════════════════════════════════════════════
+// WALLPAPERS (decoupled from palette — palette = UI chrome, wallpaper = desktop bg)
+// ════════════════════════════════════════════════════════════════════
+const WALLPAPERS = [
+  { id:'aurora', name:'Aurora', mood:'dark',
+    css:'radial-gradient(ellipse 70% 50% at 18% 28%, #b58dcf 0%, transparent 50%), radial-gradient(ellipse 80% 60% at 82% 70%, #6f93d4 0%, transparent 55%), radial-gradient(ellipse 100% 100% at 50% 100%, #4a3c5e 0%, transparent 70%), linear-gradient(180deg, #221a30 0%, #14101c 100%)' },
+  { id:'karewa', name:'Karewa', mood:'warm',
+    css:'radial-gradient(ellipse 90% 70% at 25% 12%, #ffc89a 0%, transparent 50%), radial-gradient(ellipse 80% 70% at 88% 95%, #d97757 0%, transparent 58%), radial-gradient(ellipse 70% 60% at 60% 60%, #b85a78 0%, transparent 60%), linear-gradient(180deg, #4a2c3a 0%, #251820 100%)' },
+  { id:'indigo', name:'Indigo Dusk', mood:'cool',
+    css:'radial-gradient(ellipse 80% 60% at 75% 22%, #5a4ca8 0%, transparent 50%), radial-gradient(ellipse 100% 80% at 0% 100%, #1a2868 0%, transparent 70%), linear-gradient(135deg, #0c1430 0%, #1a1840 100%)' },
+  { id:'monsoon', name:'Monsoon', mood:'dark',
+    css:'radial-gradient(ellipse 90% 70% at 50% 0%, #4a7a8a 0%, transparent 60%), radial-gradient(ellipse 70% 50% at 10% 100%, #2a5060 0%, transparent 60%), linear-gradient(180deg, #1c3038 0%, #0e1c24 100%)' },
+  { id:'charcoal', name:'Charcoal', mood:'dark',
+    css:'radial-gradient(ellipse 90% 70% at 12% 88%, #44444f 0%, transparent 60%), radial-gradient(ellipse 70% 50% at 88% 12%, #38384a 0%, transparent 60%), linear-gradient(135deg, #21212a 0%, #15151c 100%)' },
+  { id:'sand', name:'Sand & Ink', mood:'light',
+    css:'radial-gradient(ellipse 100% 100% at 30% 20%, #fbeed4 0%, transparent 60%), radial-gradient(ellipse 80% 60% at 80% 100%, #ead7b0 0%, transparent 70%), linear-gradient(180deg, #f9efd9 0%, #f0e2c0 100%)' },
+  { id:'porcelain', name:'Porcelain', mood:'light',
+    css:'radial-gradient(ellipse 80% 60% at 20% 18%, #e8eff8 0%, transparent 55%), radial-gradient(ellipse 90% 70% at 90% 90%, #d8e2f0 0%, transparent 60%), linear-gradient(180deg, #f4f7fc 0%, #e2eaf4 100%)' },
+  { id:'urushi', name:'Urushi', mood:'dark',
+    css:'radial-gradient(ellipse 80% 60% at 15% 8%, rgba(200,81,42,0.10) 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 95%, rgba(58,90,138,0.08) 0%, transparent 60%), #15100c' },
+];
+
+// ════════════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════════════
-const LS_KEY = { mode:'naklOS.mode', palette:'naklOS.palette', layout:'naklOS.layout' };
+const LS_KEY = { mode:'naklOS.mode', palette:'naklOS.palette', layout:'naklOS.layout', wallpaper:'naklOS.wallpaper' };
 const state = {
   mode: localStorage.getItem(LS_KEY.mode) || null,
   palette: localStorage.getItem(LS_KEY.palette) || 'japan-10',
+  wallpaper: localStorage.getItem(LS_KEY.wallpaper) || 'aurora',
   layout: JSON.parse(localStorage.getItem(LS_KEY.layout) || '{"version":1,"positions":{},"hidden":[]}'),
 };
 
@@ -708,6 +746,17 @@ function applyPalette(id){
   localStorage.setItem(LS_KEY.palette, p.id);
   // Pick a tile background tone derived from the palette
   r.setProperty('--tile-bg', `color-mix(in srgb, ${p.colors.PANEL} 70%, ${p.colors.BODY})`);
+}
+
+function applyWallpaper(id){
+  const w = WALLPAPERS.find(x => x.id === id) || WALLPAPERS[0];
+  document.documentElement.style.setProperty('--wallpaper', w.css);
+  const desk = document.getElementById('desktop');
+  if (desk){
+    desk.classList.toggle('wp-light', w.mood === 'light');
+  }
+  state.wallpaper = w.id;
+  localStorage.setItem(LS_KEY.wallpaper, w.id);
 }
 
 async function loadExtraPalettes(){
@@ -1217,17 +1266,25 @@ function openSettings(){
       </div>`;
   }).join('');
 
+  const wpHTML = WALLPAPERS.map(w => `
+    <div class="nw-wp ${w.id === state.wallpaper ? 'is-active' : ''}" data-wpid="${w.id}" title="${w.name} (${w.mood})">
+      <div class="nw-wp-preview" style="background:${w.css};"></div>
+      <div class="nw-wp-label">${w.name}</div>
+    </div>`).join('');
+
   wrap.innerHTML = `
     <h4>Mode</h4>
     ${modeHTML}
     ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Mode A is always used.</div>` : ''}
-    <h4>Palette <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— from Rangrez</span></h4>
+    <h4>Wallpaper</h4>
+    <div class="nw-wp-grid" id="wp-grid">${wpHTML}</div>
+    <h4>Palette <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— tints icon tiles &amp; windows</span></h4>
     <div class="nw-palette-grid" id="palette-grid">${palHTML}</div>
     <button class="nw-pal-load" id="palette-load">${extraPalettes ? `${extraPalettes.length} more loaded` : 'Load all 240 Rangrez palettes…'}</button>
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
-      <a class="nw-foot-link" href="https://github.com/NakliTechie/" target="_blank">View source on GitHub →</a>
+      <a class="nw-foot-link" href="https://github.com/NakliTechie/nakli-dev" target="_blank">View source on GitHub →</a>
       <a class="nw-foot-link" href="https://naklitechie.github.io/" target="_blank">Portfolio: naklitechie.github.io →</a>
     </div>
   `;
@@ -1238,6 +1295,12 @@ function openSettings(){
       setMode(r.value);
       wrap.querySelectorAll('.nw-mode-opt').forEach(o => o.classList.toggle('is-active', o.contains(r) && r.checked));
     });
+  });
+  wrap.querySelector('#wp-grid').addEventListener('click', e => {
+    const el = e.target.closest('.nw-wp');
+    if (!el) return;
+    applyWallpaper(el.dataset.wpid);
+    wrap.querySelectorAll('.nw-wp').forEach(p => p.classList.toggle('is-active', p === el));
   });
   wrap.querySelector('#palette-grid').addEventListener('click', e => {
     const el = e.target.closest('.nw-pal');
@@ -1757,6 +1820,7 @@ Classics.solitaire = (body, win) => {
 // INIT
 // ════════════════════════════════════════════════════════════════════
 function init(){
+  applyWallpaper(state.wallpaper);
   applyPalette(state.palette);
   if (state.mode) document.getElementById('mode-pill').textContent = getMode();
   else document.getElementById('mode-pill').textContent = getDefaultMode();
@@ -1792,8 +1856,8 @@ if (document.readyState === 'loading'){
 
 // Expose for debugging / future cross-tab API (per CONV.md)
 window.naklOS = {
-  state, APPS, PALETTES,
-  applyPalette, openApp, openSpotlight, openSettings,
+  state, APPS, PALETTES, WALLPAPERS,
+  applyPalette, applyWallpaper, openApp, openSpotlight, openSettings,
   setMode, getMode, effectiveMode,
 };
 </script>

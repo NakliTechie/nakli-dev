@@ -3,6 +3,7 @@
 !README.md
 !LICENSE
 !.gitignore
+!wrangler.jsonc
 
 # wrangler files
 .wrangler
