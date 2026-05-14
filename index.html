@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nakli.dev — the NakliTechie desktop</title>
+<meta name="description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
+<meta name="author" content="Chirag Patnaik">
+<link rel="canonical" href="https://nakli.dev/">
+<meta property="og:title" content="nakli.dev — the NakliTechie desktop">
+<meta property="og:description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2315100c'/%3E%3Ctext x='32' y='42' font-family='-apple-system,system-ui,sans-serif' font-size='32' font-weight='700' fill='%23c8512a' text-anchor='middle'%3En%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
+  --brand:#c8512a; --act:#3a5a8a; --ok:#7a9a3a; --row:#221a13;
+  --muted:color-mix(in srgb, var(--ink) 60%, var(--body));
+  --faint:color-mix(in srgb, var(--ink) 30%, var(--body));
+  --line:color-mix(in srgb, var(--ink) 14%, transparent);
+  --line-strong:color-mix(in srgb, var(--ink) 30%, transparent);
+  --tile-bg:var(--panel);
+  --shadow:0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25);
+  --topbar-h:48px; --footer-h:36px;
+  --icon-cell:96px;
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;height:100%;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+  background:var(--body); color:var(--ink);
+  overflow:hidden; -webkit-font-smoothing:antialiased;
+  user-select:none; font-size:14px;
+}
+
+button{font:inherit; color:inherit; background:none; border:0; cursor:pointer; padding:0;}
+a{color:var(--brand); text-decoration:none;}
+a:hover{text-decoration:underline;}
+input{font:inherit; color:inherit;}
+
+/* ── DESKTOP CHROME ── */
+#desktop{
+  width:100%; height:100vh; position:relative;
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 8%, color-mix(in srgb, var(--brand) 10%, transparent) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 90% 95%, color-mix(in srgb, var(--act) 8%, transparent) 0%, transparent 60%),
+    var(--body);
+}
+
+#topbar{
+  position:absolute; top:0; left:0; right:0; height:var(--topbar-h);
+  display:flex; align-items:center; gap:12px;
+  padding:0 16px;
+  background:color-mix(in srgb, var(--panel) 70%, transparent);
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line);
+  z-index:50;
+}
+.brand{
+  display:flex; align-items:center; gap:8px;
+  font-weight:600; letter-spacing:0.01em;
+}
+.brand-mark{
+  display:inline-block; width:22px; height:22px;
+  border-radius:6px;
+  background:linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 60%, var(--act)));
+  color:var(--panel);
+  display:inline-flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:13px;
+}
+.brand-sub{color:var(--muted); font-weight:400; margin-left:4px;}
+.topbar-spacer{flex:1;}
+.topbar-btn{
+  padding:6px 10px; border-radius:8px; color:var(--muted);
+  border:1px solid var(--line); background:transparent;
+  display:inline-flex; align-items:center; gap:6px;
+}
+.topbar-btn:hover{color:var(--ink); border-color:var(--line-strong);}
+.topbar-btn .kbd{
+  font-size:10px; padding:1px 5px; border-radius:4px;
+  background:var(--row); color:var(--muted); border:1px solid var(--line);
+}
+#spotlight-btn{min-width:200px; justify-content:flex-start; color:var(--faint);}
+#spotlight-btn:hover{color:var(--ink);}
+#clock{font-variant-numeric:tabular-nums; color:var(--muted); padding:0 4px;}
+#mode-pill{
+  padding:3px 8px; border-radius:999px; background:var(--row);
+  font-size:11px; color:var(--muted); border:1px solid var(--line);
+}
+
+/* ── ICON GRID ── */
+#icon-grid{
+  position:absolute;
+  top:var(--topbar-h); left:0; right:0; bottom:var(--footer-h);
+  overflow:auto;
+}
+.icon-area{
+  position:relative; width:100%; height:100%;
+  padding:24px;
+}
+.nw-icon{
+  position:absolute;
+  width:var(--icon-cell); height:104px;
+  display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding:8px 4px 4px 4px; border-radius:10px;
+  text-align:center;
+  transition:transform 0.12s ease;
+}
+.nw-icon:hover{background:color-mix(in srgb, var(--ink) 6%, transparent);}
+.nw-icon.dragging{opacity:0.5;}
+.nw-icon-tile{
+  width:56px; height:56px; border-radius:14px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:24px; font-weight:600;
+  background:var(--tile-bg); color:var(--ink);
+  border:1px solid var(--line);
+  box-shadow:0 4px 12px rgba(0,0,0,0.25), inset 0 1px 0 color-mix(in srgb, var(--ink) 10%, transparent);
+  position:relative;
+}
+.nw-icon-tile.has-glyph{font-size:28px;}
+.nw-icon-mono{
+  position:absolute; bottom:4px; right:6px;
+  font-size:9px; font-weight:700; opacity:0.5;
+}
+.nw-icon-label{
+  font-size:11px; line-height:1.15;
+  color:var(--ink); max-width:84px;
+  overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.nw-icon.private .nw-icon-tile::after{
+  content:""; position:absolute; top:5px; right:5px;
+  width:6px; height:6px; border-radius:50%;
+  background:var(--brand);
+}
+
+/* ── WINDOWS ── */
+.nw-window{
+  position:absolute;
+  min-width:280px; min-height:200px;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:10px;
+  box-shadow:var(--shadow);
+  display:flex; flex-direction:column;
+  overflow:hidden;
+}
+.nw-titlebar{
+  height:34px; flex:0 0 auto;
+  display:flex; align-items:center; gap:8px;
+  padding:0 10px;
+  background:color-mix(in srgb, var(--row) 80%, var(--panel));
+  border-bottom:1px solid var(--line);
+  cursor:grab;
+}
+.nw-titlebar.dragging{cursor:grabbing;}
+.nw-title{
+  flex:1; font-size:12px; font-weight:600;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  color:var(--ink);
+}
+.nw-title-badge{
+  font-size:9px; padding:1px 5px; border-radius:4px;
+  background:color-mix(in srgb, var(--brand) 30%, transparent);
+  color:var(--brand); margin-right:6px;
+}
+.nw-close{
+  width:22px; height:22px; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--muted);
+  font-size:12px;
+}
+.nw-close:hover{background:var(--brand); color:var(--panel);}
+.nw-body{
+  flex:1; overflow:auto;
+  background:var(--panel);
+  position:relative;
+}
+.nw-body iframe{
+  width:100%; height:100%; border:0; display:block;
+  background:#fff;
+}
+.nw-window.is-dragging .nw-body iframe{pointer-events:none;}
+
+/* ── OVERLAYS ── */
+#overlay-root{position:absolute; inset:0; pointer-events:none; z-index:1000;}
+#overlay-root > *{pointer-events:auto;}
+
+.nw-backdrop{
+  position:absolute; inset:0;
+  background:color-mix(in srgb, var(--body) 70%, rgba(0,0,0,0.5));
+  display:flex; align-items:flex-start; justify-content:center;
+  padding-top:14vh;
+}
+
+/* ── SPOTLIGHT ── */
+.nw-spotlight{
+  width:min(560px, 92vw);
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:14px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.nw-spotlight input{
+  width:100%; padding:14px 18px; font-size:18px;
+  background:transparent; border:0; outline:0;
+  border-bottom:1px solid var(--line);
+  color:var(--ink);
+}
+.nw-spotlight input::placeholder{color:var(--faint);}
+.nw-spot-list{max-height:50vh; overflow:auto;}
+.nw-spot-item{
+  display:flex; align-items:center; gap:12px;
+  padding:8px 14px;
+  cursor:pointer;
+  border-bottom:1px solid color-mix(in srgb, var(--line) 50%, transparent);
+}
+.nw-spot-item:last-child{border-bottom:0;}
+.nw-spot-item.is-active{background:color-mix(in srgb, var(--brand) 20%, var(--panel));}
+.nw-spot-glyph{
+  width:32px; height:32px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:16px; background:var(--row); color:var(--ink);
+  flex:0 0 auto;
+}
+.nw-spot-name{font-weight:600; font-size:13px;}
+.nw-spot-desc{font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.nw-spot-meta{margin-left:auto; font-size:10px; color:var(--faint);}
+
+/* ── SETTINGS POPOVER ── */
+.nw-settings{
+  position:absolute; top:calc(var(--topbar-h) + 6px); right:12px;
+  width:320px; max-height:75vh; overflow:auto;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:12px;
+  box-shadow:var(--shadow);
+  padding:14px;
+}
+.nw-settings h4{
+  margin:0 0 8px 0; font-size:11px;
+  text-transform:uppercase; letter-spacing:0.06em;
+  color:var(--muted); font-weight:600;
+}
+.nw-settings h4:not(:first-child){margin-top:18px;}
+.nw-mode-opt{
+  display:flex; gap:10px; padding:8px 10px;
+  border:1px solid var(--line); border-radius:8px;
+  cursor:pointer; margin-bottom:6px;
+  transition:background 0.12s;
+}
+.nw-mode-opt:hover{background:var(--row);}
+.nw-mode-opt.is-active{
+  border-color:var(--brand);
+  background:color-mix(in srgb, var(--brand) 12%, var(--panel));
+}
+.nw-mode-opt input{margin-top:2px;}
+.nw-mode-label{flex:1;}
+.nw-mode-name{font-weight:600; font-size:13px;}
+.nw-mode-desc{font-size:11px; color:var(--muted); margin-top:2px;}
+.nw-badge{
+  font-size:9px; padding:1px 5px; border-radius:4px;
+  background:color-mix(in srgb, var(--brand) 30%, transparent);
+  color:var(--brand); margin-left:6px; font-weight:600;
+}
+.nw-palette-grid{
+  display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;
+}
+.nw-pal{
+  cursor:pointer; border-radius:8px; overflow:hidden;
+  border:2px solid transparent;
+  transition:transform 0.12s;
+}
+.nw-pal:hover{transform:translateY(-1px);}
+.nw-pal.is-active{border-color:var(--brand);}
+.nw-pal-swatch{
+  height:36px; display:flex;
+}
+.nw-pal-swatch span{flex:1;}
+.nw-pal-label{
+  font-size:9px; padding:3px 4px;
+  text-align:center; background:var(--row);
+  color:var(--muted); font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.nw-pal-load{
+  margin-top:8px; padding:6px 10px;
+  font-size:11px; border-radius:6px;
+  background:var(--row); color:var(--muted);
+  border:1px solid var(--line);
+  width:100%; text-align:center;
+  cursor:pointer;
+}
+.nw-pal-load:hover{color:var(--ink); border-color:var(--line-strong);}
+.nw-foot-link{
+  display:block; padding:6px 0;
+  font-size:11px; color:var(--muted);
+}
+.nw-foot-link:hover{color:var(--brand);}
+
+/* ── FOOTER ── */
+#footer-nav{
+  position:absolute; bottom:0; left:0; right:0; height:var(--footer-h);
+  display:flex; align-items:center; gap:18px; padding:0 16px;
+  font-size:11px; color:var(--muted);
+  background:color-mix(in srgb, var(--panel) 70%, transparent);
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);
+  z-index:50;
+}
+#footer-nav .moat{font-style:italic; color:var(--faint);}
+#footer-nav a{color:var(--muted);}
+#footer-nav a:hover{color:var(--brand); text-decoration:none;}
+#footer-nav .spacer{flex:1;}
+
+/* ── CLASSICS ── */
+.cl-mine{padding:10px; font-family:'SF Mono',Consolas,monospace;}
+.cl-mine-head{
+  display:flex; gap:12px; align-items:center;
+  padding:6px 8px; margin-bottom:8px;
+  background:var(--row); border-radius:6px;
+}
+.cl-mine-meter{
+  font-variant-numeric:tabular-nums;
+  font-weight:700; color:var(--brand);
+}
+.cl-mine-btn{
+  padding:4px 10px; border-radius:6px;
+  background:var(--panel); border:1px solid var(--line);
+  color:var(--ink); cursor:pointer;
+}
+.cl-mine-grid{
+  display:grid; gap:1px;
+  background:color-mix(in srgb, var(--ink) 16%, transparent);
+  padding:1px; width:fit-content;
+}
+.cl-mine-cell{
+  width:24px; height:24px;
+  display:flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:13px;
+  background:color-mix(in srgb, var(--act) 20%, var(--panel));
+  color:var(--ink); cursor:pointer;
+}
+.cl-mine-cell.open{background:var(--row);}
+.cl-mine-cell.flag{background:var(--brand); color:var(--panel);}
+.cl-mine-cell.boom{background:var(--brand); color:var(--panel);}
+.cl-mine-cell[data-n="1"]{color:#5a8eff;}
+.cl-mine-cell[data-n="2"]{color:var(--ok);}
+.cl-mine-cell[data-n="3"]{color:var(--brand);}
+.cl-mine-cell[data-n="4"]{color:#a060c0;}
+.cl-mine-cell[data-n="5"]{color:#c04060;}
+.cl-mine-cell[data-n="6"]{color:#40a0a0;}
+.cl-mine-msg{margin-top:8px; font-size:12px; color:var(--muted); min-height:18px;}
+
+.cl-sol{padding:14px; background:color-mix(in srgb, var(--ok) 18%, var(--panel)); min-height:100%;}
+.cl-sol-top{display:flex; gap:10px; margin-bottom:12px; min-height:90px;}
+.cl-sol-bot{display:flex; gap:10px;}
+.cl-sol-pile{
+  width:60px; min-height:84px; border-radius:6px;
+  background:color-mix(in srgb, var(--ok) 26%, var(--panel));
+  border:1px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+  position:relative;
+}
+.cl-sol-tab{min-height:340px;}
+.cl-sol-card{
+  position:absolute; left:0; width:60px; height:84px;
+  border-radius:6px; background:#fff;
+  border:1px solid #333;
+  font-family:Georgia,'Times New Roman',serif;
+  font-weight:600; cursor:pointer;
+  color:#222; user-select:none;
+  box-shadow:0 1px 2px rgba(0,0,0,0.3);
+}
+.cl-sol-card.red{color:#b8221a;}
+.cl-sol-card.back{
+  background:repeating-linear-gradient(45deg, var(--brand), var(--brand) 4px, color-mix(in srgb, var(--brand) 60%, #000) 4px, color-mix(in srgb, var(--brand) 60%, #000) 8px);
+  color:transparent; cursor:pointer;
+}
+.cl-sol-card .ct{font-size:11px; padding:3px 4px 0 4px;}
+.cl-sol-card .cb{font-size:22px; text-align:center; margin-top:8px;}
+.cl-sol-card.drag-over{box-shadow:0 0 0 2px var(--brand);}
+.cl-sol-msg{margin-top:8px; font-size:12px; color:var(--ink);}
+.cl-sol-btn{
+  padding:4px 10px; border-radius:6px; font-size:11px;
+  background:var(--panel); border:1px solid var(--line);
+  color:var(--ink); cursor:pointer;
+}
+
+.cl-calc{padding:10px; width:240px;}
+.cl-calc-display{
+  height:60px; padding:8px 12px;
+  background:var(--row); border-radius:6px;
+  font-family:'SF Mono',Consolas,monospace;
+  font-size:24px; text-align:right;
+  display:flex; flex-direction:column; justify-content:center;
+  border:1px solid var(--line);
+  margin-bottom:10px;
+}
+.cl-calc-display .small{font-size:11px; color:var(--muted); min-height:14px;}
+.cl-calc-display .big{font-variant-numeric:tabular-nums;}
+.cl-calc-keys{display:grid; grid-template-columns:repeat(4,1fr); gap:6px;}
+.cl-calc-key{
+  height:42px; border-radius:6px; font-size:15px;
+  background:var(--panel); border:1px solid var(--line);
+  color:var(--ink); cursor:pointer;
+}
+.cl-calc-key:hover{background:var(--row);}
+.cl-calc-key.op{background:color-mix(in srgb, var(--brand) 30%, var(--panel)); color:var(--brand);}
+.cl-calc-key.op.is-active{background:var(--brand); color:var(--panel);}
+.cl-calc-key.eq{background:var(--brand); color:var(--panel); grid-column:span 2;}
+.cl-calc-key.zero{grid-column:span 2;}
+.cl-calc-key.fn{color:var(--muted); font-size:13px;}
+
+/* ── MOBILE ── */
+@media (max-width: 720px), (pointer: coarse) {
+  body.is-mobile #spotlight-btn .kbd,
+  body.is-mobile #mode-pill,
+  body.is-mobile .brand-sub{display:none;}
+  body.is-mobile #spotlight-btn{min-width:0; padding:6px 8px;}
+  body.is-mobile #spotlight-btn span:first-child{font-size:0;}
+  body.is-mobile #spotlight-btn::before{content:"🔍"; font-size:14px;}
+  body.is-mobile #topbar{padding:0 10px; gap:8px;}
+  body.is-mobile .brand{font-size:13px;}
+  body.is-mobile .icon-area{
+    padding:16px;
+    display:grid !important;
+    grid-template-columns:repeat(4, 1fr);
+    gap:12px;
+    align-content:start;
+  }
+  body.is-mobile .nw-icon{
+    position:static !important;
+    width:auto; height:auto;
+  }
+}
+@media (max-width: 380px){
+  body.is-mobile .icon-area{grid-template-columns:repeat(3, 1fr);}
+}
+</style>
+</head>
+<body>
+<div id="desktop">
+
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-mark">n</span>
+      <span>nakli.dev</span>
+      <span class="brand-sub">— the NakliTechie desktop</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button id="spotlight-btn" class="topbar-btn" title="Search apps (⌘K)">
+      <span>Search apps…</span>
+      <span class="kbd" id="kbd-hint">⌘K</span>
+    </button>
+    <span id="mode-pill" title="Click Settings to change mode">B</span>
+    <span id="clock">—</span>
+    <button id="settings-btn" class="topbar-btn" title="Settings">⚙</button>
+  </header>
+
+  <main id="icon-grid">
+    <div class="icon-area" id="icon-area"></div>
+  </main>
+
+  <footer id="footer-nav">
+    <span class="moat">All these tools, none of your data.</span>
+    <span class="spacer"></span>
+    <a href="https://naklitechie.github.io/" target="_blank" rel="noopener">← More projects</a>
+    <a href="https://github.com/NakliTechie/" target="_blank" rel="noopener">⌨ Source</a>
+  </footer>
+
+  <div id="overlay-root"></div>
+</div>
+
+<script>
+'use strict';
+
+// ════════════════════════════════════════════════════════════════════
+// APPS
+// ════════════════════════════════════════════════════════════════════
+// Heavy apps with maxMode:'B' fall back to a new tab when user picks Mode C.
+// iframeable:false locks an app out of inline windows entirely (Karkhana = v86 VM).
+// kind:'classic' apps are built into this file and open as inline windows in Mode B+.
+
+const APPS = [
+  // ── Built-in classics (always inline windows when not Mode A) ──
+  { id:'minesweeper', name:'Minesweeper', kind:'classic', glyph:'💣', bg:'brand',
+    description:'Classic Windows-style mine sweeping. Right-click to flag.', tags:['game','classic'] },
+  { id:'solitaire', name:'Solitaire', kind:'classic', glyph:'🂡', bg:'ok',
+    description:'Klondike solitaire. Drag cards to build piles and foundations.', tags:['game','classic'] },
+  { id:'calculator', name:'Calculator', kind:'classic', glyph:'🧮', bg:'act',
+    description:'A simple calculator. Keyboard works too.', tags:['tool','classic'] },
+
+  // ── NakliTechie apps (in portfolio updated-order) ──
+  { id:'sansadlocal', name:'SansadLocal', url:'https://sansadlocal.naklitechie.com', glyph:'🏛️', bg:'act',
+    description:'Browse, search, and summarise reports from India\'s 24 Parliamentary Standing Committees. AI in your browser.', tags:['ai','civic','research'], maxMode:'B' },
+  { id:'fretlocal', name:'FretLocal', url:'https://naklitechie.github.io/FretLocal/', glyph:'🎸', bg:'brand',
+    description:'Guitar fretboard note trainer. Pick a famous riff or drill any strings.', tags:['game','music'] },
+  { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
+    description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'B' },
+  { id:'tijori', name:'Tijori', url:'https://naklitechie.github.io/Tijori/', glyph:'🔐', bg:'brand',
+    description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'] },
+  { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
+    description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'B' },
+  { id:'mechanikon', name:'Mechanikon', url:'https://mechanikon.naklitechie.com', glyph:'⚙️', bg:'brand',
+    description:'A digital museum of interactive simulations of historical mechanisms — clocks, astronomical devices.', tags:['simulation','history'], private:true },
+  { id:'antikythera', name:'Antikythera', url:'https://mechanikon.naklitechie.com/antikythera/', glyph:'🪐', bg:'act',
+    description:'The ancient Greek Antikythera mechanism, live. Three gear-train reconstructions with guided tour.', tags:['simulation','history'], private:true },
+  { id:'calendars', name:'Calendars', url:'https://mechanikon.naklitechie.com/calendars/', glyph:'📅', bg:'ok',
+    description:'Every system humanity has used to name a day — 28 calendars in concentric rings and a lineage tree.', tags:['simulation','history'], private:true },
+  { id:'karkhana', name:'Karkhana', url:'https://naklitechie.github.io/Karkhana/', glyph:'🐧', bg:'act',
+    description:'A real Linux VM in your browser tab. Shell, filesystem, coding agent — no install.', tags:['tool','developer'], iframeable:false },
+  { id:'mod', name:'MoD', url:'https://mod.naklitechie.com', glyph:'🔃', bg:'brand',
+    description:'Swipe through your GitHub PRs like a feed. Approve, request changes, skip — in seconds.', tags:['tool','developer','github'] },
+  { id:'mehfil', name:'Mehfil', url:'https://naklitechie.github.io/mehfil/', glyph:'💬', bg:'ok',
+    description:'Encrypted team chat in a single HTML file. No accounts, no central server.', tags:['tool','privacy','security'], maxMode:'B' },
+  { id:'bolo', name:'Bolo', url:'https://naklitechie.github.io/bolo/', glyph:'🎙️', bg:'brand',
+    description:'Record screen, webcam, mic — transcribes locally with Whisper, trims clips, burns captions.', tags:['tool','media'], maxMode:'B' },
+  { id:'dotspin', name:'DotSpin', url:'https://naklitechie.github.io/dotspin/', glyph:'◐', bg:'act',
+    description:'15 dot-matrix CSS spinners. One element each, zero JS, zero dependencies.', tags:['library','css','ui'] },
+  { id:'kagaz', name:'Kagaz', url:'https://kagaz.naklitechie.com', glyph:'📄', bg:'ok',
+    description:'Personal site builder — pick a layout, fill content, export a ready-to-host static site.', tags:['tool','publishing','design'] },
+  { id:'rotor', name:'Rotor', url:'https://rotor.naklitechie.com', glyph:'🔑', bg:'brand',
+    description:'TOTP authenticator in one HTML file. Encrypted vault, QR scan, bulk import, offline backup.', tags:['tool','security','privacy'] },
+  { id:'rangrez', name:'Rangrez', url:'https://rangrez.naklitechie.com', glyph:'🎨', bg:'act',
+    description:'Colour palette library — each palette named after a tradition, place, or craft.', tags:['tool','design'] },
+  { id:'bahi', name:'Bahi', url:'https://bahi.naklitechie.com', glyph:'📒', bg:'ok',
+    description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'B' },
+  { id:'bofh', name:'BOFH', url:'https://bofh.naklitechie.com', glyph:'🛠️', bg:'brand',
+    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B' },
+  { id:'nemawashi', name:'Nemawashi', url:'https://nemawashi.naklitechie.com', glyph:'🗳️', bg:'act',
+    description:'Group decision tool — define options, everyone scores, the best combination surfaces.', tags:['tool','productivity'] },
+  { id:'kanzen', name:'KanZen', url:'https://kanzen.naklitechie.com', glyph:'📋', bg:'ok',
+    description:'Kanban boards without the noise — local-first Trello alternative. Plain JSON files.', tags:['tool','productivity'] },
+  { id:'nakliposter', name:'NakliPoster', url:'https://nakliposter.naklitechie.com', glyph:'📮', bg:'brand',
+    description:'Local-first API client — no account, no cloud. REST, GraphQL, WebSocket, JSON collections.', tags:['tool','ai'] },
+  { id:'hueandcry', name:'Hue & Cry', url:'https://hueandcry.naklitechie.com', glyph:'👗', bg:'brand',
+    description:'Photograph a garment, match its colours to classic palettes, discover combinations that work.', tags:['ai','tool'], private:true },
+  { id:'vaultmind', name:'VaultMind', url:'https://vaultmind.naklitechie.com', glyph:'🧩', bg:'act',
+    description:'Obsidian vault explorer — force graph, full-text search, AI chat, in-place markdown editing.', tags:['ai','productivity'], maxMode:'B' },
+  { id:'kolocal', name:'KoLocal', url:'https://naklitechie.github.io/KoLocal/', glyph:'⚫', bg:'ok',
+    description:'Play Go (Baduk) against an AI opponent. Supports 9×9, 13×13, and 19×19 boards.', tags:['game','ai'] },
+  { id:'localmind', name:'LocalMind', url:'https://naklitechie.github.io/LocalMind/', glyph:'🧭', bg:'brand',
+    description:'Private AI research agent — web search, document ingestion, RAG memory. Runs in your browser.', tags:['ai','chat'], maxMode:'B' },
+  { id:'blurlocal', name:'BlurLocal', url:'https://naklitechie.github.io/blurlocal/', glyph:'😶', bg:'act',
+    description:'Detect and blur faces in photos and videos. Gaussian and pixelate modes, fully local.', tags:['ai','media','tool'] },
+  { id:'striplocal', name:'StripLocal', url:'https://naklitechie.github.io/StripLocal/', glyph:'🧽', bg:'ok',
+    description:'Strip EXIF metadata from images. Drag, drop, download clean copies.', tags:['tool','media'] },
+  { id:'sniplocal', name:'SnipLocal', url:'https://naklitechie.github.io/SnipLocal/', glyph:'✂️', bg:'brand',
+    description:'Remove image backgrounds. Includes passport photo mode with standard dimensions.', tags:['ai','media','tool'] },
+  { id:'babellocal', name:'BabelLocal', url:'https://naklitechie.github.io/BabelLocal/', glyph:'🌐', bg:'act',
+    description:'Universal translator — 55 languages, fully in-browser.', tags:['ai','tool'] },
+  { id:'voicevault', name:'VoiceVault', url:'https://naklitechie.github.io/VoiceVault/', glyph:'🎧', bg:'ok',
+    description:'Voice transcription powered by Whisper. Private and local after the first load.', tags:['ai','media','tool'] },
+  { id:'strait', name:'Strait Command', url:'https://naklitechie.github.io/strait-command/', glyph:'🚢', bg:'brand',
+    description:'Naval strategy game — clear the Hormuz Strait.', tags:['game'] },
+  { id:'chokepoint', name:'Chokepoint', url:'https://naklitechie.github.io/chokepoint/', glyph:'⚓', bg:'act',
+    description:'Maritime tower defense — hold the chokepoint.', tags:['game'] },
+  { id:'clacker', name:'Clacker', url:'https://naklitechie.github.io/Clacker/', glyph:'🔢', bg:'ok',
+    description:'Split-flap display for your screen. Pure CSS animation, no dependencies.', tags:['tool'] },
+  { id:'kingme', name:'KingMe', url:'https://naklitechie.github.io/KingMe/', glyph:'♛', bg:'brand',
+    description:'Checkers (English draughts) against an AI. Play live or send a game link to a friend.', tags:['game','ai'] },
+  { id:'gambit', name:'GambitLocal', url:'https://naklitechie.github.io/GambitLocal/', glyph:'♞', bg:'act',
+    description:'Chess against Stockfish. Play live or share a game link for correspondence play.', tags:['game','ai'] },
+  { id:'tictactoe', name:'3D Tic-Tac-Toe', url:'https://naklitechie.github.io/3d-tic-tac-toe/', glyph:'❌', bg:'ok',
+    description:'3D Tic-Tac-Toe — play against AI or a friend on a 4×4×4 cube.', tags:['game','ai'] },
+  { id:'scanlocal', name:'ScanLocal', url:'https://naklitechie.github.io/ScanLocal/', glyph:'📃', bg:'brand',
+    description:'OCR — extract text from images and PDFs, fully private and local.', tags:['ai','tool'] },
+  { id:'predmkt', name:'Prediction Market', url:'https://naklitechie.github.io/PredictionMarket/', glyph:'📈', bg:'act',
+    description:'Prediction market simulator — create markets, trade outcomes, watch prices move.', tags:['simulation'] },
+  { id:'callib', name:'CalendarLibrary', url:'https://github.com/NakliTechie/CalendarLibrary', glyph:'📚', bg:'ok',
+    description:'JS library: convert dates across 28 calendar systems — Gregorian to Maya. Pure ES modules.', tags:['library','javascript'] },
+];
+
+// ════════════════════════════════════════════════════════════════════
+// PALETTES (12 curated, inline from Rangrez)
+// ════════════════════════════════════════════════════════════════════
+const PALETTES = [
+  { id:'japan-10', name:'URUSHI', sub:'Wajima lacquer, kintsugi gold',
+    colors:{BODY:'#15100c',PANEL:'#1e1813',INK:'#f5e6c8',BRAND:'#c8512a',ACT:'#3a5a8a',OK:'#7a9a3a',ROW:'#221a13'} },
+  { id:'japan-01', name:'MUJI', sub:'Cleanest light, Tokyo store',
+    colors:{BODY:'#f9f9f8',PANEL:'#ffffff',INK:'#1c1815',BRAND:'#8b3a1f',ACT:'#1a2b4a',OK:'#4a6b2a',ROW:'#f1f1ee'} },
+  { id:'japan-03', name:'SUMI', sub:'Zen monochrome ink',
+    colors:{BODY:'#f5f5f4',PANEL:'#ffffff',INK:'#0d0d0c',BRAND:'#5a5a58',ACT:'#2c2c2a',OK:'#3d4a30',ROW:'#ebebe9'} },
+  { id:'china-07', name:'QINGHUA', sub:'Ming blue-and-white porcelain',
+    colors:{BODY:'#e2e9f4',PANEL:'#f5f8fc',INK:'#0a1a40',BRAND:'#c8302a',ACT:'#1a4090',OK:'#3a5a2a',ROW:'#d2dcec'} },
+  { id:'china-08', name:'ZHUSHA', sub:'Cinnabar, imperial seal',
+    colors:{BODY:'#f6e6d4',PANEL:'#fdf2e2',INK:'#3a1208',BRAND:'#c8281a',ACT:'#2a3a5a',OK:'#5a5a1a',ROW:'#ebd6bc'} },
+  { id:'china-09', name:'HONG', sub:'Spring Festival lantern',
+    colors:{BODY:'#d8181a',PANEL:'#e82828',INK:'#f8e8a8',BRAND:'#f8e8a8',ACT:'#0a0a0a',OK:'#f8e8a8',ROW:'#b81010'} },
+  { id:'india1-05', name:'HALDI', sub:'Turmeric, wedding pithi',
+    colors:{BODY:'#fbecc4',PANEL:'#fdf4d8',INK:'#2a1a08',BRAND:'#c8341a',ACT:'#1a3a78',OK:'#5a6a1a',ROW:'#f0dca8'} },
+  { id:'india1-06', name:'NEEL', sub:'Champaran indigo',
+    colors:{BODY:'#dfe6f0',PANEL:'#f2f6fb',INK:'#0a1838',BRAND:'#c8341a',ACT:'#1a3a90',OK:'#3a5a2a',ROW:'#cfd8e8'} },
+  { id:'india1-07', name:'KUMKUM', sub:'Bindi, sindoor, tilak',
+    colors:{BODY:'#f8e0c8',PANEL:'#fdedd8',INK:'#3a1208',BRAND:'#c8281a',ACT:'#2a3a5a',OK:'#5a5a1a',ROW:'#ecd0b0'} },
+  { id:'kashmir-06', name:'SAFFRON', sub:'Pampore Karewa stigmas',
+    colors:{BODY:'#b83018',PANEL:'#c84028',INK:'#f4ecd8',BRAND:'#f0c820',ACT:'#1a0a08',OK:'#f4ecd8',ROW:'#982010'} },
+  { id:'bauhaus-02', name:'DESSAU', sub:'Gropius glass curtain wall',
+    colors:{BODY:'#f6f6f4',PANEL:'#ffffff',INK:'#0a0a0a',BRAND:'#d82418',ACT:'#1a3ac8',OK:'#384a30',ROW:'#eaeae8'} },
+  { id:'bauhaus-03', name:'KANDINSKY', sub:'Centripetal cobalt blue',
+    colors:{BODY:'#1a3ac8',PANEL:'#2a4ad8',INK:'#f4f4f0',BRAND:'#f0c808',ACT:'#f4f4f0',OK:'#d82418',ROW:'#1030b8'} },
+];
+
+// ════════════════════════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════════════════════════
+const LS_KEY = { mode:'naklOS.mode', palette:'naklOS.palette', layout:'naklOS.layout' };
+const state = {
+  mode: localStorage.getItem(LS_KEY.mode) || null,
+  palette: localStorage.getItem(LS_KEY.palette) || 'japan-10',
+  layout: JSON.parse(localStorage.getItem(LS_KEY.layout) || '{"version":1,"positions":{},"hidden":[]}'),
+};
+
+function isCoarse(){ return matchMedia('(pointer: coarse)').matches; }
+function isMobile(){ return isCoarse() || innerWidth < 720; }
+function getDefaultMode(){ return isMobile() ? 'A' : 'B'; }
+function getMode(){ return state.mode || getDefaultMode(); }
+
+function setMode(m){
+  state.mode = m;
+  localStorage.setItem(LS_KEY.mode, m);
+  document.getElementById('mode-pill').textContent = m;
+}
+function effectiveMode(app){
+  if (isMobile()) return 'A';
+  let m = getMode();
+  if (app && app.maxMode) {
+    const order = {A:0,B:1,C:2};
+    if (order[m] > order[app.maxMode]) m = app.maxMode;
+  }
+  return m;
+}
+
+function saveLayout(){
+  localStorage.setItem(LS_KEY.layout, JSON.stringify(state.layout));
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PALETTE
+// ════════════════════════════════════════════════════════════════════
+let extraPalettes = null; // lazy loaded full set
+
+function applyPalette(id){
+  const all = [...PALETTES, ...(extraPalettes || [])];
+  const p = all.find(x => x.id === id) || PALETTES[0];
+  const r = document.documentElement.style;
+  for (const [k, v] of Object.entries(p.colors)){
+    r.setProperty('--' + k.toLowerCase(), v);
+  }
+  state.palette = p.id;
+  localStorage.setItem(LS_KEY.palette, p.id);
+  // Pick a tile background tone derived from the palette
+  r.setProperty('--tile-bg', `color-mix(in srgb, ${p.colors.PANEL} 70%, ${p.colors.BODY})`);
+}
+
+async function loadExtraPalettes(){
+  if (extraPalettes) return extraPalettes;
+  try {
+    const res = await fetch('https://naklitechie.github.io/Rangrez/palettes.json');
+    const data = await res.json();
+    extraPalettes = [];
+    const inlineIds = new Set(PALETTES.map(p => p.id));
+    for (const col of data.collections || []){
+      for (const p of col.palettes || []){
+        if (inlineIds.has(p.id)) continue;
+        extraPalettes.push({
+          id: p.id,
+          name: p.name.replace(/^\d+\s*·\s*/, '').split(/\s+/).pop(),
+          sub: (p.feel || '').split('.')[0],
+          colors: p.colors,
+        });
+      }
+    }
+    return extraPalettes;
+  } catch(e){
+    console.warn('Failed to load extra palettes', e);
+    extraPalettes = [];
+    return extraPalettes;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// ICON GRID
+// ════════════════════════════════════════════════════════════════════
+const ICON_W = 96, ICON_H = 112; // grid cell (with label below)
+const GRID_PAD = 24;
+
+function computeAutoPositions(){
+  // Place apps not in state.layout.positions into the first free grid cells, column-major
+  const area = document.getElementById('icon-area').getBoundingClientRect();
+  const cols = Math.max(1, Math.floor((area.width - GRID_PAD*2) / ICON_W));
+  const rows = Math.max(1, Math.floor((area.height - GRID_PAD*2) / ICON_H));
+  const used = new Set();
+  for (const [id, pos] of Object.entries(state.layout.positions || {})){
+    used.add(`${pos.x},${pos.y}`);
+  }
+  const result = {};
+  for (const app of APPS){
+    if (state.layout.hidden && state.layout.hidden.includes(app.id)) continue;
+    if (state.layout.positions[app.id]) { result[app.id] = state.layout.positions[app.id]; continue; }
+    // find next free cell (column-major: x=0 col, scan y, then next col)
+    outer: for (let x = 0; x < cols; x++){
+      for (let y = 0; y < rows; y++){
+        const k = `${x},${y}`;
+        if (!used.has(k)) { used.add(k); result[app.id] = {x, y}; break outer; }
+      }
+    }
+    if (!result[app.id]) result[app.id] = {x:0, y:0};
+  }
+  return result;
+}
+
+function renderIcons(){
+  const area = document.getElementById('icon-area');
+  area.innerHTML = '';
+  const mobile = isMobile();
+  document.body.classList.toggle('is-mobile', mobile);
+  const positions = mobile ? null : computeAutoPositions();
+
+  // For mobile, sort by stored position (y, x) to give user-arranged order
+  let list = APPS.slice();
+  if (mobile){
+    const pos = state.layout.positions || {};
+    list.sort((a, b) => {
+      const pa = pos[a.id] || {x:99, y:99};
+      const pb = pos[b.id] || {x:99, y:99};
+      if (pa.y !== pb.y) return pa.y - pb.y;
+      return pa.x - pb.x;
+    });
+  }
+
+  for (const app of list){
+    if (state.layout.hidden && state.layout.hidden.includes(app.id)) continue;
+    const el = document.createElement('button');
+    el.className = 'nw-icon';
+    if (app.private) el.classList.add('private');
+    el.dataset.id = app.id;
+    el.setAttribute('aria-label', app.name);
+    const bgVar = app.bg || 'brand';
+    const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
+    const monoChar = (app.name || '?').charAt(0).toUpperCase();
+    el.innerHTML = `
+      <div class="nw-icon-tile ${app.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
+        <span class="nw-icon-glyph">${app.glyph || monoChar}</span>
+        <span class="nw-icon-mono">${monoChar}</span>
+      </div>
+      <div class="nw-icon-label">${app.name}</div>
+    `;
+    if (!mobile && positions[app.id]){
+      const p = positions[app.id];
+      el.style.left = (GRID_PAD + p.x * ICON_W) + 'px';
+      el.style.top = (GRID_PAD + p.y * ICON_H) + 'px';
+    }
+    el.addEventListener('click', e => {
+      if (el._wasDragged) { el._wasDragged = false; return; }
+      openApp(app);
+    });
+    if (!mobile) makeIconDraggable(el, app);
+    area.appendChild(el);
+  }
+}
+
+function makeIconDraggable(el, app){
+  let startX, startY, origLeft, origTop, dragging = false;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    startX = e.clientX; startY = e.clientY;
+    origLeft = parseFloat(el.style.left) || 0;
+    origTop = parseFloat(el.style.top) || 0;
+    dragging = false;
+    el.setPointerCapture(e.pointerId);
+    const onMove = ev => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!dragging && Math.hypot(dx, dy) > 4) {
+        dragging = true; el.classList.add('dragging');
+      }
+      if (dragging){
+        el.style.left = (origLeft + dx) + 'px';
+        el.style.top = (origTop + dy) + 'px';
+      }
+    };
+    const onUp = ev => {
+      el.releasePointerCapture(e.pointerId);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+      if (dragging){
+        el.classList.remove('dragging');
+        el._wasDragged = true;
+        // snap to grid
+        const x = Math.max(0, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W));
+        const y = Math.max(0, Math.round((parseFloat(el.style.top) - GRID_PAD) / ICON_H));
+        el.style.left = (GRID_PAD + x * ICON_W) + 'px';
+        el.style.top = (GRID_PAD + y * ICON_H) + 'px';
+        state.layout.positions[app.id] = {x, y};
+        saveLayout();
+        setTimeout(() => { el._wasDragged = false; }, 50);
+      }
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// WINDOW MANAGER
+// ════════════════════════════════════════════════════════════════════
+let topZ = 100;
+const openWindows = Object.create(null);
+const knownIframes = new Set();
+
+function makeWindow(opts){
+  const { id, title, width=520, height=420, badge } = opts;
+  if (openWindows[id]) { focusWindow(openWindows[id]); return openWindows[id]; }
+  const root = document.getElementById('overlay-root');
+  const win = document.createElement('div');
+  win.className = 'nw-window';
+  win.dataset.id = id;
+  win.style.width = width + 'px';
+  win.style.height = height + 'px';
+  // Center-ish placement, with cascading offset
+  const offset = (Object.keys(openWindows).length % 8) * 24;
+  const area = document.getElementById('icon-grid').getBoundingClientRect();
+  const cx = Math.max(20, (area.width - width) / 2 + offset);
+  const cy = Math.max(20, (area.height - height) / 2 - 40 + offset);
+  win.style.left = cx + 'px';
+  win.style.top = (area.top + cy) + 'px';
+  win.innerHTML = `
+    <div class="nw-titlebar">
+      ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
+      <span class="nw-title">${title}</span>
+      <button class="nw-close" aria-label="Close">✕</button>
+    </div>
+    <div class="nw-body"></div>
+  `;
+  root.appendChild(win);
+  openWindows[id] = win;
+  win.addEventListener('pointerdown', () => focusWindow(win));
+  win.querySelector('.nw-close').addEventListener('click', e => {
+    e.stopPropagation(); closeWindow(win);
+  });
+  makeDraggable(win);
+  focusWindow(win);
+  return win;
+}
+
+function focusWindow(win){
+  if (topZ > 9000){
+    Object.values(openWindows)
+      .sort((a, b) => (+a.style.zIndex || 0) - (+b.style.zIndex || 0))
+      .forEach((w, i) => w.style.zIndex = 100 + i);
+    topZ = 100 + Object.keys(openWindows).length;
+  }
+  win.style.zIndex = ++topZ;
+}
+
+function closeWindow(win){
+  const id = win.dataset.id;
+  delete openWindows[id];
+  const iframe = win.querySelector('iframe');
+  if (iframe){
+    try { iframe.contentWindow.postMessage({ type:'naklos:beforeclose' }, '*'); } catch(_){}
+    knownIframes.delete(iframe.contentWindow);
+  }
+  win.remove();
+}
+
+function makeDraggable(win){
+  const bar = win.querySelector('.nw-titlebar');
+  let startX, startY, origX, origY;
+  bar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.nw-close')) return;
+    if (e.button !== 0) return;
+    startX = e.clientX; startY = e.clientY;
+    origX = parseFloat(win.style.left) || 0;
+    origY = parseFloat(win.style.top) || 0;
+    bar.classList.add('dragging');
+    win.classList.add('is-dragging');
+    bar.setPointerCapture(e.pointerId);
+    focusWindow(win);
+    const onMove = ev => {
+      const x = origX + (ev.clientX - startX);
+      const y = Math.max(50, origY + (ev.clientY - startY));
+      win.style.left = x + 'px';
+      win.style.top = y + 'px';
+    };
+    const onUp = () => {
+      bar.classList.remove('dragging');
+      win.classList.remove('is-dragging');
+      bar.releasePointerCapture(e.pointerId);
+      bar.removeEventListener('pointermove', onMove);
+      bar.removeEventListener('pointerup', onUp);
+      bar.removeEventListener('pointercancel', onUp);
+    };
+    bar.addEventListener('pointermove', onMove);
+    bar.addEventListener('pointerup', onUp);
+    bar.addEventListener('pointercancel', onUp);
+  });
+}
+
+function spawnInlineWindow(app){
+  const builder = Classics[app.id];
+  if (!builder) return window.open(app.url || '#', '_blank', 'noopener');
+  const sizes = {
+    minesweeper: {w:260, h:380},
+    solitaire: {w:520, h:480},
+    calculator: {w:260, h:360},
+  };
+  const sz = sizes[app.id] || {w:480, h:380};
+  const win = makeWindow({ id:app.id, title:app.name, width:sz.w, height:sz.h });
+  const body = win.querySelector('.nw-body');
+  builder(body, win);
+}
+
+function spawnIframeWindow(app){
+  const win = makeWindow({
+    id:app.id, title:app.name, width:980, height:640,
+    badge:'EXPERIMENTAL',
+  });
+  const body = win.querySelector('.nw-body');
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-popups allow-forms allow-downloads');
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
+  iframe.title = app.name;
+  iframe.src = app.url;
+  body.appendChild(iframe);
+  iframe.addEventListener('load', () => {
+    try { knownIframes.add(iframe.contentWindow); } catch(_){}
+  });
+}
+
+window.addEventListener('message', e => {
+  if (!knownIframes.has(e.source)) return;
+  const msg = e.data;
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'naklos:close'){
+    const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
+      .find(f => f.contentWindow === e.source);
+    if (iframe) closeWindow(iframe.closest('.nw-window'));
+  } else if (msg.type === 'naklos:title' && typeof msg.title === 'string'){
+    const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
+      .find(f => f.contentWindow === e.source);
+    if (iframe) iframe.closest('.nw-window').querySelector('.nw-title').textContent = msg.title;
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════
+// MODE DISPATCH
+// ════════════════════════════════════════════════════════════════════
+function openApp(app){
+  if (openWindows[app.id]) { focusWindow(openWindows[app.id]); return; }
+  const m = effectiveMode(app);
+  if (m === 'A') {
+    if (app.kind === 'classic') return spawnInlineWindow(app); // classics always inline
+    return window.open(app.url, '_blank', 'noopener');
+  }
+  if (m === 'B') {
+    if (app.kind === 'classic') return spawnInlineWindow(app);
+    return window.open(app.url, '_blank', 'noopener');
+  }
+  if (m === 'C') {
+    if (app.kind === 'classic') return spawnInlineWindow(app);
+    if (app.iframeable === false) return window.open(app.url, '_blank', 'noopener');
+    return spawnIframeWindow(app);
+  }
+  return window.open(app.url, '_blank', 'noopener');
+}
+
+// ════════════════════════════════════════════════════════════════════
+// SPOTLIGHT
+// ════════════════════════════════════════════════════════════════════
+let spotlightOpen = false;
+
+function openSpotlight(){
+  if (spotlightOpen) return;
+  spotlightOpen = true;
+  const root = document.getElementById('overlay-root');
+  const wrap = document.createElement('div');
+  wrap.className = 'nw-backdrop';
+  wrap.innerHTML = `
+    <div class="nw-spotlight" role="dialog" aria-label="Search apps">
+      <input type="text" id="spot-input" placeholder="Search apps by name, tag, or description…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="nw-spot-list" id="spot-list"></div>
+    </div>
+  `;
+  root.appendChild(wrap);
+  const input = wrap.querySelector('#spot-input');
+  const list = wrap.querySelector('#spot-list');
+  let active = 0;
+
+  function rank(q){
+    if (!q) return APPS.slice(0, 8);
+    const ql = q.toLowerCase();
+    const scored = [];
+    for (const app of APPS){
+      const name = app.name.toLowerCase();
+      const desc = (app.description || '').toLowerCase();
+      const tags = (app.tags || []).join(' ').toLowerCase();
+      let s = 0;
+      if (name.startsWith(ql)) s = 100;
+      else if (name.includes(ql)) s = 60;
+      else if (tags.includes(ql)) s = 40;
+      else if (desc.includes(ql)) s = 20;
+      if (s > 0) scored.push({app, s});
+    }
+    scored.sort((a, b) => b.s - a.s);
+    return scored.slice(0, 12).map(x => x.app);
+  }
+
+  function render(){
+    const items = rank(input.value.trim());
+    if (active >= items.length) active = 0;
+    list.innerHTML = items.map((app, i) => `
+      <div class="nw-spot-item ${i === active ? 'is-active' : ''}" data-idx="${i}">
+        <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.glyph || app.name.charAt(0)}</div>
+        <div style="flex:1; min-width:0;">
+          <div class="nw-spot-name">${app.name}</div>
+          <div class="nw-spot-desc">${(app.description || '').replace(/&mdash;/g,'—').replace(/&rarr;/g,'→').replace(/&times;/g,'×')}</div>
+        </div>
+        <div class="nw-spot-meta">${app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || ''}</div>
+      </div>
+    `).join('') || `<div class="nw-spot-item"><span class="nw-spot-desc">No matches.</span></div>`;
+    list.querySelectorAll('.nw-spot-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = +el.dataset.idx;
+        const items2 = rank(input.value.trim());
+        if (items2[idx]) { close(); openApp(items2[idx]); }
+      });
+    });
+  }
+
+  function close(){
+    spotlightOpen = false;
+    wrap.remove();
+  }
+
+  input.addEventListener('input', () => { active = 0; render(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); active++; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active-1); render(); }
+    else if (e.key === 'Enter') {
+      const items = rank(input.value.trim());
+      if (items[active]) { close(); openApp(items[active]); }
+    }
+  });
+  wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+  render();
+  setTimeout(() => input.focus(), 0);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ════════════════════════════════════════════════════════════════════
+let settingsOpen = false;
+
+function openSettings(){
+  if (settingsOpen) { closeSettings(); return; }
+  settingsOpen = true;
+  const root = document.getElementById('overlay-root');
+  const wrap = document.createElement('div');
+  wrap.className = 'nw-settings';
+  wrap.id = 'settings-pop';
+
+  const curMode = getMode();
+  const modes = [
+    { id:'A', name:'Quiet', desc:'Click an icon → opens in a new tab. Honest launcher.' },
+    { id:'B', name:'Playful', desc:'Built-in classics open as draggable windows. New tab for the rest.' },
+    { id:'C', name:'Immersive', desc:'NakliTechie apps open in windowed iframes. Bigger apps still tab out.', badge:'EXPERIMENTAL' },
+  ];
+  const modeHTML = modes.map(m => `
+    <label class="nw-mode-opt ${m.id === curMode ? 'is-active' : ''}">
+      <input type="radio" name="nw-mode" value="${m.id}" ${m.id === curMode ? 'checked' : ''}>
+      <div class="nw-mode-label">
+        <div class="nw-mode-name">${m.name} <span style="color:var(--faint); font-weight:400;">— Mode ${m.id}</span>${m.badge ? `<span class="nw-badge">${m.badge}</span>` : ''}</div>
+        <div class="nw-mode-desc">${m.desc}</div>
+      </div>
+    </label>
+  `).join('');
+
+  const allPalettes = [...PALETTES, ...(extraPalettes || [])];
+  const palHTML = allPalettes.map(p => {
+    const order = ['BODY','PANEL','INK','BRAND','ACT'];
+    const stripes = order.map(k => `<span style="background:${p.colors[k]}"></span>`).join('');
+    return `
+      <div class="nw-pal ${p.id === state.palette ? 'is-active' : ''}" data-pid="${p.id}" title="${p.name} — ${p.sub || ''}">
+        <div class="nw-pal-swatch">${stripes}</div>
+        <div class="nw-pal-label">${p.name}</div>
+      </div>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <h4>Mode</h4>
+    ${modeHTML}
+    ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Mode A is always used.</div>` : ''}
+    <h4>Palette <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— from Rangrez</span></h4>
+    <div class="nw-palette-grid" id="palette-grid">${palHTML}</div>
+    <button class="nw-pal-load" id="palette-load">${extraPalettes ? `${extraPalettes.length} more loaded` : 'Load all 240 Rangrez palettes…'}</button>
+    <h4>About</h4>
+    <div style="font-size:11px; color:var(--muted); line-height:1.4;">
+      Single HTML file. No tracking. No data leaves your device.
+      <a class="nw-foot-link" href="https://github.com/NakliTechie/" target="_blank">View source on GitHub →</a>
+      <a class="nw-foot-link" href="https://naklitechie.github.io/" target="_blank">Portfolio: naklitechie.github.io →</a>
+    </div>
+  `;
+  root.appendChild(wrap);
+
+  wrap.querySelectorAll('input[name="nw-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      setMode(r.value);
+      wrap.querySelectorAll('.nw-mode-opt').forEach(o => o.classList.toggle('is-active', o.contains(r) && r.checked));
+    });
+  });
+  wrap.querySelector('#palette-grid').addEventListener('click', e => {
+    const el = e.target.closest('.nw-pal');
+    if (!el) return;
+    applyPalette(el.dataset.pid);
+    wrap.querySelectorAll('.nw-pal').forEach(p => p.classList.toggle('is-active', p === el));
+  });
+  wrap.querySelector('#palette-load').addEventListener('click', async (e) => {
+    e.currentTarget.textContent = 'Loading…';
+    await loadExtraPalettes();
+    closeSettings();
+    openSettings();
+  });
+
+  // close on outside click
+  setTimeout(() => {
+    document.addEventListener('pointerdown', outsideHandler);
+  }, 0);
+}
+
+function outsideHandler(e){
+  const pop = document.getElementById('settings-pop');
+  const btn = document.getElementById('settings-btn');
+  if (!pop) return;
+  if (pop.contains(e.target) || btn.contains(e.target)) return;
+  closeSettings();
+}
+
+function closeSettings(){
+  const pop = document.getElementById('settings-pop');
+  if (pop) pop.remove();
+  settingsOpen = false;
+  document.removeEventListener('pointerdown', outsideHandler);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CLOCK
+// ════════════════════════════════════════════════════════════════════
+function updateClock(){
+  const d = new Date();
+  const h = d.getHours(), m = d.getMinutes();
+  document.getElementById('clock').textContent =
+    `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+updateClock();
+setInterval(updateClock, 20000);
+
+// ════════════════════════════════════════════════════════════════════
+// CLASSICS
+// ════════════════════════════════════════════════════════════════════
+const Classics = {};
+
+// ── Minesweeper ──
+Classics.minesweeper = (body, win) => {
+  body.innerHTML = `
+    <div class="cl-mine">
+      <div class="cl-mine-head">
+        <span class="cl-mine-meter" id="mine-flags">💣 10</span>
+        <span style="flex:1"></span>
+        <span class="cl-mine-meter" id="mine-time">000</span>
+        <button class="cl-mine-btn" id="mine-reset">🔄</button>
+      </div>
+      <div class="cl-mine-grid" id="mine-grid"></div>
+      <div class="cl-mine-msg" id="mine-msg">Click to reveal · Right-click to flag</div>
+    </div>
+  `;
+  const cols = 9, rows = 9, mines = 10;
+  const grid = body.querySelector('#mine-grid');
+  const msg = body.querySelector('#mine-msg');
+  const flagEl = body.querySelector('#mine-flags');
+  const timeEl = body.querySelector('#mine-time');
+  let board = [], opened = [], flagged = [], started = false, finished = false, t0 = 0, tHandle = null;
+
+  function tick(){
+    const s = Math.min(999, Math.floor((Date.now() - t0) / 1000));
+    timeEl.textContent = String(s).padStart(3, '0');
+  }
+
+  function reset(){
+    if (tHandle) { clearInterval(tHandle); tHandle = null; }
+    started = false; finished = false;
+    timeEl.textContent = '000';
+    board = Array.from({length:rows}, () => Array(cols).fill(0));
+    opened = Array.from({length:rows}, () => Array(cols).fill(false));
+    flagged = Array.from({length:rows}, () => Array(cols).fill(false));
+    grid.style.gridTemplateColumns = `repeat(${cols}, 24px)`;
+    grid.innerHTML = '';
+    msg.textContent = 'Click to reveal · Right-click to flag';
+    flagEl.textContent = `💣 ${mines}`;
+    for (let y = 0; y < rows; y++){
+      for (let x = 0; x < cols; x++){
+        const cell = document.createElement('div');
+        cell.className = 'cl-mine-cell';
+        cell.dataset.x = x; cell.dataset.y = y;
+        cell.addEventListener('click', () => reveal(x, y));
+        cell.addEventListener('contextmenu', e => { e.preventDefault(); toggleFlag(x, y); });
+        grid.appendChild(cell);
+      }
+    }
+  }
+
+  function plant(avoidX, avoidY){
+    let n = 0;
+    while (n < mines){
+      const x = Math.floor(Math.random()*cols), y = Math.floor(Math.random()*rows);
+      if (board[y][x] === -1) continue;
+      if (Math.abs(x - avoidX) <= 1 && Math.abs(y - avoidY) <= 1) continue;
+      board[y][x] = -1; n++;
+    }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++){
+      if (board[y][x] === -1) continue;
+      let c = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+        const nx = x+dx, ny = y+dy;
+        if (nx>=0 && nx<cols && ny>=0 && ny<rows && board[ny][nx] === -1) c++;
+      }
+      board[y][x] = c;
+    }
+  }
+
+  function cellEl(x, y){ return grid.children[y * cols + x]; }
+
+  function reveal(x, y){
+    if (finished || flagged[y][x] || opened[y][x]) return;
+    if (!started){ started = true; plant(x, y); t0 = Date.now(); tHandle = setInterval(tick, 1000); }
+    if (board[y][x] === -1){
+      const el = cellEl(x, y);
+      el.classList.add('open','boom'); el.textContent = '💥';
+      finished = true;
+      if (tHandle) { clearInterval(tHandle); tHandle = null; }
+      // reveal all mines
+      for (let yy = 0; yy < rows; yy++) for (let xx = 0; xx < cols; xx++){
+        if (board[yy][xx] === -1){ cellEl(xx, yy).classList.add('open'); if (!flagged[yy][xx]) cellEl(xx, yy).textContent = '💣'; }
+      }
+      msg.textContent = 'Boom. Hit reset to try again.';
+      return;
+    }
+    floodOpen(x, y);
+    checkWin();
+  }
+
+  function floodOpen(x, y){
+    const stack = [[x,y]];
+    while (stack.length){
+      const [cx, cy] = stack.pop();
+      if (cx<0 || cy<0 || cx>=cols || cy>=rows) continue;
+      if (opened[cy][cx] || flagged[cy][cx]) continue;
+      if (board[cy][cx] === -1) continue;
+      opened[cy][cx] = true;
+      const el = cellEl(cx, cy);
+      el.classList.add('open');
+      if (board[cy][cx] > 0){
+        el.textContent = board[cy][cx];
+        el.dataset.n = board[cy][cx];
+      } else {
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+          if (dx || dy) stack.push([cx+dx, cy+dy]);
+        }
+      }
+    }
+  }
+
+  function toggleFlag(x, y){
+    if (finished || opened[y][x]) return;
+    if (!started){ started = true; plant(x, y); t0 = Date.now(); tHandle = setInterval(tick, 1000); }
+    flagged[y][x] = !flagged[y][x];
+    const el = cellEl(x, y);
+    el.classList.toggle('flag', flagged[y][x]);
+    el.textContent = flagged[y][x] ? '⚑' : '';
+    let used = 0; for (const row of flagged) for (const f of row) if (f) used++;
+    flagEl.textContent = `💣 ${mines - used}`;
+  }
+
+  function checkWin(){
+    let openedCount = 0;
+    for (const row of opened) for (const o of row) if (o) openedCount++;
+    if (openedCount === rows*cols - mines){
+      finished = true;
+      if (tHandle) { clearInterval(tHandle); tHandle = null; }
+      msg.textContent = `Cleared in ${timeEl.textContent}s. Nice.`;
+    }
+  }
+
+  body.querySelector('#mine-reset').addEventListener('click', reset);
+  reset();
+};
+
+// ── Calculator ──
+Classics.calculator = (body, win) => {
+  body.innerHTML = `
+    <div class="cl-calc">
+      <div class="cl-calc-display">
+        <div class="small" id="calc-prev"></div>
+        <div class="big" id="calc-cur">0</div>
+      </div>
+      <div class="cl-calc-keys">
+        <button class="cl-calc-key fn" data-act="clear">C</button>
+        <button class="cl-calc-key fn" data-act="sign">±</button>
+        <button class="cl-calc-key fn" data-act="pct">%</button>
+        <button class="cl-calc-key op" data-op="/">÷</button>
+        <button class="cl-calc-key" data-num="7">7</button>
+        <button class="cl-calc-key" data-num="8">8</button>
+        <button class="cl-calc-key" data-num="9">9</button>
+        <button class="cl-calc-key op" data-op="*">×</button>
+        <button class="cl-calc-key" data-num="4">4</button>
+        <button class="cl-calc-key" data-num="5">5</button>
+        <button class="cl-calc-key" data-num="6">6</button>
+        <button class="cl-calc-key op" data-op="-">−</button>
+        <button class="cl-calc-key" data-num="1">1</button>
+        <button class="cl-calc-key" data-num="2">2</button>
+        <button class="cl-calc-key" data-num="3">3</button>
+        <button class="cl-calc-key op" data-op="+">+</button>
+        <button class="cl-calc-key zero" data-num="0">0</button>
+        <button class="cl-calc-key" data-num=".">.</button>
+        <button class="cl-calc-key eq" data-act="eq">=</button>
+      </div>
+    </div>
+  `;
+  const curEl = body.querySelector('#calc-cur');
+  const prevEl = body.querySelector('#calc-prev');
+  let cur = '0', acc = null, op = null, justEq = false;
+
+  function show(){ curEl.textContent = cur; }
+  function showPrev(){ prevEl.textContent = (acc === null ? '' : fmt(acc)) + (op ? ' ' + opSym(op) : ''); }
+  function fmt(n){
+    if (!isFinite(n)) return 'Error';
+    const s = Number(n.toPrecision(12)).toString();
+    return s;
+  }
+  function opSym(o){ return {'+':'+','-':'−','*':'×','/':'÷'}[o] || o; }
+  function pushDigit(d){
+    if (justEq) { cur = '0'; justEq = false; }
+    if (d === '.'){ if (!cur.includes('.')) cur += '.'; }
+    else if (cur === '0') cur = d;
+    else cur += d;
+    show();
+  }
+  function setOp(newOp){
+    const x = parseFloat(cur);
+    if (acc !== null && op && !justEq){
+      acc = apply(acc, op, x);
+      cur = fmt(acc);
+      show();
+    } else {
+      acc = x;
+    }
+    op = newOp;
+    justEq = false;
+    cur = '0';
+    showPrev();
+  }
+  function apply(a, o, b){
+    if (o === '+') return a+b;
+    if (o === '-') return a-b;
+    if (o === '*') return a*b;
+    if (o === '/') return b === 0 ? NaN : a/b;
+    return b;
+  }
+  function equals(){
+    if (acc !== null && op){
+      const x = parseFloat(cur);
+      acc = apply(acc, op, x);
+      cur = fmt(acc);
+      show();
+      prevEl.textContent = '';
+      op = null; acc = null;
+      justEq = true;
+    }
+  }
+  function clearAll(){ cur = '0'; acc = null; op = null; justEq = false; show(); showPrev(); }
+  function sign(){ cur = (parseFloat(cur) * -1).toString(); show(); }
+  function pct(){ cur = (parseFloat(cur) / 100).toString(); show(); }
+
+  body.querySelectorAll('[data-num]').forEach(b => b.addEventListener('click', () => pushDigit(b.dataset.num)));
+  body.querySelectorAll('[data-op]').forEach(b => b.addEventListener('click', () => setOp(b.dataset.op)));
+  body.querySelector('[data-act="eq"]').addEventListener('click', equals);
+  body.querySelector('[data-act="clear"]').addEventListener('click', clearAll);
+  body.querySelector('[data-act="sign"]').addEventListener('click', sign);
+  body.querySelector('[data-act="pct"]').addEventListener('click', pct);
+
+  // keyboard
+  const onKey = e => {
+    if (!win.contains(document.activeElement) && win.style.zIndex != topZ) return;
+    if (/^[0-9]$/.test(e.key)) { pushDigit(e.key); e.preventDefault(); }
+    else if (e.key === '.') { pushDigit('.'); }
+    else if (e.key === '+' || e.key === '-' || e.key === '*' || e.key === '/') { setOp(e.key); e.preventDefault(); }
+    else if (e.key === 'Enter' || e.key === '=') { equals(); e.preventDefault(); }
+    else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') { clearAll(); }
+    else if (e.key === 'Backspace') { cur = cur.length > 1 ? cur.slice(0, -1) : '0'; show(); }
+  };
+  document.addEventListener('keydown', onKey);
+  win.addEventListener('remove', () => document.removeEventListener('keydown', onKey));
+  // also strip on close via mutation
+  const obs = new MutationObserver(() => {
+    if (!document.body.contains(win)){
+      document.removeEventListener('keydown', onKey);
+      obs.disconnect();
+    }
+  });
+  obs.observe(document.body, {childList:true, subtree:true});
+};
+
+// ── Solitaire (Klondike, click-to-move) ──
+Classics.solitaire = (body, win) => {
+  body.innerHTML = `
+    <div class="cl-sol" id="sol-root">
+      <div class="cl-sol-top" id="sol-top"></div>
+      <div class="cl-sol-bot" id="sol-bot"></div>
+      <div class="cl-sol-msg" id="sol-msg">
+        <button class="cl-sol-btn" id="sol-new">New game</button>
+        <span style="margin-left:12px" id="sol-status">Click stock to draw. Click any card to auto-move.</span>
+      </div>
+    </div>
+  `;
+  const SUITS = ['♠','♥','♦','♣'];
+  const RED = new Set(['♥','♦']);
+  const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  const rankVal = r => RANKS.indexOf(r);
+
+  let stock, waste, foundations, tableaus;
+
+  function newDeck(){
+    const d = [];
+    for (const s of SUITS) for (const r of RANKS) d.push({s, r, up:false});
+    for (let i = d.length-1; i > 0; i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [d[i], d[j]] = [d[j], d[i]];
+    }
+    return d;
+  }
+
+  function deal(){
+    const deck = newDeck();
+    tableaus = [[],[],[],[],[],[],[]];
+    for (let col = 0; col < 7; col++){
+      for (let i = 0; i <= col; i++){
+        const c = deck.pop();
+        c.up = (i === col);
+        tableaus[col].push(c);
+      }
+    }
+    stock = deck;
+    stock.forEach(c => c.up = false);
+    waste = [];
+    foundations = [[],[],[],[]];
+  }
+
+  function render(){
+    const top = body.querySelector('#sol-top');
+    const bot = body.querySelector('#sol-bot');
+    top.innerHTML = '';
+    bot.innerHTML = '';
+    // Stock
+    const stockPile = mkPile('stock');
+    stockPile.addEventListener('click', drawStock);
+    if (stock.length){
+      const c = mkCardBack(); stockPile.appendChild(c);
+    } else if (waste.length){
+      stockPile.style.borderStyle = 'solid';
+      stockPile.textContent = '↻';
+      stockPile.style.display = 'flex';
+      stockPile.style.alignItems = 'center';
+      stockPile.style.justifyContent = 'center';
+      stockPile.style.color = 'var(--muted)';
+    }
+    top.appendChild(stockPile);
+    // Waste
+    const wastePile = mkPile('waste');
+    if (waste.length){
+      const top3 = waste.slice(-3);
+      top3.forEach((c, i) => {
+        const el = mkCard(c);
+        el.style.top = (i * 6) + 'px';
+        if (i === top3.length - 1) el.addEventListener('click', () => tryMove({from:'waste'}));
+        wastePile.appendChild(el);
+      });
+    }
+    top.appendChild(wastePile);
+    // gap
+    const gap = document.createElement('div'); gap.style.flex = '1'; top.appendChild(gap);
+    // Foundations
+    foundations.forEach((f, i) => {
+      const fp = mkPile('foundation');
+      fp.dataset.f = i;
+      if (f.length) fp.appendChild(mkCard(f[f.length-1]));
+      else { fp.style.display = 'flex'; fp.style.alignItems = 'center'; fp.style.justifyContent = 'center'; fp.style.color = 'var(--muted)'; fp.textContent = SUITS[i]; }
+      fp.addEventListener('click', () => tryMoveTo({to:'foundation', idx:i}));
+      top.appendChild(fp);
+    });
+    // Tableaus
+    tableaus.forEach((col, ci) => {
+      const cp = mkPile('tableau tab');
+      cp.classList.add('cl-sol-tab');
+      cp.dataset.t = ci;
+      cp.addEventListener('click', e => { if (e.target === cp) tryMoveTo({to:'tableau', idx:ci}); });
+      col.forEach((c, ri) => {
+        const el = mkCard(c);
+        el.style.top = (ri * 18) + 'px';
+        el.dataset.t = ci; el.dataset.r = ri;
+        if (c.up) el.addEventListener('click', () => tryMove({from:'tableau', t:ci, r:ri}));
+        else if (ri === col.length - 1) el.addEventListener('click', () => { c.up = true; render(); });
+        cp.appendChild(el);
+      });
+      bot.appendChild(cp);
+    });
+    checkWin();
+  }
+
+  function mkPile(kind){
+    const el = document.createElement('div');
+    el.className = 'cl-sol-pile';
+    return el;
+  }
+  function mkCard(c){
+    const el = document.createElement('div');
+    el.className = 'cl-sol-card' + (RED.has(c.s) ? ' red' : '');
+    if (!c.up){ el.classList.add('back'); return el; }
+    el.innerHTML = `<div class="ct">${c.r}${c.s}</div><div class="cb">${c.s}</div>`;
+    return el;
+  }
+  function mkCardBack(){
+    const el = document.createElement('div');
+    el.className = 'cl-sol-card back';
+    return el;
+  }
+
+  function drawStock(){
+    if (stock.length){
+      const c = stock.pop(); c.up = true;
+      waste.push(c);
+    } else if (waste.length){
+      stock = waste.reverse(); waste = [];
+      stock.forEach(c => c.up = false);
+    }
+    render();
+  }
+
+  function canDropTableau(card, col){
+    if (col.length === 0) return card.r === 'K';
+    const t = col[col.length-1];
+    if (!t.up) return false;
+    if (RED.has(card.s) === RED.has(t.s)) return false;
+    return rankVal(card.r) === rankVal(t.r) - 1;
+  }
+  function canDropFoundation(card, fIdx){
+    const f = foundations[fIdx];
+    if (card.s !== SUITS[fIdx]) return false;
+    if (f.length === 0) return card.r === 'A';
+    return rankVal(card.r) === rankVal(f[f.length-1].r) + 1;
+  }
+
+  function tryMove(src){
+    let cards;
+    if (src.from === 'waste'){ cards = [waste[waste.length-1]]; }
+    else { cards = tableaus[src.t].slice(src.r); if (!cards[0] || !cards[0].up) return; }
+    // try foundations first (only single card)
+    if (cards.length === 1){
+      for (let i = 0; i < 4; i++){
+        if (canDropFoundation(cards[0], i)){
+          doMove(src, {to:'foundation', idx:i}); return;
+        }
+      }
+    }
+    // try tableaus
+    for (let i = 0; i < 7; i++){
+      if (canDropTableau(cards[0], tableaus[i])){
+        doMove(src, {to:'tableau', idx:i}); return;
+      }
+    }
+  }
+  function tryMoveTo(dst){
+    // pick best source: prefer last waste if movable, otherwise scan tableaus for movable runs
+    if (waste.length){
+      const c = waste[waste.length-1];
+      if ((dst.to === 'foundation' && canDropFoundation(c, dst.idx)) ||
+          (dst.to === 'tableau' && canDropTableau(c, tableaus[dst.idx]))){
+        doMove({from:'waste'}, dst); return;
+      }
+    }
+    for (let i = 0; i < 7; i++){
+      const col = tableaus[i];
+      for (let r = 0; r < col.length; r++){
+        if (!col[r].up) continue;
+        if (dst.to === 'foundation' && r === col.length - 1 && canDropFoundation(col[r], dst.idx)){
+          doMove({from:'tableau', t:i, r}, dst); return;
+        }
+        if (dst.to === 'tableau' && canDropTableau(col[r], tableaus[dst.idx])){
+          doMove({from:'tableau', t:i, r}, dst); return;
+        }
+      }
+    }
+  }
+  function doMove(src, dst){
+    let moved;
+    if (src.from === 'waste') moved = [waste.pop()];
+    else { moved = tableaus[src.t].splice(src.r); }
+    if (dst.to === 'foundation') foundations[dst.idx].push(...moved);
+    else tableaus[dst.idx].push(...moved);
+    // flip newly exposed top of tableau
+    if (src.from === 'tableau'){
+      const col = tableaus[src.t];
+      if (col.length && !col[col.length-1].up) col[col.length-1].up = true;
+    }
+    render();
+  }
+  function checkWin(){
+    const won = foundations.every(f => f.length === 13);
+    if (won) body.querySelector('#sol-status').textContent = '🎉 You won! Click new game.';
+  }
+
+  body.querySelector('#sol-new').addEventListener('click', () => { deal(); render(); });
+  deal();
+  render();
+};
+
+// ════════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════════
+function init(){
+  applyPalette(state.palette);
+  if (state.mode) document.getElementById('mode-pill').textContent = getMode();
+  else document.getElementById('mode-pill').textContent = getDefaultMode();
+  renderIcons();
+
+  document.getElementById('spotlight-btn').addEventListener('click', openSpotlight);
+  document.getElementById('settings-btn').addEventListener('click', openSettings);
+  document.getElementById('mode-pill').addEventListener('click', e => { e.stopPropagation(); openSettings(); });
+
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+      e.preventDefault();
+      openSpotlight();
+    }
+    if (e.key === 'Escape'){
+      const pop = document.getElementById('settings-pop');
+      if (pop) closeSettings();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    document.body.classList.toggle('is-mobile', isMobile());
+    renderIcons();
+  });
+}
+
+if (document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+// Expose for debugging / future cross-tab API (per CONV.md)
+window.naklOS = {
+  state, APPS, PALETTES,
+  applyPalette, openApp, openSpotlight, openSettings,
+  setMode, getMode, effectiveMode,
+};
+</script>
+</body>
+</html>
