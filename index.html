@@ -1182,14 +1182,23 @@ function renderIcons(){
 }
 
 function makeIconDraggable(el, app){
-  let startX, startY, origLeft, origTop, dragging = false;
   el.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
-    startX = e.clientX; startY = e.clientY;
-    origLeft = parseFloat(el.style.left) || 0;
-    origTop = parseFloat(el.style.top) || 0;
-    dragging = false;
-    el.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const origLeft = parseFloat(el.style.left) || 0;
+    const origTop = parseFloat(el.style.top) || 0;
+    let dragging = false;
+    let droppedOnDock = false;
+
+    function overDock(ev){
+      const dock = document.getElementById('nw-dock');
+      if (!dock) return false;
+      const r = dock.getBoundingClientRect();
+      return ev.clientX >= r.left - 12 && ev.clientX <= r.right + 12
+          && ev.clientY >= r.top - 12 && ev.clientY <= r.bottom + 12;
+    }
+
     const onMove = ev => {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
       if (!dragging && Math.hypot(dx, dy) > 4) {
@@ -1198,29 +1207,38 @@ function makeIconDraggable(el, app){
       if (dragging){
         el.style.left = (origLeft + dx) + 'px';
         el.style.top = (origTop + dy) + 'px';
+        // Bonus: drop a desktop icon on the dock to pin it
+        const dock = document.getElementById('nw-dock');
+        if (dock) dock.classList.toggle('is-drop-target', overDock(ev));
       }
     };
     const onUp = ev => {
-      el.releasePointerCapture(e.pointerId);
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('pointerup', onUp);
-      el.removeEventListener('pointercancel', onUp);
-      if (dragging){
-        el.classList.remove('dragging');
-        el._wasDragged = true;
-        // snap to grid
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      document.getElementById('nw-dock')?.classList.remove('is-drop-target');
+      if (!dragging) return;
+      el.classList.remove('dragging');
+      el._wasDragged = true;
+      if (overDock(ev) && app.kind !== 'folder'){
+        // Pin to dock; restore icon to its original grid position
+        el.style.left = (GRID_PAD + (state.layout.positions[app.id]?.x ?? 0) * ICON_W) + 'px';
+        el.style.top = (GRID_PAD + (state.layout.positions[app.id]?.y ?? 0) * ICON_H) + 'px';
+        pinItem(app.id);
+      } else {
+        // Snap to grid
         const x = Math.max(0, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W));
         const y = Math.max(0, Math.round((parseFloat(el.style.top) - GRID_PAD) / ICON_H));
         el.style.left = (GRID_PAD + x * ICON_W) + 'px';
         el.style.top = (GRID_PAD + y * ICON_H) + 'px';
         state.layout.positions[app.id] = {x, y};
         saveLayout();
-        setTimeout(() => { el._wasDragged = false; }, 50);
       }
+      setTimeout(() => { el._wasDragged = false; }, 50);
     };
-    el.addEventListener('pointermove', onMove);
-    el.addEventListener('pointerup', onUp);
-    el.addEventListener('pointercancel', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
   });
 }
 
@@ -1414,17 +1432,18 @@ function closeWindow(win){
 
 function makeDraggable(win){
   const bar = win.querySelector('.nw-titlebar');
-  let startX, startY, origX, origY;
   bar.addEventListener('pointerdown', e => {
-    if (e.target.closest('.nw-close')) return;
+    // Don't start a drag from the title buttons or interactive children
+    if (e.target.closest('.nw-close, .nw-fs-btn, button')) return;
     if (e.button !== 0) return;
-    startX = e.clientX; startY = e.clientY;
-    origX = parseFloat(win.style.left) || 0;
-    origY = parseFloat(win.style.top) || 0;
+    e.preventDefault(); // suppress text selection inside the titlebar
+    const startX = e.clientX, startY = e.clientY;
+    const origX = parseFloat(win.style.left) || 0;
+    const origY = parseFloat(win.style.top) || 0;
     bar.classList.add('dragging');
     win.classList.add('is-dragging');
-    bar.setPointerCapture(e.pointerId);
     focusWindow(win);
+
     const onMove = ev => {
       const x = origX + (ev.clientX - startX);
       const y = Math.max(50, origY + (ev.clientY - startY));
@@ -1434,10 +1453,9 @@ function makeDraggable(win){
     const onUp = () => {
       bar.classList.remove('dragging');
       win.classList.remove('is-dragging');
-      bar.releasePointerCapture(e.pointerId);
-      bar.removeEventListener('pointermove', onMove);
-      bar.removeEventListener('pointerup', onUp);
-      bar.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
       // Persist position so reopen / reload restores it
       if (win.dataset.id && !win.classList.contains('is-fullscreen')){
         state.layout.windowPositions[win.dataset.id] = {
@@ -1447,9 +1465,9 @@ function makeDraggable(win){
         saveLayout();
       }
     };
-    bar.addEventListener('pointermove', onMove);
-    bar.addEventListener('pointerup', onUp);
-    bar.addEventListener('pointercancel', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
   });
 }
 
@@ -1598,6 +1616,7 @@ function openFolder(folder){
     let wasDragged = false;
     btn.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
+      e.preventDefault();
       const startX = e.clientX, startY = e.clientY;
       let dragging = false;
       let ghost = null;
