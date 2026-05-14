@@ -517,6 +517,78 @@ body.is-mobile .nw-dock{display:none;}
 .cl-mine-cell[data-n="6"]{color:#40a0a0;}
 .cl-mine-msg{margin-top:8px; font-size:12px; color:var(--muted); min-height:18px;}
 
+/* ── Spider Solitaire ── */
+.cl-sp{
+  padding:10px; background:color-mix(in srgb, var(--ok) 18%, var(--panel));
+  min-height:100%;
+  font-family:Georgia,'Times New Roman',serif;
+}
+.cl-sp-top{
+  display:flex; gap:5px; margin-bottom:10px;
+  min-height:68px; align-items:flex-start;
+}
+.cl-sp-stock{
+  width:50px; height:64px; border-radius:5px;
+  background:repeating-linear-gradient(45deg, var(--brand), var(--brand) 4px, color-mix(in srgb, var(--brand) 60%, #000) 4px, color-mix(in srgb, var(--brand) 60%, #000) 8px);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  cursor:pointer; color:#fff; border:1px solid #333;
+  flex:0 0 auto;
+}
+.cl-sp-stock.empty{
+  background:color-mix(in srgb, var(--ok) 26%, var(--panel));
+  border:1px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+  cursor:default; color:var(--muted);
+}
+.cl-sp-stock-glyph{font-size:20px; line-height:1;}
+.cl-sp-stock-count{font-size:10px; margin-top:2px;}
+.cl-sp-spacer{flex:1;}
+.cl-sp-foundation{
+  width:50px; height:64px; border-radius:5px;
+  background:color-mix(in srgb, var(--ok) 26%, var(--panel));
+  border:1px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+  display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:16px;
+  flex:0 0 auto;
+}
+.cl-sp-foundation.done{
+  background:#fff; color:#222; border-style:solid; border-color:#333;
+  font-weight:600;
+}
+.cl-sp-board{
+  display:flex; gap:5px;
+  min-height:340px;
+}
+.cl-sp-col{
+  flex:1; position:relative;
+  min-height:340px;
+  min-width:50px;
+}
+.cl-sp-col.empty::before{
+  content:""; position:absolute; inset:0;
+  background:color-mix(in srgb, var(--ok) 24%, transparent);
+  border:1px dashed color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius:5px;
+}
+.cl-sp-card{
+  position:absolute; left:0; right:0; height:64px;
+  border-radius:5px; background:#fff;
+  border:1px solid #333; font-weight:600;
+  color:#222; user-select:none;
+  display:flex; flex-direction:column; align-items:flex-start;
+  padding:3px 5px;
+  font-size:12px;
+  box-shadow:0 1px 2px rgba(0,0,0,0.3);
+  line-height:1;
+}
+.cl-sp-card.back{
+  background:repeating-linear-gradient(45deg, var(--brand), var(--brand) 4px, color-mix(in srgb, var(--brand) 60%, #000) 4px, color-mix(in srgb, var(--brand) 60%, #000) 8px);
+  color:transparent;
+}
+.cl-sp-card:not(.back){cursor:pointer;}
+.cl-sp-card .sp-rank{font-size:13px;}
+.cl-sp-card .sp-suit{font-size:14px; margin-top:1px;}
+.cl-sp-msg{margin-top:10px; font-size:12px; color:var(--ink); display:flex; align-items:center; gap:10px; font-family:-apple-system,system-ui,sans-serif;}
+
 .cl-sol{padding:14px; background:color-mix(in srgb, var(--ok) 18%, var(--panel)); min-height:100%;}
 .cl-sol-top{display:flex; gap:10px; margin-bottom:12px; min-height:90px;}
 .cl-sol-bot{display:flex; gap:10px;}
@@ -717,6 +789,8 @@ const APPS = [
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'] },
   { id:'notepad', name:'Notepad', kind:'classic', glyph:'📝', bg:'ok',
     description:'A scratch pad that remembers what you wrote. Just text, no formatting.', tags:['tool','classic'] },
+  { id:'spider', name:'Spider', kind:'classic', glyph:'🕷️', bg:'ok',
+    description:'Spider solitaire (1-suit). 10 columns, 2 decks. Build K-to-A runs to clear.', tags:['game','classic'] },
 
   // ── NakliTechie apps (in portfolio updated-order) ──
   { id:'sansadlocal', name:'SansadLocal', url:'https://sansadlocal.naklitechie.com', glyph:'🏛️', bg:'act',
@@ -1385,6 +1459,7 @@ function spawnInlineWindow(app){
   const sizes = {
     minesweeper: {w:260, h:380},
     solitaire: {w:520, h:480},
+    spider: {w:740, h:540},
     calculator: {w:260, h:360},
     notepad: {w:520, h:440},
   };
@@ -2192,6 +2267,191 @@ Classics.calculator = (body, win) => {
     }
   });
   obs.observe(document.body, {childList:true, subtree:true});
+};
+
+// ── Spider Solitaire (1-suit, click-to-auto-move) ──
+Classics.spider = (body, win) => {
+  body.innerHTML = `
+    <div class="cl-sp">
+      <div class="cl-sp-top" id="sp-top"></div>
+      <div class="cl-sp-board" id="sp-board"></div>
+      <div class="cl-sp-msg">
+        <button class="cl-sol-btn" id="sp-new">New game</button>
+        <span id="sp-status">Click stock (top-left) to deal 10 cards. Click any face-up card to auto-move.</span>
+      </div>
+    </div>
+  `;
+
+  const SUIT = '♠';
+  const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  const rankVal = r => RANKS.indexOf(r);
+
+  let stock, tableaus, foundations;
+
+  function newDeck(){
+    // 2 decks of 1 suit = 104 cards (8 of each rank)
+    const d = [];
+    for (let i = 0; i < 8; i++){
+      for (const r of RANKS) d.push({s:SUIT, r, up:false});
+    }
+    for (let i = d.length-1; i > 0; i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [d[i], d[j]] = [d[j], d[i]];
+    }
+    return d;
+  }
+
+  function deal(){
+    const deck = newDeck();
+    tableaus = [[], [], [], [], [], [], [], [], [], []];
+    // 4 columns of 6 cards, 6 columns of 5 cards. Last card of each face-up.
+    for (let col = 0; col < 10; col++){
+      const count = col < 4 ? 6 : 5;
+      for (let i = 0; i < count; i++){
+        const c = deck.pop();
+        c.up = (i === count - 1);
+        tableaus[col].push(c);
+      }
+    }
+    stock = deck; // 50 cards remaining
+    foundations = [];
+  }
+
+  function getMovableGroup(col, idx){
+    // Returns the face-up sequence starting at idx if it's a same-suit descending run.
+    const cards = tableaus[col].slice(idx);
+    if (!cards[0]?.up) return null;
+    for (let i = 1; i < cards.length; i++){
+      if (!cards[i].up) return null;
+      if (cards[i].s !== cards[i-1].s) return null;
+      if (rankVal(cards[i].r) !== rankVal(cards[i-1].r) - 1) return null;
+    }
+    return cards;
+  }
+
+  function canDrop(card, targetCol){
+    const t = tableaus[targetCol];
+    if (t.length === 0) return true;
+    const top = t[t.length-1];
+    if (!top.up) return false;
+    return rankVal(card.r) === rankVal(top.r) - 1;
+  }
+
+  function tryMove(srcCol, srcIdx){
+    const group = getMovableGroup(srcCol, srcIdx);
+    if (!group) return;
+    // Find best destination — prefer non-empty over empty (preserve empty columns).
+    let nonEmpty = -1, empty = -1;
+    for (let i = 0; i < 10; i++){
+      if (i === srcCol) continue;
+      if (canDrop(group[0], i)){
+        if (tableaus[i].length > 0) { nonEmpty = i; break; }
+        else if (empty === -1) empty = i;
+      }
+    }
+    const dst = nonEmpty >= 0 ? nonEmpty : empty;
+    if (dst < 0) return;
+    const moved = tableaus[srcCol].splice(srcIdx);
+    tableaus[dst].push(...moved);
+    // Flip new top of source if face-down
+    const sc = tableaus[srcCol];
+    if (sc.length && !sc[sc.length-1].up) sc[sc.length-1].up = true;
+    checkFoundation(dst);
+    render();
+  }
+
+  function checkFoundation(col){
+    const t = tableaus[col];
+    if (t.length < 13) return;
+    const last13 = t.slice(-13);
+    if (!last13.every(c => c.up)) return;
+    for (let i = 1; i < 13; i++){
+      if (last13[i].s !== last13[i-1].s) return;
+      if (rankVal(last13[i].r) !== rankVal(last13[i-1].r) - 1) return;
+    }
+    if (last13[0].r !== 'K' || last13[12].r !== 'A') return;
+    tableaus[col] = t.slice(0, -13);
+    foundations.push(last13);
+    if (tableaus[col].length && !tableaus[col][tableaus[col].length-1].up){
+      tableaus[col][tableaus[col].length-1].up = true;
+    }
+  }
+
+  function dealRow(){
+    if (stock.length === 0) return;
+    if (tableaus.some(t => t.length === 0)){
+      body.querySelector('#sp-status').textContent = 'Fill all empty columns before dealing.';
+      return;
+    }
+    for (let i = 0; i < 10 && stock.length; i++){
+      const c = stock.pop();
+      c.up = true;
+      tableaus[i].push(c);
+    }
+    for (let i = 0; i < 10; i++) checkFoundation(i);
+    render();
+  }
+
+  function render(){
+    const top = body.querySelector('#sp-top');
+    const board = body.querySelector('#sp-board');
+    const status = body.querySelector('#sp-status');
+    top.innerHTML = '';
+    board.innerHTML = '';
+
+    // Stock
+    const stockEl = document.createElement('div');
+    stockEl.className = 'cl-sp-stock' + (stock.length ? '' : ' empty');
+    if (stock.length){
+      const deals = Math.ceil(stock.length / 10);
+      stockEl.innerHTML = `<div class="cl-sp-stock-glyph">↻</div><div class="cl-sp-stock-count">${deals} left</div>`;
+      stockEl.addEventListener('click', dealRow);
+    } else {
+      stockEl.textContent = '∅';
+    }
+    top.appendChild(stockEl);
+
+    const spacer = document.createElement('div');
+    spacer.className = 'cl-sp-spacer';
+    top.appendChild(spacer);
+
+    // 8 foundation slots
+    for (let i = 0; i < 8; i++){
+      const f = document.createElement('div');
+      f.className = 'cl-sp-foundation' + (foundations[i] ? ' done' : '');
+      f.textContent = foundations[i] ? `K${SUIT}` : SUIT;
+      top.appendChild(f);
+    }
+
+    // Tableaus
+    tableaus.forEach((col, ci) => {
+      const cp = document.createElement('div');
+      cp.className = 'cl-sp-col' + (col.length === 0 ? ' empty' : '');
+      col.forEach((c, ri) => {
+        const el = document.createElement('div');
+        el.className = 'cl-sp-card' + (c.up ? '' : ' back');
+        el.style.top = (ri * 22) + 'px';
+        if (c.up){
+          el.innerHTML = `<span class="sp-rank">${c.r}${c.s}</span>`;
+          el.addEventListener('click', () => tryMove(ci, ri));
+        } else if (ri === col.length - 1){
+          // Single face-down on top — click flips (rare, but possible mid-game after auto-collect)
+          el.addEventListener('click', () => { c.up = true; render(); });
+        }
+        cp.appendChild(el);
+      });
+      board.appendChild(cp);
+    });
+
+    // Win check
+    if (foundations.length === 8){
+      status.textContent = '🎉 You cleared the board.';
+    }
+  }
+
+  body.querySelector('#sp-new').addEventListener('click', () => { deal(); render(); });
+  deal();
+  render();
 };
 
 // ── Solitaire (Klondike, click-to-move) ──
