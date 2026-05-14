@@ -134,6 +134,61 @@ input{font:inherit; color:inherit;}
   background:var(--brand);
 }
 
+/* ── CONTEXT MENU ── */
+.nw-context-menu{
+  position:absolute;
+  background:var(--panel);
+  border:1px solid var(--line-strong);
+  border-radius:8px;
+  box-shadow:var(--shadow);
+  padding:4px;
+  min-width:170px;
+  font-size:12px;
+  z-index:2000;
+}
+.nw-cm-item{
+  display:block; width:100%;
+  padding:6px 10px; text-align:left;
+  border-radius:5px;
+  color:var(--ink);
+  cursor:pointer;
+}
+.nw-cm-item:hover{background:color-mix(in srgb, var(--brand) 22%, var(--row));}
+.nw-cm-item.danger{color:color-mix(in srgb, var(--brand) 80%, var(--ink));}
+.nw-cm-sep{
+  height:1px; background:var(--line);
+  margin:4px 6px;
+}
+
+/* ── DRAG GHOST (icon being pulled out of folder) ── */
+.nw-drag-ghost{
+  position:fixed; pointer-events:none;
+  z-index:5000; opacity:0.85;
+  width:56px; height:56px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:28px; border-radius:14px;
+  background:var(--panel);
+  border:1px solid var(--line-strong);
+  box-shadow:var(--shadow);
+  transform:translate(-28px, -28px);
+}
+
+/* ── DOCK: open-state dot (mac-style) ── */
+.nw-dock-item{position:relative;}
+.nw-dock-item.is-open::after{
+  content:""; position:absolute;
+  bottom:-3px; left:50%;
+  width:4px; height:4px;
+  border-radius:50%;
+  background:var(--brand);
+  transform:translateX(-50%);
+}
+.nw-dock-sep{
+  width:1px; height:22px; align-self:center;
+  background:var(--line);
+  margin:0 2px;
+}
+
 /* ── FOLDERS ── */
 .nw-icon.is-folder .nw-icon-tile{
   border-radius:12px;
@@ -519,6 +574,34 @@ body.is-mobile .nw-dock{display:none;}
   border-top:1px solid var(--line);
   display:flex; gap:12px;
 }
+.cl-pad-mode{
+  display:inline-flex; gap:0;
+  border:1px solid var(--line); border-radius:6px; overflow:hidden;
+}
+.cl-pad-mode .cl-pad-btn{
+  border:0; border-radius:0; padding:3px 10px;
+  background:transparent;
+}
+.cl-pad-mode .cl-pad-btn.active{
+  background:var(--brand); color:var(--panel);
+}
+.cl-pad-preview{
+  flex:1; padding:12px 16px; overflow:auto;
+  background:var(--panel); color:var(--ink);
+  font-size:13px; line-height:1.55;
+}
+.cl-pad-preview h1{font-size:1.5em; color:var(--brand); margin:0.6em 0 0.3em;}
+.cl-pad-preview h2{font-size:1.25em; color:var(--brand); margin:0.6em 0 0.3em;}
+.cl-pad-preview h3{font-size:1.1em; color:color-mix(in srgb, var(--brand) 70%, var(--ink)); margin:0.5em 0 0.3em;}
+.cl-pad-preview code{background:var(--row); padding:1px 5px; border-radius:3px; font-size:0.9em; font-family:'SF Mono',Consolas,Menlo,monospace;}
+.cl-pad-preview pre{background:var(--row); padding:10px 12px; border-radius:6px; overflow:auto; margin:8px 0;}
+.cl-pad-preview pre code{background:transparent; padding:0; font-size:0.85em;}
+.cl-pad-preview blockquote{border-left:3px solid var(--brand); padding:2px 10px; color:var(--muted); margin:8px 0; background:color-mix(in srgb, var(--brand) 6%, transparent);}
+.cl-pad-preview a{color:var(--brand);}
+.cl-pad-preview ul, .cl-pad-preview ol{padding-left:22px; margin:6px 0;}
+.cl-pad-preview hr{border:0; border-top:1px solid var(--line); margin:10px 0;}
+.cl-pad-preview p{margin:6px 0;}
+.cl-pad-preview p:first-child{margin-top:0;}
 
 .cl-calc{padding:10px; width:240px;}
 .cl-calc-display{
@@ -805,6 +888,77 @@ function saveLayout(){
   localStorage.setItem(LS_KEY.layout, JSON.stringify(state.layout));
 }
 
+// Default-pin the four classics so new users see something useful in the dock.
+if (!state.layout.pinned){
+  state.layout.pinned = ['minesweeper','solitaire','calculator','notepad'];
+  saveLayout();
+}
+state.layout.unfoldered = state.layout.unfoldered || [];
+
+function isPinned(id){ return (state.layout.pinned || []).includes(id); }
+function pinItem(id){
+  const list = state.layout.pinned || [];
+  if (!list.includes(id)) list.push(id);
+  state.layout.pinned = list;
+  saveLayout();
+  updateDock();
+}
+function unpinItem(id){
+  state.layout.pinned = (state.layout.pinned || []).filter(x => x !== id);
+  saveLayout();
+  updateDock();
+}
+
+function isInFolder(appId){
+  if ((state.layout.unfoldered || []).includes(appId)) return false;
+  return FOLDERS.some(f => f.apps.includes(appId));
+}
+
+function moveAppToDesktop(appId){
+  state.layout.unfoldered = state.layout.unfoldered || [];
+  if (!state.layout.unfoldered.includes(appId)) state.layout.unfoldered.push(appId);
+  saveLayout();
+  renderIcons();
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CONTEXT MENU (right-click) — used by icons, dock items, folder apps
+// ════════════════════════════════════════════════════════════════════
+function showContextMenu(x, y, items){
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.id = 'nw-context-menu';
+  menu.className = 'nw-context-menu';
+  menu.innerHTML = items.map((it, i) => {
+    if (it.separator) return '<div class="nw-cm-sep"></div>';
+    return `<button class="nw-cm-item${it.danger ? ' danger' : ''}" data-i="${i}">${it.label}</button>`;
+  }).join('');
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  document.getElementById('overlay-root').appendChild(menu);
+  // Adjust if off-screen
+  const r = menu.getBoundingClientRect();
+  if (r.right > innerWidth - 8) menu.style.left = Math.max(8, innerWidth - r.width - 8) + 'px';
+  if (r.bottom > innerHeight - 8) menu.style.top = Math.max(8, y - r.height) + 'px';
+  menu.querySelectorAll('.nw-cm-item').forEach(b => {
+    b.addEventListener('click', () => {
+      const idx = +b.dataset.i;
+      closeContextMenu();
+      items[idx]?.onClick?.();
+    });
+  });
+  setTimeout(() => document.addEventListener('pointerdown', dismissContextMenu, true), 0);
+}
+function dismissContextMenu(e){
+  const menu = document.getElementById('nw-context-menu');
+  if (menu && !menu.contains(e.target)) closeContextMenu();
+}
+function closeContextMenu(){
+  const menu = document.getElementById('nw-context-menu');
+  if (menu) menu.remove();
+  document.removeEventListener('pointerdown', dismissContextMenu, true);
+}
+
 // ════════════════════════════════════════════════════════════════════
 // THEME APPLICATION (one function, sets both palette vars + wallpaper)
 // ════════════════════════════════════════════════════════════════════
@@ -840,7 +994,7 @@ function getDesktopItems(){
   for (const folder of FOLDERS) items.push(folder);
   for (const app of APPS){
     if (app.kind === 'classic') continue;
-    if (FOLDERED_APP_IDS.has(app.id)) continue;
+    if (isInFolder(app.id)) continue; // dynamic — respects state.layout.unfoldered
     items.push(app);
   }
   return items;
@@ -922,6 +1076,23 @@ function renderIcons(){
       if (el._wasDragged) { el._wasDragged = false; return; }
       if (isFolder) openFolder(item);
       else openApp(item);
+    });
+    el.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const menuItems = [
+        { label: isPinned(item.id) ? 'Unpin from dock' : 'Pin to dock',
+          onClick: () => isPinned(item.id) ? unpinItem(item.id) : pinItem(item.id) },
+      ];
+      if (!isFolder && (state.layout.unfoldered || []).includes(item.id)){
+        menuItems.push({ separator:true });
+        menuItems.push({ label: 'Move back into its folder', onClick: () => {
+          state.layout.unfoldered = (state.layout.unfoldered || []).filter(x => x !== item.id);
+          delete state.layout.positions[item.id];
+          saveLayout();
+          renderIcons();
+        }});
+      }
+      showContextMenu(e.clientX, e.clientY, menuItems);
     });
     if (!mobile) makeIconDraggable(el, item);
     area.appendChild(el);
@@ -1064,19 +1235,64 @@ function updateDock(){
     if (z > topZval){ topZval = z; topId = id; }
   }
   dock.innerHTML = '';
-  for (const [id, w] of Object.entries(openWindows)){
-    const app = APPS.find(a => a.id === id);
-    if (!app) continue;
-    const item = document.createElement('button');
-    item.className = 'nw-dock-item' + (id === topId ? ' is-active' : '');
-    item.title = app.name;
-    item.dataset.appId = id;
-    item.innerHTML = `<span class="nw-dock-item-glyph">${app.glyph || app.name.charAt(0)}</span><span>${app.name}</span>`;
-    item.addEventListener('click', () => {
-      if (fullscreenWin && fullscreenWin !== w) toggleFullscreen(fullscreenWin);
-      focusWindow(w);
+
+  const pinned = state.layout.pinned || [];
+  // Helper: find the icon source (app or folder) by id
+  const findIcon = (id) => APPS.find(a => a.id === id) || FOLDERS.find(f => f.id === id);
+
+  // Build sequence: pinned items first, then any running windows that aren't pinned
+  const sequence = [];
+  for (const id of pinned){
+    const icon = findIcon(id);
+    if (!icon) continue;
+    sequence.push({ id, icon, pinned:true, open: !!openWindows[id] });
+  }
+  let addedSep = false;
+  for (const id of Object.keys(openWindows)){
+    if (pinned.includes(id)) continue;
+    const icon = findIcon(id);
+    if (!icon) continue;
+    if (!addedSep && sequence.length){
+      sequence.push({ separator:true });
+      addedSep = true;
+    }
+    sequence.push({ id, icon, pinned:false, open:true });
+  }
+
+  for (const it of sequence){
+    if (it.separator){
+      const sep = document.createElement('div');
+      sep.className = 'nw-dock-sep';
+      dock.appendChild(sep);
+      continue;
+    }
+    const w = openWindows[it.id];
+    const isFolder = it.icon.kind === 'folder';
+    const btn = document.createElement('button');
+    btn.className = 'nw-dock-item'
+      + (it.id === topId ? ' is-active' : '')
+      + (it.open ? ' is-open' : '');
+    btn.title = it.icon.name + (it.pinned ? '  ·  pinned' : '');
+    btn.dataset.appId = it.id;
+    btn.innerHTML = `<span class="nw-dock-item-glyph">${it.icon.glyph || it.icon.name.charAt(0)}</span><span>${it.icon.name}</span>`;
+    btn.addEventListener('click', () => {
+      if (w){
+        if (fullscreenWin && fullscreenWin !== w) toggleFullscreen(fullscreenWin);
+        focusWindow(w);
+      } else if (isFolder){
+        openFolder(it.icon);
+      } else {
+        openApp(it.icon);
+      }
     });
-    dock.appendChild(item);
+    btn.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: it.pinned ? 'Unpin from dock' : 'Pin to dock',
+          onClick: () => it.pinned ? unpinItem(it.id) : pinItem(it.id) },
+      ]);
+    });
+    dock.appendChild(btn);
   }
 }
 
@@ -1240,15 +1456,18 @@ function openFolder(folder){
   wrap.className = 'nw-backdrop';
   wrap.id = 'folder-backdrop';
 
+  // Apps that have been moved out are excluded
+  const movedOut = new Set(state.layout.unfoldered || []);
   const apps = folder.apps
     .map(aid => APPS.find(a => a.id === aid))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(a => !movedOut.has(a.id));
 
   const appsHTML = apps.map(app => {
     const bgVar = app.bg || 'brand';
     const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
     return `
-      <button class="nw-folder-app" data-app-id="${app.id}" title="${(app.description||'').replace(/"/g,'&quot;')}">
+      <button class="nw-folder-app" data-app-id="${app.id}" title="${(app.description||'').replace(/"/g,'&quot;')} — drag out to put on desktop">
         <div class="nw-folder-app-tile" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
           ${app.glyph || app.name.charAt(0)}
         </div>
@@ -1261,7 +1480,7 @@ function openFolder(folder){
       <div class="nw-folder-head">
         <div class="nw-folder-head-glyph">${folder.glyph}</div>
         <div class="nw-folder-head-title">${folder.name}
-          <span class="nw-folder-head-count">  ·  ${apps.length} apps</span>
+          <span class="nw-folder-head-count">  ·  ${apps.length} apps  ·  right-click or drag out to move to desktop</span>
         </div>
         <button class="nw-folder-close" aria-label="Close folder">✕</button>
       </div>
@@ -1271,11 +1490,87 @@ function openFolder(folder){
   root.appendChild(wrap);
 
   wrap.querySelectorAll('.nw-folder-app').forEach(btn => {
+    const app = APPS.find(a => a.id === btn.dataset.appId);
+    if (!app) return;
+
+    // Drag-out gesture: down → if pointer leaves popover → close popover + ghost drag → drop sets desktop position
+    let wasDragged = false;
+    btn.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      const startX = e.clientX, startY = e.clientY;
+      let dragging = false;
+      let ghost = null;
+      let popClosed = false;
+
+      const onMove = ev => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging && Math.hypot(dx, dy) > 6){
+          dragging = true;
+          ghost = document.createElement('div');
+          ghost.className = 'nw-drag-ghost';
+          ghost.textContent = app.glyph || app.name.charAt(0);
+          document.body.appendChild(ghost);
+        }
+        if (dragging){
+          ghost.style.left = ev.clientX + 'px';
+          ghost.style.top = ev.clientY + 'px';
+          if (!popClosed){
+            const pop = document.querySelector('.nw-folder-popover');
+            if (pop){
+              const r = pop.getBoundingClientRect();
+              const outside = ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+              if (outside){
+                popClosed = true;
+                closeFolder();
+              }
+            }
+          }
+        }
+      };
+      const onUp = ev => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        if (!dragging) return;
+        wasDragged = true;
+        ghost?.remove();
+        // Drop in icon-area? Calculate grid position
+        const area = document.getElementById('icon-area').getBoundingClientRect();
+        const inArea = ev.clientX >= area.left && ev.clientX <= area.right
+                    && ev.clientY >= area.top && ev.clientY <= area.bottom;
+        if (inArea){
+          const x = Math.max(0, Math.round((ev.clientX - area.left - GRID_PAD) / ICON_W));
+          const y = Math.max(0, Math.round((ev.clientY - area.top - GRID_PAD) / ICON_H));
+          state.layout.unfoldered = state.layout.unfoldered || [];
+          if (!state.layout.unfoldered.includes(app.id)) state.layout.unfoldered.push(app.id);
+          state.layout.positions[app.id] = {x, y};
+          saveLayout();
+          renderIcons();
+        } else if (!popClosed){
+          // Cancelled drag inside popover — no-op
+        }
+        // Suppress the click event that follows
+        setTimeout(() => { wasDragged = false; }, 50);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+
     btn.addEventListener('click', () => {
-      const app = APPS.find(a => a.id === btn.dataset.appId);
-      if (!app) return;
+      if (wasDragged) return;
       closeFolder();
       openApp(app);
+    });
+
+    btn.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Move to desktop', onClick: () => { closeFolder(); moveAppToDesktop(app.id); } },
+        { separator:true },
+        { label: isPinned(app.id) ? 'Unpin from dock' : 'Pin to dock',
+          onClick: () => isPinned(app.id) ? unpinItem(app.id) : pinItem(app.id) },
+      ]);
     });
   });
   wrap.querySelector('.nw-folder-close').addEventListener('click', closeFolder);
@@ -1607,19 +1902,77 @@ Classics.minesweeper = (body, win) => {
   reset();
 };
 
-// ── Notepad ──
+// ── Notepad (plain text + Markdown preview) ──
+function mdToHtml(src){
+  // Minimal, zero-dependency Markdown renderer. Handles common cases.
+  // Escape HTML first
+  let s = src.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Fenced code blocks (must run before other replacements)
+  s = s.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (m, lang, code) =>
+    ` CB${btoa(unescape(encodeURIComponent(code)))}CB `);
+  // Inline code (single backticks)
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // Headings
+  s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Horizontal rule
+  s = s.replace(/^(?:---|\*\*\*|___)\s*$/gm, '<hr>');
+  // Blockquotes (single-line)
+  s = s.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  // Bold then italic (** before *)
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  s = s.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+  // Links
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, txt, url) => {
+    const safeUrl = /^(https?:|mailto:|#|\/)/i.test(url) ? url : '#';
+    return `<a href="${safeUrl}" target="_blank" rel="noopener">${txt}</a>`;
+  });
+  // Lists — consecutive `- ` or `* ` lines → <ul>
+  s = s.replace(/(?:^[-*] .+(?:\n|$))+/gm, m => {
+    const items = m.trim().split(/\n/).map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
+    return `<ul>${items}</ul>`;
+  });
+  // Ordered lists
+  s = s.replace(/(?:^\d+\. .+(?:\n|$))+/gm, m => {
+    const items = m.trim().split(/\n/).map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
+    return `<ol>${items}</ol>`;
+  });
+  // Paragraphs: split on double newline
+  s = s.split(/\n\n+/).map(p => {
+    p = p.trim();
+    if (!p) return '';
+    if (/^<(h[1-6]|ul|ol|pre|blockquote|hr| CB)/.test(p)) return p;
+    return `<p>${p.replace(/\n/g, '<br>')}</p>`;
+  }).join('\n');
+  // Restore fenced code blocks
+  s = s.replace(/ CB([A-Za-z0-9+/=]+)CB /g, (m, b64) => {
+    const code = decodeURIComponent(escape(atob(b64)))
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<pre><code>${code}</code></pre>`;
+  });
+  return s;
+}
+
 Classics.notepad = (body, win) => {
   const KEY = 'naklOS.notepad.v1';
+  const MODE_KEY = 'naklOS.notepad.mode';
   const saved = localStorage.getItem(KEY) || '';
+  const mode = localStorage.getItem(MODE_KEY) || 'edit'; // 'edit' | 'preview'
   body.innerHTML = `
     <div class="cl-pad">
       <div class="cl-pad-bar">
-        <span>Notepad</span>
+        <span class="cl-pad-mode">
+          <button class="cl-pad-btn ${mode === 'edit' ? 'active' : ''}" data-mode="edit">Edit</button>
+          <button class="cl-pad-btn ${mode === 'preview' ? 'active' : ''}" data-mode="preview">Preview</button>
+        </span>
         <span class="grow"></span>
-        <button class="cl-pad-btn" id="pad-copy">Copy all</button>
+        <button class="cl-pad-btn" id="pad-copy">Copy</button>
         <button class="cl-pad-btn" id="pad-clear">Clear</button>
       </div>
-      <textarea class="cl-pad-area" id="pad-area" spellcheck="false" placeholder="Just start typing. Autosaves to this browser.">${saved.replace(/</g,'&lt;')}</textarea>
+      <textarea class="cl-pad-area" id="pad-area" spellcheck="false" placeholder="Plain text or Markdown — # headings, **bold**, - lists, [links](https://...), \`code\`. Autosaves.">${saved.replace(/</g,'&lt;')}</textarea>
+      <div class="cl-pad-preview" id="pad-preview" style="display:none"></div>
       <div class="cl-pad-status">
         <span id="pad-count">${saved.length} chars · ${saved.split(/\s+/).filter(Boolean).length} words</span>
         <span class="grow" style="flex:1"></span>
@@ -1628,13 +1981,31 @@ Classics.notepad = (body, win) => {
     </div>
   `;
   const ta = body.querySelector('#pad-area');
+  const pv = body.querySelector('#pad-preview');
   const count = body.querySelector('#pad-count');
   const status = body.querySelector('#pad-status');
+  let curMode = mode;
   let saveT;
+
   function updateCount(){
     const t = ta.value;
     count.textContent = `${t.length} chars · ${t.split(/\s+/).filter(Boolean).length} words`;
   }
+  function applyMode(m){
+    curMode = m;
+    localStorage.setItem(MODE_KEY, m);
+    body.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+    if (m === 'preview'){
+      pv.innerHTML = mdToHtml(ta.value);
+      pv.style.display = 'block';
+      ta.style.display = 'none';
+    } else {
+      ta.style.display = '';
+      pv.style.display = 'none';
+      setTimeout(() => ta.focus(), 0);
+    }
+  }
+
   ta.addEventListener('input', () => {
     status.textContent = 'Saving…';
     updateCount();
@@ -1655,10 +2026,14 @@ Classics.notepad = (body, win) => {
     ta.value = '';
     localStorage.setItem(KEY, '');
     updateCount();
+    if (curMode === 'preview') pv.innerHTML = '';
     status.textContent = 'Cleared';
   });
-  // focus when the window opens
-  setTimeout(() => ta.focus(), 50);
+  body.querySelectorAll('[data-mode]').forEach(b => {
+    b.addEventListener('click', () => applyMode(b.dataset.mode));
+  });
+
+  applyMode(curMode);
 };
 
 // ── Calculator ──
@@ -1994,6 +2369,7 @@ Classics.solitaire = (body, win) => {
 // ════════════════════════════════════════════════════════════════════
 function init(){
   applyTheme(state.theme);
+  updateDock();
   if (state.mode) document.getElementById('mode-pill').textContent = getMode();
   else document.getElementById('mode-pill').textContent = getDefaultMode();
   renderIcons();
@@ -2029,9 +2405,11 @@ if (document.readyState === 'loading'){
 
 // Expose for debugging / future cross-tab API (per CONV.md)
 window.naklOS = {
-  state, APPS, THEMES,
-  applyTheme, openApp, openSpotlight, openSettings,
+  state, APPS, THEMES, FOLDERS,
+  applyTheme, openApp, openFolder, openSpotlight, openSettings,
   setMode, getMode, effectiveMode,
+  pinItem, unpinItem, isPinned,
+  moveAppToDesktop, isInFolder,
 };
 </script>
 </body>
