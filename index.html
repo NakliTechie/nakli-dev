@@ -894,6 +894,7 @@ if (!state.layout.pinned){
   saveLayout();
 }
 state.layout.unfoldered = state.layout.unfoldered || [];
+state.layout.windowPositions = state.layout.windowPositions || {};
 
 function isPinned(id){ return (state.layout.pinned || []).includes(id); }
 function pinItem(id){
@@ -1158,13 +1159,23 @@ function makeWindow(opts){
   win.dataset.id = id;
   win.style.width = width + 'px';
   win.style.height = height + 'px';
-  // Center-ish placement, with cascading offset
-  const offset = (Object.keys(openWindows).length % 8) * 24;
+  // Restore saved position if it exists and is at least partially in-viewport;
+  // otherwise fall back to centered placement with cascading offset.
+  const saved = state.layout.windowPositions[id];
   const area = document.getElementById('icon-grid').getBoundingClientRect();
-  const cx = Math.max(20, (area.width - width) / 2 + offset);
-  const cy = Math.max(20, (area.height - height) / 2 - 40 + offset);
-  win.style.left = cx + 'px';
-  win.style.top = (area.top + cy) + 'px';
+  let px, py;
+  if (saved && typeof saved.x === 'number' && typeof saved.y === 'number'
+      && saved.x > -width + 80 && saved.x < innerWidth - 80
+      && saved.y > 40 && saved.y < innerHeight - 40){
+    px = saved.x;
+    py = saved.y;
+  } else {
+    const offset = (Object.keys(openWindows).length % 8) * 24;
+    px = Math.max(20, (area.width - width) / 2 + offset);
+    py = Math.max(area.top + 20, (area.height - height) / 2 - 40 + offset + area.top);
+  }
+  win.style.left = px + 'px';
+  win.style.top = py + 'px';
   win.innerHTML = `
     <div class="nw-titlebar">
       ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. naklOS can't read its data, and it can't reach back into naklOS.">🔒 sandboxed</span>` : ''}
@@ -1346,6 +1357,14 @@ function makeDraggable(win){
       bar.removeEventListener('pointermove', onMove);
       bar.removeEventListener('pointerup', onUp);
       bar.removeEventListener('pointercancel', onUp);
+      // Persist position so reopen / reload restores it
+      if (win.dataset.id && !win.classList.contains('is-fullscreen')){
+        state.layout.windowPositions[win.dataset.id] = {
+          x: parseFloat(win.style.left) || 0,
+          y: parseFloat(win.style.top) || 0,
+        };
+        saveLayout();
+      }
     };
     bar.addEventListener('pointermove', onMove);
     bar.addEventListener('pointerup', onUp);
