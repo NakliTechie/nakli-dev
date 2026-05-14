@@ -134,6 +134,64 @@ input{font:inherit; color:inherit;}
   background:var(--brand);
 }
 
+/* ── FOLDERS ── */
+.nw-icon.is-folder .nw-icon-tile{
+  border-radius:12px;
+  background:color-mix(in srgb, var(--ink) 8%, var(--panel)) !important;
+}
+.nw-folder-mini{
+  display:grid; grid-template-columns:repeat(2, 1fr); gap:3px;
+  width:38px; height:38px;
+  align-items:center; justify-items:center;
+  font-size:16px;
+}
+.nw-folder-mini span{line-height:1; opacity:0.85;}
+
+.nw-folder-popover{
+  width:min(680px, 92vw); max-height:75vh; overflow:auto;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:16px;
+  box-shadow:var(--shadow);
+  padding:18px 20px 22px;
+}
+.nw-folder-head{
+  display:flex; align-items:center; gap:12px; margin-bottom:16px;
+}
+.nw-folder-head-glyph{
+  width:36px; height:36px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px;
+  background:color-mix(in srgb, var(--brand) 18%, var(--panel));
+  border:1px solid var(--line);
+}
+.nw-folder-head-title{flex:1; font-size:15px; font-weight:600;}
+.nw-folder-head-count{font-size:11px; color:var(--muted);}
+.nw-folder-close{
+  width:26px; height:26px; border-radius:8px; color:var(--muted);
+  display:flex; align-items:center; justify-content:center; font-size:13px;
+}
+.nw-folder-close:hover{background:var(--row); color:var(--ink);}
+.nw-folder-grid{
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(78px, 1fr)); gap:10px;
+}
+.nw-folder-app{
+  display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding:8px 4px 6px; border-radius:10px;
+  cursor:pointer; text-align:center;
+  background:transparent; border:0; color:inherit; font:inherit;
+}
+.nw-folder-app:hover{background:color-mix(in srgb, var(--ink) 6%, transparent);}
+.nw-folder-app-tile{
+  width:48px; height:48px; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px;
+  border:1px solid var(--line);
+}
+.nw-folder-app-label{
+  font-size:11px; line-height:1.2; color:var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:72px;
+}
+
 /* ── WINDOWS ── */
 .nw-window{
   position:absolute;
@@ -431,6 +489,37 @@ body.is-mobile .nw-dock{display:none;}
   color:var(--ink); cursor:pointer;
 }
 
+.cl-pad{height:100%; display:flex; flex-direction:column;}
+.cl-pad-bar{
+  display:flex; align-items:center; gap:8px;
+  padding:6px 10px;
+  border-bottom:1px solid var(--line);
+  font-size:11px; color:var(--muted);
+  flex:0 0 auto;
+}
+.cl-pad-bar .grow{flex:1;}
+.cl-pad-btn{
+  padding:3px 8px; border-radius:5px;
+  background:var(--row); color:var(--ink);
+  border:1px solid var(--line); cursor:pointer;
+  font-size:11px;
+}
+.cl-pad-btn:hover{border-color:var(--line-strong);}
+.cl-pad-area{
+  flex:1; min-height:0;
+  background:var(--panel); color:var(--ink);
+  border:0; outline:0; resize:none;
+  padding:12px 14px;
+  font-family:-apple-system,'SF Mono',Consolas,Menlo,monospace;
+  font-size:13px; line-height:1.5;
+}
+.cl-pad-status{
+  padding:4px 10px; font-size:10px;
+  color:var(--faint); background:var(--row);
+  border-top:1px solid var(--line);
+  display:flex; gap:12px;
+}
+
 .cl-calc{padding:10px; width:240px;}
 .cl-calc-display{
   height:60px; padding:8px 12px;
@@ -536,6 +625,8 @@ const APPS = [
     description:'Klondike solitaire. Drag cards to build piles and foundations.', tags:['game','classic'] },
   { id:'calculator', name:'Calculator', kind:'classic', glyph:'🧮', bg:'act',
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'] },
+  { id:'notepad', name:'Notepad', kind:'classic', glyph:'📝', bg:'ok',
+    description:'A scratch pad that remembers what you wrote. Just text, no formatting.', tags:['tool','classic'] },
 
   // ── NakliTechie apps (in portfolio updated-order) ──
   { id:'sansadlocal', name:'SansadLocal', url:'https://sansadlocal.naklitechie.com', glyph:'🏛️', bg:'act',
@@ -617,6 +708,24 @@ const APPS = [
   { id:'callib', name:'CalendarLibrary', url:'https://github.com/NakliTechie/CalendarLibrary', glyph:'📚', bg:'ok',
     description:'JS library: convert dates across 28 calendar systems — Gregorian to Maya. Pure ES modules.', tags:['library','javascript'] },
 ];
+
+// ════════════════════════════════════════════════════════════════════
+// FOLDERS — group apps on the desktop. Classics stay un-foldered.
+// Click a folder → centered popover with the contained apps.
+// ════════════════════════════════════════════════════════════════════
+const FOLDERS = [
+  { id:'fld-games', kind:'folder', name:'Games', glyph:'🎮', bg:'brand',
+    apps:['kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
+  { id:'fld-dev', kind:'folder', name:'Dev', glyph:'⚒️', bg:'act',
+    apps:['bofh','mod','nakliposter','karkhana','tapasya'] },
+  { id:'fld-utilities', kind:'folder', name:'Utilities', glyph:'🧰', bg:'ok',
+    apps:['slate','tijori','rotor','mehfil','kagaz','kanzen','bahi','babellocal','sniplocal','blurlocal','striplocal','scanlocal','voicevault','bolo','vaultmind','localmind','sansadlocal','nemawashi'] },
+  { id:'fld-fun', kind:'folder', name:'Fun', glyph:'🎨', bg:'brand',
+    apps:['fretlocal','clacker','dotspin','rangrez','hueandcry','mechanikon','antikythera','calendars','predmkt','callib'] },
+];
+
+// Build a Set of all app ids that are inside any folder (for fast lookup)
+const FOLDERED_APP_IDS = new Set(FOLDERS.flatMap(f => f.apps));
 
 // ════════════════════════════════════════════════════════════════════
 // THEMES — the OS color scheme. Each theme bundles a palette (UI tints)
@@ -723,8 +832,22 @@ function applyTheme(id){
 const ICON_W = 96, ICON_H = 112; // grid cell (with label below)
 const GRID_PAD = 24;
 
+// Items shown on the main desktop: classics first, then folders, then any
+// ungrouped non-classic apps (defensive — should be empty if FOLDERS covers all).
+function getDesktopItems(){
+  const items = [];
+  for (const app of APPS) if (app.kind === 'classic') items.push(app);
+  for (const folder of FOLDERS) items.push(folder);
+  for (const app of APPS){
+    if (app.kind === 'classic') continue;
+    if (FOLDERED_APP_IDS.has(app.id)) continue;
+    items.push(app);
+  }
+  return items;
+}
+
 function computeAutoPositions(){
-  // Place apps not in state.layout.positions into the first free grid cells, column-major
+  // Place items not in state.layout.positions into the first free grid cells, column-major
   const area = document.getElementById('icon-area').getBoundingClientRect();
   const cols = Math.max(1, Math.floor((area.width - GRID_PAD*2) / ICON_W));
   const rows = Math.max(1, Math.floor((area.height - GRID_PAD*2) / ICON_H));
@@ -733,17 +856,16 @@ function computeAutoPositions(){
     used.add(`${pos.x},${pos.y}`);
   }
   const result = {};
-  for (const app of APPS){
-    if (state.layout.hidden && state.layout.hidden.includes(app.id)) continue;
-    if (state.layout.positions[app.id]) { result[app.id] = state.layout.positions[app.id]; continue; }
-    // find next free cell (column-major: x=0 col, scan y, then next col)
+  for (const item of getDesktopItems()){
+    if (state.layout.hidden && state.layout.hidden.includes(item.id)) continue;
+    if (state.layout.positions[item.id]) { result[item.id] = state.layout.positions[item.id]; continue; }
     outer: for (let x = 0; x < cols; x++){
       for (let y = 0; y < rows; y++){
         const k = `${x},${y}`;
-        if (!used.has(k)) { used.add(k); result[app.id] = {x, y}; break outer; }
+        if (!used.has(k)) { used.add(k); result[item.id] = {x, y}; break outer; }
       }
     }
-    if (!result[app.id]) result[app.id] = {x:0, y:0};
+    if (!result[item.id]) result[item.id] = {x:0, y:0};
   }
   return result;
 }
@@ -755,11 +877,10 @@ function renderIcons(){
   document.body.classList.toggle('is-mobile', mobile);
   const positions = mobile ? null : computeAutoPositions();
 
-  // For mobile, sort by stored position (y, x) to give user-arranged order
-  let list = APPS.slice();
+  let list = getDesktopItems();
   if (mobile){
     const pos = state.layout.positions || {};
-    list.sort((a, b) => {
+    list = list.slice().sort((a, b) => {
       const pa = pos[a.id] || {x:99, y:99};
       const pb = pos[b.id] || {x:99, y:99};
       if (pa.y !== pb.y) return pa.y - pb.y;
@@ -767,33 +888,42 @@ function renderIcons(){
     });
   }
 
-  for (const app of list){
-    if (state.layout.hidden && state.layout.hidden.includes(app.id)) continue;
+  for (const item of list){
+    if (state.layout.hidden && state.layout.hidden.includes(item.id)) continue;
+    const isFolder = item.kind === 'folder';
     const el = document.createElement('button');
-    el.className = 'nw-icon';
-    if (app.private) el.classList.add('private');
-    el.dataset.id = app.id;
-    el.setAttribute('aria-label', app.name);
-    const bgVar = app.bg || 'brand';
+    el.className = 'nw-icon' + (isFolder ? ' is-folder' : '');
+    if (item.private) el.classList.add('private');
+    el.dataset.id = item.id;
+    el.setAttribute('aria-label', isFolder ? `${item.name} folder` : item.name);
+    const bgVar = item.bg || 'brand';
     const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
-    const monoChar = (app.name || '?').charAt(0).toUpperCase();
+    const monoChar = (item.name || '?').charAt(0).toUpperCase();
+    // For folders, build a 2×2 mini-preview from the first 4 contained apps' glyphs
+    const previewHTML = isFolder
+      ? `<div class="nw-folder-mini">${item.apps.slice(0,4).map(aid => {
+            const a = APPS.find(x => x.id === aid);
+            return `<span>${a?.glyph || '·'}</span>`;
+          }).join('')}</div>`
+      : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>
+         <span class="nw-icon-mono">${monoChar}</span>`;
     el.innerHTML = `
-      <div class="nw-icon-tile ${app.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
-        <span class="nw-icon-glyph">${app.glyph || monoChar}</span>
-        <span class="nw-icon-mono">${monoChar}</span>
+      <div class="nw-icon-tile ${item.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
+        ${previewHTML}
       </div>
-      <div class="nw-icon-label">${app.name}</div>
+      <div class="nw-icon-label">${item.name}</div>
     `;
-    if (!mobile && positions[app.id]){
-      const p = positions[app.id];
+    if (!mobile && positions[item.id]){
+      const p = positions[item.id];
       el.style.left = (GRID_PAD + p.x * ICON_W) + 'px';
       el.style.top = (GRID_PAD + p.y * ICON_H) + 'px';
     }
-    el.addEventListener('click', e => {
+    el.addEventListener('click', () => {
       if (el._wasDragged) { el._wasDragged = false; return; }
-      openApp(app);
+      if (isFolder) openFolder(item);
+      else openApp(item);
     });
-    if (!mobile) makeIconDraggable(el, app);
+    if (!mobile) makeIconDraggable(el, item);
     area.appendChild(el);
   }
 }
@@ -1014,6 +1144,7 @@ function spawnInlineWindow(app){
     minesweeper: {w:260, h:380},
     solitaire: {w:520, h:480},
     calculator: {w:260, h:360},
+    notepad: {w:520, h:440},
   };
   const sz = sizes[app.id] || {w:480, h:380};
   const win = makeWindow({ id:app.id, title:app.name, width:sz.w, height:sz.h });
@@ -1095,6 +1226,67 @@ function openApp(app){
 // SPOTLIGHT
 // ════════════════════════════════════════════════════════════════════
 let spotlightOpen = false;
+
+// ════════════════════════════════════════════════════════════════════
+// FOLDERS — open as a centered popover with backdrop
+// ════════════════════════════════════════════════════════════════════
+let folderOpenId = null;
+
+function openFolder(folder){
+  closeFolder();
+  folderOpenId = folder.id;
+  const root = document.getElementById('overlay-root');
+  const wrap = document.createElement('div');
+  wrap.className = 'nw-backdrop';
+  wrap.id = 'folder-backdrop';
+
+  const apps = folder.apps
+    .map(aid => APPS.find(a => a.id === aid))
+    .filter(Boolean);
+
+  const appsHTML = apps.map(app => {
+    const bgVar = app.bg || 'brand';
+    const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
+    return `
+      <button class="nw-folder-app" data-app-id="${app.id}" title="${(app.description||'').replace(/"/g,'&quot;')}">
+        <div class="nw-folder-app-tile" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
+          ${app.glyph || app.name.charAt(0)}
+        </div>
+        <div class="nw-folder-app-label">${app.name}</div>
+      </button>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="nw-folder-popover" role="dialog" aria-label="${folder.name} folder">
+      <div class="nw-folder-head">
+        <div class="nw-folder-head-glyph">${folder.glyph}</div>
+        <div class="nw-folder-head-title">${folder.name}
+          <span class="nw-folder-head-count">  ·  ${apps.length} apps</span>
+        </div>
+        <button class="nw-folder-close" aria-label="Close folder">✕</button>
+      </div>
+      <div class="nw-folder-grid">${appsHTML}</div>
+    </div>
+  `;
+  root.appendChild(wrap);
+
+  wrap.querySelectorAll('.nw-folder-app').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const app = APPS.find(a => a.id === btn.dataset.appId);
+      if (!app) return;
+      closeFolder();
+      openApp(app);
+    });
+  });
+  wrap.querySelector('.nw-folder-close').addEventListener('click', closeFolder);
+  wrap.addEventListener('click', e => { if (e.target === wrap) closeFolder(); });
+}
+
+function closeFolder(){
+  const w = document.getElementById('folder-backdrop');
+  if (w) w.remove();
+  folderOpenId = null;
+}
 
 function openSpotlight(){
   if (spotlightOpen) return;
@@ -1413,6 +1605,60 @@ Classics.minesweeper = (body, win) => {
 
   body.querySelector('#mine-reset').addEventListener('click', reset);
   reset();
+};
+
+// ── Notepad ──
+Classics.notepad = (body, win) => {
+  const KEY = 'naklOS.notepad.v1';
+  const saved = localStorage.getItem(KEY) || '';
+  body.innerHTML = `
+    <div class="cl-pad">
+      <div class="cl-pad-bar">
+        <span>Notepad</span>
+        <span class="grow"></span>
+        <button class="cl-pad-btn" id="pad-copy">Copy all</button>
+        <button class="cl-pad-btn" id="pad-clear">Clear</button>
+      </div>
+      <textarea class="cl-pad-area" id="pad-area" spellcheck="false" placeholder="Just start typing. Autosaves to this browser.">${saved.replace(/</g,'&lt;')}</textarea>
+      <div class="cl-pad-status">
+        <span id="pad-count">${saved.length} chars · ${saved.split(/\s+/).filter(Boolean).length} words</span>
+        <span class="grow" style="flex:1"></span>
+        <span id="pad-status">Saved</span>
+      </div>
+    </div>
+  `;
+  const ta = body.querySelector('#pad-area');
+  const count = body.querySelector('#pad-count');
+  const status = body.querySelector('#pad-status');
+  let saveT;
+  function updateCount(){
+    const t = ta.value;
+    count.textContent = `${t.length} chars · ${t.split(/\s+/).filter(Boolean).length} words`;
+  }
+  ta.addEventListener('input', () => {
+    status.textContent = 'Saving…';
+    updateCount();
+    clearTimeout(saveT);
+    saveT = setTimeout(() => {
+      localStorage.setItem(KEY, ta.value);
+      status.textContent = 'Saved';
+    }, 250);
+  });
+  body.querySelector('#pad-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(ta.value); status.textContent = 'Copied'; }
+    catch(_) { status.textContent = 'Copy failed'; }
+    setTimeout(() => { status.textContent = 'Saved'; }, 1200);
+  });
+  body.querySelector('#pad-clear').addEventListener('click', () => {
+    if (!ta.value) return;
+    if (!confirm('Clear the notepad?')) return;
+    ta.value = '';
+    localStorage.setItem(KEY, '');
+    updateCount();
+    status.textContent = 'Cleared';
+  });
+  // focus when the window opens
+  setTimeout(() => ta.focus(), 50);
 };
 
 // ── Calculator ──
@@ -1763,6 +2009,7 @@ function init(){
     }
     if (e.key === 'Escape'){
       if (fullscreenWin){ toggleFullscreen(fullscreenWin); return; }
+      if (folderOpenId){ closeFolder(); return; }
       const pop = document.getElementById('settings-pop');
       if (pop) closeSettings();
     }
