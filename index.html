@@ -262,7 +262,7 @@ input{font:inherit; color:inherit;}
   color:var(--brand); margin-left:6px; font-weight:600;
 }
 .nw-wp-grid{
-  display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;
+  display:grid; grid-template-columns:repeat(2, 1fr); gap:10px;
 }
 .nw-wp{
   cursor:pointer; border-radius:8px; overflow:hidden;
@@ -271,42 +271,17 @@ input{font:inherit; color:inherit;}
 }
 .nw-wp:hover{transform:translateY(-1px);}
 .nw-wp.is-active{border-color:var(--brand);}
-.nw-wp-preview{height:50px;}
+.nw-wp-preview{height:62px;}
 .nw-wp-label{
-  font-size:9px; padding:3px 4px;
+  font-size:10px; padding:4px 5px;
   text-align:center; background:var(--row);
   color:var(--muted); font-weight:600;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-.nw-palette-grid{
-  display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;
-}
-.nw-pal{
-  cursor:pointer; border-radius:8px; overflow:hidden;
-  border:2px solid transparent;
-  transition:transform 0.12s;
-}
-.nw-pal:hover{transform:translateY(-1px);}
-.nw-pal.is-active{border-color:var(--brand);}
 .nw-pal-swatch{
-  height:36px; display:flex;
+  display:flex; height:8px;
 }
 .nw-pal-swatch span{flex:1;}
-.nw-pal-label{
-  font-size:9px; padding:3px 4px;
-  text-align:center; background:var(--row);
-  color:var(--muted); font-weight:600;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-}
-.nw-pal-load{
-  margin-top:8px; padding:6px 10px;
-  font-size:11px; border-radius:6px;
-  background:var(--row); color:var(--muted);
-  border:1px solid var(--line);
-  width:100%; text-align:center;
-  cursor:pointer;
-}
-.nw-pal-load:hover{color:var(--ink); border-color:var(--line-strong);}
 .nw-foot-link{
   display:block; padding:6px 0;
   font-size:11px; color:var(--muted);
@@ -644,65 +619,56 @@ const APPS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════
-// PALETTES (12 curated, inline from Rangrez)
+// THEMES — the OS color scheme. Each theme bundles a palette (UI tints)
+// with a wallpaper gradient (desktop bg). One picker, no fragmentation.
+// Apps in Mode C inherit the theme via ?nakliOS-theme=<id> on the iframe URL.
 // ════════════════════════════════════════════════════════════════════
-const PALETTES = [
-  { id:'japan-10', name:'URUSHI', sub:'Wajima lacquer, kintsugi gold',
-    colors:{BODY:'#15100c',PANEL:'#1e1813',INK:'#f5e6c8',BRAND:'#c8512a',ACT:'#3a5a8a',OK:'#7a9a3a',ROW:'#221a13'} },
-  { id:'japan-01', name:'MUJI', sub:'Cleanest light, Tokyo store',
-    colors:{BODY:'#f9f9f8',PANEL:'#ffffff',INK:'#1c1815',BRAND:'#8b3a1f',ACT:'#1a2b4a',OK:'#4a6b2a',ROW:'#f1f1ee'} },
-  { id:'japan-03', name:'SUMI', sub:'Zen monochrome ink',
-    colors:{BODY:'#f5f5f4',PANEL:'#ffffff',INK:'#0d0d0c',BRAND:'#5a5a58',ACT:'#2c2c2a',OK:'#3d4a30',ROW:'#ebebe9'} },
-  { id:'china-07', name:'QINGHUA', sub:'Ming blue-and-white porcelain',
-    colors:{BODY:'#e2e9f4',PANEL:'#f5f8fc',INK:'#0a1a40',BRAND:'#c8302a',ACT:'#1a4090',OK:'#3a5a2a',ROW:'#d2dcec'} },
-  { id:'china-08', name:'ZHUSHA', sub:'Cinnabar, imperial seal',
-    colors:{BODY:'#f6e6d4',PANEL:'#fdf2e2',INK:'#3a1208',BRAND:'#c8281a',ACT:'#2a3a5a',OK:'#5a5a1a',ROW:'#ebd6bc'} },
-  { id:'china-09', name:'HONG', sub:'Spring Festival lantern',
-    colors:{BODY:'#d8181a',PANEL:'#e82828',INK:'#f8e8a8',BRAND:'#f8e8a8',ACT:'#0a0a0a',OK:'#f8e8a8',ROW:'#b81010'} },
-  { id:'india1-05', name:'HALDI', sub:'Turmeric, wedding pithi',
-    colors:{BODY:'#fbecc4',PANEL:'#fdf4d8',INK:'#2a1a08',BRAND:'#c8341a',ACT:'#1a3a78',OK:'#5a6a1a',ROW:'#f0dca8'} },
-  { id:'india1-06', name:'NEEL', sub:'Champaran indigo',
-    colors:{BODY:'#dfe6f0',PANEL:'#f2f6fb',INK:'#0a1838',BRAND:'#c8341a',ACT:'#1a3a90',OK:'#3a5a2a',ROW:'#cfd8e8'} },
-  { id:'india1-07', name:'KUMKUM', sub:'Bindi, sindoor, tilak',
-    colors:{BODY:'#f8e0c8',PANEL:'#fdedd8',INK:'#3a1208',BRAND:'#c8281a',ACT:'#2a3a5a',OK:'#5a5a1a',ROW:'#ecd0b0'} },
-  { id:'kashmir-06', name:'SAFFRON', sub:'Pampore Karewa stigmas',
-    colors:{BODY:'#b83018',PANEL:'#c84028',INK:'#f4ecd8',BRAND:'#f0c820',ACT:'#1a0a08',OK:'#f4ecd8',ROW:'#982010'} },
-  { id:'bauhaus-02', name:'DESSAU', sub:'Gropius glass curtain wall',
-    colors:{BODY:'#f6f6f4',PANEL:'#ffffff',INK:'#0a0a0a',BRAND:'#d82418',ACT:'#1a3ac8',OK:'#384a30',ROW:'#eaeae8'} },
-  { id:'bauhaus-03', name:'KANDINSKY', sub:'Centripetal cobalt blue',
-    colors:{BODY:'#1a3ac8',PANEL:'#2a4ad8',INK:'#f4f4f0',BRAND:'#f0c808',ACT:'#f4f4f0',OK:'#d82418',ROW:'#1030b8'} },
-];
-
-// ════════════════════════════════════════════════════════════════════
-// WALLPAPERS (decoupled from palette — palette = UI chrome, wallpaper = desktop bg)
-// ════════════════════════════════════════════════════════════════════
-const WALLPAPERS = [
+const THEMES = [
   { id:'aurora', name:'Aurora', mood:'dark',
-    css:'radial-gradient(ellipse 70% 50% at 18% 28%, #b58dcf 0%, transparent 50%), radial-gradient(ellipse 80% 60% at 82% 70%, #6f93d4 0%, transparent 55%), radial-gradient(ellipse 100% 100% at 50% 100%, #4a3c5e 0%, transparent 70%), linear-gradient(180deg, #221a30 0%, #14101c 100%)' },
+    sub:'Soft purple and blue glow on plum.',
+    colors:{BODY:'#1a1428',PANEL:'#251a3a',INK:'#ede8f5',BRAND:'#c8a8d8',ACT:'#8fa8d8',OK:'#9fc890',ROW:'#1f1532'},
+    wallpaper:'radial-gradient(ellipse 70% 50% at 18% 28%, #b58dcf 0%, transparent 50%), radial-gradient(ellipse 80% 60% at 82% 70%, #6f93d4 0%, transparent 55%), radial-gradient(ellipse 100% 100% at 50% 100%, #4a3c5e 0%, transparent 70%), linear-gradient(180deg, #221a30 0%, #14101c 100%)' },
   { id:'karewa', name:'Karewa', mood:'warm',
-    css:'radial-gradient(ellipse 90% 70% at 25% 12%, #ffc89a 0%, transparent 50%), radial-gradient(ellipse 80% 70% at 88% 95%, #d97757 0%, transparent 58%), radial-gradient(ellipse 70% 60% at 60% 60%, #b85a78 0%, transparent 60%), linear-gradient(180deg, #4a2c3a 0%, #251820 100%)' },
-  { id:'indigo', name:'Indigo Dusk', mood:'cool',
-    css:'radial-gradient(ellipse 80% 60% at 75% 22%, #5a4ca8 0%, transparent 50%), radial-gradient(ellipse 100% 80% at 0% 100%, #1a2868 0%, transparent 70%), linear-gradient(135deg, #0c1430 0%, #1a1840 100%)' },
+    sub:'Kashmir saffron sunrise on aubergine.',
+    colors:{BODY:'#2a1820',PANEL:'#3a2030',INK:'#f5e6d4',BRAND:'#f0a050',ACT:'#c87080',OK:'#a8a050',ROW:'#2e1a22'},
+    wallpaper:'radial-gradient(ellipse 90% 70% at 25% 12%, #ffc89a 0%, transparent 50%), radial-gradient(ellipse 80% 70% at 88% 95%, #d97757 0%, transparent 58%), radial-gradient(ellipse 70% 60% at 60% 60%, #b85a78 0%, transparent 60%), linear-gradient(180deg, #4a2c3a 0%, #251820 100%)' },
+  { id:'indigo', name:'Indigo', mood:'cool',
+    sub:'Deep blue twilight, ice-cream ink.',
+    colors:{BODY:'#0c1428',PANEL:'#1a2440',INK:'#e0e8f5',BRAND:'#5ac8e0',ACT:'#6080d0',OK:'#80c890',ROW:'#0e1632'},
+    wallpaper:'radial-gradient(ellipse 80% 60% at 75% 22%, #5a4ca8 0%, transparent 50%), radial-gradient(ellipse 100% 80% at 0% 100%, #1a2868 0%, transparent 70%), linear-gradient(135deg, #0c1430 0%, #1a1840 100%)' },
   { id:'monsoon', name:'Monsoon', mood:'dark',
-    css:'radial-gradient(ellipse 90% 70% at 50% 0%, #4a7a8a 0%, transparent 60%), radial-gradient(ellipse 70% 50% at 10% 100%, #2a5060 0%, transparent 60%), linear-gradient(180deg, #1c3038 0%, #0e1c24 100%)' },
-  { id:'charcoal', name:'Charcoal', mood:'dark',
-    css:'radial-gradient(ellipse 90% 70% at 12% 88%, #44444f 0%, transparent 60%), radial-gradient(ellipse 70% 50% at 88% 12%, #38384a 0%, transparent 60%), linear-gradient(135deg, #21212a 0%, #15151c 100%)' },
+    sub:'Teal rain, warm citrus brand.',
+    colors:{BODY:'#0e1c24',PANEL:'#1a2e36',INK:'#f0e6d4',BRAND:'#e08850',ACT:'#50a0b0',OK:'#c8b060',ROW:'#102028'},
+    wallpaper:'radial-gradient(ellipse 90% 70% at 50% 0%, #4a7a8a 0%, transparent 60%), radial-gradient(ellipse 70% 50% at 10% 100%, #2a5060 0%, transparent 60%), linear-gradient(180deg, #1c3038 0%, #0e1c24 100%)' },
   { id:'sand', name:'Sand & Ink', mood:'light',
-    css:'radial-gradient(ellipse 100% 100% at 30% 20%, #fbeed4 0%, transparent 60%), radial-gradient(ellipse 80% 60% at 80% 100%, #ead7b0 0%, transparent 70%), linear-gradient(180deg, #f9efd9 0%, #f0e2c0 100%)' },
+    sub:'Warm cream daylight, terracotta accent.',
+    colors:{BODY:'#faf2e2',PANEL:'#fdf8ec',INK:'#2c1810',BRAND:'#c8512a',ACT:'#2a4a8a',OK:'#5a7a30',ROW:'#f0e2c8'},
+    wallpaper:'radial-gradient(ellipse 100% 100% at 30% 20%, #fbeed4 0%, transparent 60%), radial-gradient(ellipse 80% 60% at 80% 100%, #ead7b0 0%, transparent 70%), linear-gradient(180deg, #f9efd9 0%, #f0e2c0 100%)' },
   { id:'porcelain', name:'Porcelain', mood:'light',
-    css:'radial-gradient(ellipse 80% 60% at 20% 18%, #e8eff8 0%, transparent 55%), radial-gradient(ellipse 90% 70% at 90% 90%, #d8e2f0 0%, transparent 60%), linear-gradient(180deg, #f4f7fc 0%, #e2eaf4 100%)' },
-  { id:'urushi', name:'Urushi', mood:'dark',
-    css:'radial-gradient(ellipse 80% 60% at 15% 8%, rgba(200,81,42,0.10) 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 95%, rgba(58,90,138,0.08) 0%, transparent 60%), #15100c' },
+    sub:'Pale blue daylight, Ming cinnabar.',
+    colors:{BODY:'#f4f7fc',PANEL:'#ffffff',INK:'#0a1a40',BRAND:'#c8302a',ACT:'#1a4090',OK:'#2a5a30',ROW:'#e8eef8'},
+    wallpaper:'radial-gradient(ellipse 80% 60% at 20% 18%, #e8eff8 0%, transparent 55%), radial-gradient(ellipse 90% 70% at 90% 90%, #d8e2f0 0%, transparent 60%), linear-gradient(180deg, #f4f7fc 0%, #e2eaf4 100%)' },
 ];
 
 // ════════════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════════════
-const LS_KEY = { mode:'naklOS.mode', palette:'naklOS.palette', layout:'naklOS.layout', wallpaper:'naklOS.wallpaper' };
+const LS_KEY = { mode:'naklOS.mode', theme:'naklOS.theme', layout:'naklOS.layout' };
+
+// Migrate from v1.1 dual-key storage if present
+(function migrateThemeKey(){
+  if (localStorage.getItem(LS_KEY.theme)) return;
+  const oldWp = localStorage.getItem('naklOS.wallpaper');
+  if (oldWp && THEMES.find(t => t.id === oldWp)){
+    localStorage.setItem(LS_KEY.theme, oldWp);
+  }
+  localStorage.removeItem('naklOS.palette');
+  localStorage.removeItem('naklOS.wallpaper');
+})();
+
 const state = {
   mode: localStorage.getItem(LS_KEY.mode) || null,
-  palette: localStorage.getItem(LS_KEY.palette) || 'japan-10',
-  wallpaper: localStorage.getItem(LS_KEY.wallpaper) || 'aurora',
+  theme: localStorage.getItem(LS_KEY.theme) || 'aurora',
   layout: JSON.parse(localStorage.getItem(LS_KEY.layout) || '{"version":1,"positions":{},"hidden":[]}'),
 };
 
@@ -731,58 +697,24 @@ function saveLayout(){
 }
 
 // ════════════════════════════════════════════════════════════════════
-// PALETTE
+// THEME APPLICATION (one function, sets both palette vars + wallpaper)
 // ════════════════════════════════════════════════════════════════════
-let extraPalettes = null; // lazy loaded full set
-
-function applyPalette(id){
-  const all = [...PALETTES, ...(extraPalettes || [])];
-  const p = all.find(x => x.id === id) || PALETTES[0];
+function applyTheme(id){
+  const t = THEMES.find(x => x.id === id) || THEMES[0];
   const r = document.documentElement.style;
-  for (const [k, v] of Object.entries(p.colors)){
+  for (const [k, v] of Object.entries(t.colors)){
     r.setProperty('--' + k.toLowerCase(), v);
   }
-  state.palette = p.id;
-  localStorage.setItem(LS_KEY.palette, p.id);
-  // Pick a tile background tone derived from the palette
-  r.setProperty('--tile-bg', `color-mix(in srgb, ${p.colors.PANEL} 70%, ${p.colors.BODY})`);
-}
-
-function applyWallpaper(id){
-  const w = WALLPAPERS.find(x => x.id === id) || WALLPAPERS[0];
-  document.documentElement.style.setProperty('--wallpaper', w.css);
+  r.setProperty('--wallpaper', t.wallpaper);
+  r.setProperty('--tile-bg', `color-mix(in srgb, ${t.colors.PANEL} 70%, ${t.colors.BODY})`);
   const desk = document.getElementById('desktop');
-  if (desk){
-    desk.classList.toggle('wp-light', w.mood === 'light');
-  }
-  state.wallpaper = w.id;
-  localStorage.setItem(LS_KEY.wallpaper, w.id);
-}
-
-async function loadExtraPalettes(){
-  if (extraPalettes) return extraPalettes;
-  try {
-    const res = await fetch('https://naklitechie.github.io/Rangrez/palettes.json');
-    const data = await res.json();
-    extraPalettes = [];
-    const inlineIds = new Set(PALETTES.map(p => p.id));
-    for (const col of data.collections || []){
-      for (const p of col.palettes || []){
-        if (inlineIds.has(p.id)) continue;
-        extraPalettes.push({
-          id: p.id,
-          name: p.name.replace(/^\d+\s*·\s*/, '').split(/\s+/).pop(),
-          sub: (p.feel || '').split('.')[0],
-          colors: p.colors,
-        });
-      }
-    }
-    return extraPalettes;
-  } catch(e){
-    console.warn('Failed to load extra palettes', e);
-    extraPalettes = [];
-    return extraPalettes;
-  }
+  if (desk) desk.classList.toggle('wp-light', t.mood === 'light');
+  state.theme = t.id;
+  localStorage.setItem(LS_KEY.theme, t.id);
+  // Update any open iframe windows so apps that listen can re-theme
+  document.querySelectorAll('.nw-window iframe').forEach(f => {
+    try { f.contentWindow.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1089,6 +1021,13 @@ function spawnInlineWindow(app){
   builder(body, win);
 }
 
+function themedAppUrl(app){
+  // Pass current theme so cooperating apps can inherit OS color scheme.
+  // Apps that don't read these params see them as ignored extras.
+  const sep = app.url.includes('?') ? '&' : '?';
+  return `${app.url}${sep}nakliOS-theme=${encodeURIComponent(state.theme)}`;
+}
+
 function spawnIframeWindow(app){
   const win = makeWindow({
     id:app.id, title:app.name, width:980, height:640,
@@ -1099,10 +1038,15 @@ function spawnIframeWindow(app){
   iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-popups allow-forms allow-downloads');
   iframe.setAttribute('referrerpolicy', 'no-referrer');
   iframe.title = app.name;
-  iframe.src = app.url;
+  iframe.src = themedAppUrl(app);
   body.appendChild(iframe);
   iframe.addEventListener('load', () => {
-    try { knownIframes.add(iframe.contentWindow); } catch(_){}
+    try {
+      knownIframes.add(iframe.contentWindow);
+      // Send the theme so any listening app can apply it
+      const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
+      iframe.contentWindow.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*');
+    } catch(_){}
   });
 }
 
@@ -1118,6 +1062,10 @@ window.addEventListener('message', e => {
     const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
       .find(f => f.contentWindow === e.source);
     if (iframe) iframe.closest('.nw-window').querySelector('.nw-title').textContent = msg.title;
+  } else if (msg.type === 'naklos:theme-request'){
+    // App is asking for the current theme (e.g., late-loading app missed the load event)
+    const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
+    try { e.source.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
   }
 });
 
@@ -1255,32 +1203,23 @@ function openSettings(){
     </label>
   `).join('');
 
-  const allPalettes = [...PALETTES, ...(extraPalettes || [])];
-  const palHTML = allPalettes.map(p => {
-    const order = ['BODY','PANEL','INK','BRAND','ACT'];
-    const stripes = order.map(k => `<span style="background:${p.colors[k]}"></span>`).join('');
+  const themeHTML = THEMES.map(t => {
+    const order = ['BRAND','ACT','OK','INK'];
+    const stripes = order.map(k => `<span style="background:${t.colors[k]}"></span>`).join('');
     return `
-      <div class="nw-pal ${p.id === state.palette ? 'is-active' : ''}" data-pid="${p.id}" title="${p.name} — ${p.sub || ''}">
-        <div class="nw-pal-swatch">${stripes}</div>
-        <div class="nw-pal-label">${p.name}</div>
+      <div class="nw-wp ${t.id === state.theme ? 'is-active' : ''}" data-tid="${t.id}" title="${t.name} — ${t.sub}">
+        <div class="nw-wp-preview" style="background:${t.wallpaper};"></div>
+        <div class="nw-pal-swatch" style="height:8px">${stripes}</div>
+        <div class="nw-wp-label">${t.name}</div>
       </div>`;
   }).join('');
-
-  const wpHTML = WALLPAPERS.map(w => `
-    <div class="nw-wp ${w.id === state.wallpaper ? 'is-active' : ''}" data-wpid="${w.id}" title="${w.name} (${w.mood})">
-      <div class="nw-wp-preview" style="background:${w.css};"></div>
-      <div class="nw-wp-label">${w.name}</div>
-    </div>`).join('');
 
   wrap.innerHTML = `
     <h4>Mode</h4>
     ${modeHTML}
     ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Mode A is always used.</div>` : ''}
-    <h4>Wallpaper</h4>
-    <div class="nw-wp-grid" id="wp-grid">${wpHTML}</div>
-    <h4>Palette <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— tints icon tiles &amp; windows</span></h4>
-    <div class="nw-palette-grid" id="palette-grid">${palHTML}</div>
-    <button class="nw-pal-load" id="palette-load">${extraPalettes ? `${extraPalettes.length} more loaded` : 'Load all 240 Rangrez palettes…'}</button>
+    <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
+    <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
@@ -1296,23 +1235,11 @@ function openSettings(){
       wrap.querySelectorAll('.nw-mode-opt').forEach(o => o.classList.toggle('is-active', o.contains(r) && r.checked));
     });
   });
-  wrap.querySelector('#wp-grid').addEventListener('click', e => {
+  wrap.querySelector('#theme-grid').addEventListener('click', e => {
     const el = e.target.closest('.nw-wp');
     if (!el) return;
-    applyWallpaper(el.dataset.wpid);
+    applyTheme(el.dataset.tid);
     wrap.querySelectorAll('.nw-wp').forEach(p => p.classList.toggle('is-active', p === el));
-  });
-  wrap.querySelector('#palette-grid').addEventListener('click', e => {
-    const el = e.target.closest('.nw-pal');
-    if (!el) return;
-    applyPalette(el.dataset.pid);
-    wrap.querySelectorAll('.nw-pal').forEach(p => p.classList.toggle('is-active', p === el));
-  });
-  wrap.querySelector('#palette-load').addEventListener('click', async (e) => {
-    e.currentTarget.textContent = 'Loading…';
-    await loadExtraPalettes();
-    closeSettings();
-    openSettings();
   });
 
   // close on outside click
@@ -1820,8 +1747,7 @@ Classics.solitaire = (body, win) => {
 // INIT
 // ════════════════════════════════════════════════════════════════════
 function init(){
-  applyWallpaper(state.wallpaper);
-  applyPalette(state.palette);
+  applyTheme(state.theme);
   if (state.mode) document.getElementById('mode-pill').textContent = getMode();
   else document.getElementById('mode-pill').textContent = getDefaultMode();
   renderIcons();
@@ -1856,8 +1782,8 @@ if (document.readyState === 'loading'){
 
 // Expose for debugging / future cross-tab API (per CONV.md)
 window.naklOS = {
-  state, APPS, PALETTES, WALLPAPERS,
-  applyPalette, applyWallpaper, openApp, openSpotlight, openSettings,
+  state, APPS, THEMES,
+  applyTheme, openApp, openSpotlight, openSettings,
   setMode, getMode, effectiveMode,
 };
 </script>
