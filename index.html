@@ -793,7 +793,7 @@ const APPS = [
     description:'Classic Windows-style mine sweeping. Right-click to flag.', tags:['game','classic'],
     svg:`<rect x="3" y="3" width="18" height="18" rx="2"/><polygon points="12 8 16 12 12 16 8 12"/>` },
   { id:'solitaire', name:'Solitaire', kind:'classic', glyph:'🂡', bg:'ok',
-    description:'Klondike solitaire. Click any card to auto-move it to a valid pile or foundation.', tags:['game','classic'],
+    description:'Klondike solitaire. Drag cards to piles, or click for auto-move.', tags:['game','classic'],
     svg:`<rect x="4" y="6" width="10" height="14" rx="1.5"/><rect x="10" y="4" width="10" height="14" rx="1.5"/>` },
   { id:'calculator', name:'Calculator', kind:'classic', glyph:'🧮', bg:'act',
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'],
@@ -2493,7 +2493,7 @@ Classics.spider = (body, win) => {
       <div class="cl-sp-board" id="sp-board"></div>
       <div class="cl-sp-msg">
         <button class="cl-sol-btn" id="sp-new">New game</button>
-        <span id="sp-status">Click stock (top-left) to deal 10 cards. Click any face-up card to auto-move.</span>
+        <span id="sp-status">Click stock to deal 10 cards. Drag a run to another column, or click for auto-move.</span>
       </div>
     </div>
   `;
@@ -2643,13 +2643,14 @@ Classics.spider = (body, win) => {
     tableaus.forEach((col, ci) => {
       const cp = document.createElement('div');
       cp.className = 'cl-sp-col' + (col.length === 0 ? ' empty' : '');
+      cp.dataset.c = ci;
       col.forEach((c, ri) => {
         const el = document.createElement('div');
         el.className = 'cl-sp-card' + (c.up ? '' : ' back');
         el.style.top = (ri * 22) + 'px';
         if (c.up){
           el.innerHTML = `<span class="sp-rank">${c.r}${c.s}</span>`;
-          el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove(ci, ri); });
+          attachCardDrag(el, ci, ri);
         } else if (ri === col.length - 1){
           // Single face-down on top — pointerdown flips (rare, but possible mid-game after auto-collect)
           el.addEventListener('pointerdown', e => { if (e.button === 0) { c.up = true; render(); } });
@@ -2665,6 +2666,65 @@ Classics.spider = (body, win) => {
     }
   }
 
+  // Pointer-based drag for a face-up card (or descending same-suit run).
+  // Falls back to tryMove auto-move on a click without movement, or when a
+  // drag is released on no valid column.
+  function attachCardDrag(el, srcCol, srcIdx){
+    el.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY;
+      let dragging = false, ghost = null, group = null;
+      const onMove = ev => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging && Math.hypot(dx, dy) > 4){
+          group = getMovableGroup(srcCol, srcIdx);
+          if (!group) return; // not a valid run, no drag
+          dragging = true;
+          ghost = document.createElement('div');
+          ghost.style.cssText = 'position:fixed; pointer-events:none; z-index:99999; transform:translate(-30%, -15%);';
+          group.forEach((c, i) => {
+            const ce = document.createElement('div');
+            ce.className = 'cl-sp-card';
+            ce.style.cssText = `position:absolute; top:${i*22}px; left:0;`;
+            ce.innerHTML = `<span class="sp-rank">${c.r}${c.s}</span>`;
+            ghost.appendChild(ce);
+          });
+          document.body.appendChild(ghost);
+        }
+        if (dragging && ghost){
+          ghost.style.left = ev.clientX + 'px';
+          ghost.style.top = ev.clientY + 'px';
+        }
+      };
+      const onUp = ev => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        if (!dragging){ tryMove(srcCol, srcIdx); return; }
+        ghost?.remove();
+        // Find target column under cursor
+        let dstCol = null;
+        for (const e of document.elementsFromPoint(ev.clientX, ev.clientY)){
+          const colEl = e.closest?.('.cl-sp-col');
+          if (colEl && colEl.dataset.c !== undefined){ dstCol = +colEl.dataset.c; break; }
+        }
+        let executed = false;
+        if (dstCol !== null && dstCol !== srcCol && canDrop(group[0], dstCol)){
+          const moved = tableaus[srcCol].splice(srcIdx);
+          tableaus[dstCol].push(...moved);
+          const sc = tableaus[srcCol];
+          if (sc.length && !sc[sc.length-1].up) sc[sc.length-1].up = true;
+          checkFoundation(dstCol);
+          render();
+          executed = true;
+        }
+        if (!executed) tryMove(srcCol, srcIdx);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+  }
+
   body.querySelector('#sp-new').addEventListener('click', () => { deal(); render(); });
   deal();
   render();
@@ -2678,7 +2738,7 @@ Classics.solitaire = (body, win) => {
       <div class="cl-sol-bot" id="sol-bot"></div>
       <div class="cl-sol-msg" id="sol-msg">
         <button class="cl-sol-btn" id="sol-new">New game</button>
-        <span style="margin-left:12px" id="sol-status">Click stock to draw. Click any card to auto-move.</span>
+        <span style="margin-left:12px" id="sol-status">Click stock to draw. Drag a card to its pile, or click for auto-move.</span>
       </div>
     </div>
   `;
@@ -2741,7 +2801,7 @@ Classics.solitaire = (body, win) => {
       top3.forEach((c, i) => {
         const el = mkCard(c);
         el.style.top = (i * 6) + 'px';
-        if (i === top3.length - 1) el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove({from:'waste'}); });
+        if (i === top3.length - 1) attachCardDrag(el, {from:'waste'});
         wastePile.appendChild(el);
       });
     }
@@ -2767,7 +2827,7 @@ Classics.solitaire = (body, win) => {
         const el = mkCard(c);
         el.style.top = (ri * 18) + 'px';
         el.dataset.t = ci; el.dataset.r = ri;
-        if (c.up) el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove({from:'tableau', t:ci, r:ri}); });
+        if (c.up) attachCardDrag(el, {from:'tableau', t:ci, r:ri});
         else if (ri === col.length - 1) el.addEventListener('pointerdown', e => { if (e.button === 0) { c.up = true; render(); } });
         cp.appendChild(el);
       });
@@ -2876,6 +2936,64 @@ Classics.solitaire = (body, win) => {
   function checkWin(){
     const won = foundations.every(f => f.length === 13);
     if (won) body.querySelector('#sol-status').textContent = '🎉 You won! Click new game.';
+  }
+
+  // Pointer-based drag for a single card (waste) or multi-card face-up run (tableau).
+  // Falls back to tryMove auto-move on a click without movement, or when a drag
+  // is released somewhere with no valid destination.
+  function attachCardDrag(el, src){
+    el.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY;
+      let dragging = false, ghost = null, cards = null;
+      const onMove = ev => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging && Math.hypot(dx, dy) > 4){
+          if (src.from === 'waste') cards = [waste[waste.length-1]];
+          else cards = tableaus[src.t].slice(src.r);
+          if (!cards[0] || !cards[0].up) return;
+          dragging = true;
+          ghost = document.createElement('div');
+          ghost.style.cssText = 'position:fixed; pointer-events:none; z-index:99999; transform:translate(-30%, -15%);';
+          cards.forEach((c, i) => {
+            const ce = mkCard(c);
+            ce.style.cssText = `position:absolute; top:${i*18}px; left:0;`;
+            ghost.appendChild(ce);
+          });
+          document.body.appendChild(ghost);
+        }
+        if (dragging && ghost){
+          ghost.style.left = ev.clientX + 'px';
+          ghost.style.top = ev.clientY + 'px';
+        }
+      };
+      const onUp = ev => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        if (!dragging){ tryMove(src); return; }
+        ghost?.remove();
+        // Find drop target under cursor
+        let dst = null;
+        for (const e of document.elementsFromPoint(ev.clientX, ev.clientY)){
+          const tab = e.closest?.('.cl-sol-tab');
+          if (tab && tab.dataset.t !== undefined){ dst = { to:'tableau', idx: +tab.dataset.t }; break; }
+          const pile = e.closest?.('.cl-sol-pile');
+          if (pile && pile.dataset.f !== undefined){ dst = { to:'foundation', idx: +pile.dataset.f }; break; }
+        }
+        let executed = false;
+        if (dst){
+          if (dst.to === 'foundation' && cards.length === 1 && canDropFoundation(cards[0], dst.idx)){
+            doMove(src, dst); executed = true;
+          } else if (dst.to === 'tableau' && canDropTableau(cards[0], tableaus[dst.idx])){
+            doMove(src, dst); executed = true;
+          }
+        }
+        if (!executed) tryMove(src);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
   }
 
   body.querySelector('#sol-new').addEventListener('click', () => { deal(); render(); });
