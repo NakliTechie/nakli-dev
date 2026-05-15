@@ -812,7 +812,7 @@ const APPS = [
   { id:'karkhana', name:'Karkhana', url:'https://naklitechie.github.io/Karkhana/', glyph:'🐧', bg:'act',
     description:'A real Linux VM in your browser tab. Shell, filesystem, coding agent — no install.', tags:['tool','developer'], iframeable:false },
   { id:'mod', name:'MoD', url:'https://mod.naklitechie.com', glyph:'🔃', bg:'brand',
-    description:'Swipe through your GitHub PRs like a feed. Approve, request changes, skip — in seconds.', tags:['tool','developer','github'] },
+    description:'Swipe through your GitHub PRs like a feed. Approve, request changes, skip — in seconds.', tags:['tool','developer','github'], desktopAlign:'right', desktopOrder:3 },
   { id:'mehfil', name:'Mehfil', url:'https://naklitechie.github.io/mehfil/', glyph:'💬', bg:'ok',
     description:'Encrypted team chat in a single HTML file. No accounts, no central server.', tags:['tool','privacy','security'], maxMode:'B' },
   { id:'bolo', name:'Bolo', url:'https://naklitechie.github.io/bolo/', glyph:'🎙️', bg:'brand',
@@ -828,13 +828,13 @@ const APPS = [
   { id:'bahi', name:'Bahi', url:'https://bahi.naklitechie.com', glyph:'📒', bg:'ok',
     description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'B' },
   { id:'bofh', name:'BOFH', url:'https://bofh.naklitechie.com', glyph:'🛠️', bg:'brand',
-    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B' },
+    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B', desktopAlign:'right', desktopOrder:2 },
   { id:'nemawashi', name:'Nemawashi', url:'https://nemawashi.naklitechie.com', glyph:'🗳️', bg:'act',
     description:'Group decision tool — define options, everyone scores, the best combination surfaces.', tags:['tool','productivity'] },
   { id:'kanzen', name:'KanZen', url:'https://kanzen.naklitechie.com', glyph:'📋', bg:'ok',
     description:'Kanban boards without the noise — local-first Trello alternative. Plain JSON files.', tags:['tool','productivity'] },
   { id:'nakliposter', name:'NakliPoster', url:'https://nakliposter.naklitechie.com', glyph:'📮', bg:'brand',
-    description:'Local-first API client — no account, no cloud. REST, GraphQL, WebSocket, JSON collections.', tags:['tool','ai'] },
+    description:'Local-first API client — no account, no cloud. REST, GraphQL, WebSocket, JSON collections.', tags:['tool','ai'], desktopAlign:'right', desktopOrder:1 },
   { id:'hueandcry', name:'Hue & Cry', url:'https://hueandcry.naklitechie.com', glyph:'👗', bg:'brand',
     description:'Photograph a garment, match its colours to classic palettes, discover combinations that work.', tags:['ai','tool'], private:true },
   { id:'vaultmind', name:'VaultMind', url:'https://vaultmind.naklitechie.com', glyph:'🧩', bg:'act',
@@ -880,12 +880,10 @@ const APPS = [
 const FOLDERS = [
   { id:'fld-games', kind:'folder', name:'Games', glyph:'🎮', bg:'brand',
     apps:['kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
-  { id:'fld-dev', kind:'folder', name:'Dev', glyph:'⚒️', bg:'act',
-    apps:['bofh','mod','nakliposter','karkhana','tapasya'] },
   { id:'fld-utilities', kind:'folder', name:'Utilities', glyph:'🧰', bg:'ok',
     apps:['slate','tijori','rotor','mehfil','kagaz','kanzen','bahi','babellocal','sniplocal','blurlocal','striplocal','scanlocal','voicevault','bolo','vaultmind','localmind','sansadlocal','nemawashi'] },
   { id:'fld-fun', kind:'folder', name:'Fun', glyph:'🎨', bg:'brand',
-    apps:['fretlocal','clacker','dotspin','rangrez','hueandcry','mechanikon','antikythera','calendars','predmkt','callib'] },
+    apps:['fretlocal','clacker','dotspin','rangrez','hueandcry','mechanikon','antikythera','calendars','predmkt','callib','karkhana','tapasya'] },
 ];
 
 // Build a Set of all app ids that are inside any folder (for fast lookup)
@@ -1083,7 +1081,9 @@ function getDesktopItems(){
 }
 
 function computeAutoPositions(){
-  // Place items not in state.layout.positions into the first free grid cells, column-major
+  // Two-pass column-major placement: left-aligned items fill from x=0 rightward,
+  // right-aligned items (desktopAlign:'right') fill from x=cols-1 leftward,
+  // sorted by desktopOrder so we control top-to-bottom rank.
   const area = document.getElementById('icon-area').getBoundingClientRect();
   const cols = Math.max(1, Math.floor((area.width - GRID_PAD*2) / ICON_W));
   const rows = Math.max(1, Math.floor((area.height - GRID_PAD*2) / ICON_H));
@@ -1092,10 +1092,31 @@ function computeAutoPositions(){
     used.add(`${pos.x},${pos.y}`);
   }
   const result = {};
-  for (const item of getDesktopItems()){
-    if (state.layout.hidden && state.layout.hidden.includes(item.id)) continue;
+  const items = getDesktopItems().filter(it =>
+    !(state.layout.hidden && state.layout.hidden.includes(it.id))
+  );
+  const rightItems = items
+    .filter(it => it.desktopAlign === 'right')
+    .sort((a, b) => (a.desktopOrder ?? 99) - (b.desktopOrder ?? 99));
+  const leftItems = items.filter(it => it.desktopAlign !== 'right');
+
+  // Reserve the rightmost column for right items when both kinds exist.
+  const leftMaxCol = (rightItems.length > 0 && cols > 1) ? cols - 2 : cols - 1;
+
+  for (const item of leftItems){
     if (state.layout.positions[item.id]) { result[item.id] = state.layout.positions[item.id]; continue; }
-    outer: for (let x = 0; x < cols; x++){
+    outer: for (let x = 0; x <= leftMaxCol; x++){
+      for (let y = 0; y < rows; y++){
+        const k = `${x},${y}`;
+        if (!used.has(k)) { used.add(k); result[item.id] = {x, y}; break outer; }
+      }
+    }
+    if (!result[item.id]) result[item.id] = {x:0, y:0};
+  }
+
+  for (const item of rightItems){
+    if (state.layout.positions[item.id]) { result[item.id] = state.layout.positions[item.id]; continue; }
+    outer: for (let x = cols - 1; x >= 0; x--){
       for (let y = 0; y < rows; y++){
         const k = `${x},${y}`;
         if (!used.has(k)) { used.add(k); result[item.id] = {x, y}; break outer; }
