@@ -1248,9 +1248,23 @@ function makeIconDraggable(el, app){
         el.style.top = (GRID_PAD + (state.layout.positions[app.id]?.y ?? 0) * ICON_H) + 'px';
         pinItem(app.id);
       } else {
-        // Snap to grid
+        // Snap to grid; if a different icon already sits at the target cell, swap them.
         const x = Math.max(0, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W));
         const y = Math.max(0, Math.round((parseFloat(el.style.top) - GRID_PAD) / ICON_H));
+        const origX = Math.round((origLeft - GRID_PAD) / ICON_W);
+        const origY = Math.round((origTop - GRID_PAD) / ICON_H);
+        let displaced = null;
+        document.querySelectorAll('#icon-area .nw-icon').forEach(other => {
+          if (other === el) return;
+          const ox = Math.round((parseFloat(other.style.left) - GRID_PAD) / ICON_W);
+          const oy = Math.round((parseFloat(other.style.top) - GRID_PAD) / ICON_H);
+          if (ox === x && oy === y) displaced = other;
+        });
+        if (displaced){
+          state.layout.positions[displaced.dataset.id] = { x: origX, y: origY };
+          displaced.style.left = (GRID_PAD + origX * ICON_W) + 'px';
+          displaced.style.top = (GRID_PAD + origY * ICON_H) + 'px';
+        }
         el.style.left = (GRID_PAD + x * ICON_W) + 'px';
         el.style.top = (GRID_PAD + y * ICON_H) + 'px';
         state.layout.positions[app.id] = {x, y};
