@@ -105,9 +105,10 @@ input{font:inherit; color:inherit;}
   padding:8px 4px 4px 4px; border-radius:10px;
   text-align:center;
   transition:transform 0.12s ease;
+  touch-action:none;
 }
 .nw-icon:hover{background:color-mix(in srgb, var(--ink) 6%, transparent);}
-.nw-icon.dragging{opacity:0.5;}
+.nw-icon.dragging{opacity:0.5; z-index:50;}
 .nw-icon-tile{
   width:56px; height:56px; border-radius:14px;
   display:flex; align-items:center; justify-content:center;
@@ -784,7 +785,7 @@ const APPS = [
   { id:'minesweeper', name:'Minesweeper', kind:'classic', glyph:'💣', bg:'brand',
     description:'Classic Windows-style mine sweeping. Right-click to flag.', tags:['game','classic'] },
   { id:'solitaire', name:'Solitaire', kind:'classic', glyph:'🂡', bg:'ok',
-    description:'Klondike solitaire. Drag cards to build piles and foundations.', tags:['game','classic'] },
+    description:'Klondike solitaire. Click any card to auto-move it to a valid pile or foundation.', tags:['game','classic'] },
   { id:'calculator', name:'Calculator', kind:'classic', glyph:'🧮', bg:'act',
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'] },
   { id:'notepad', name:'Notepad', kind:'classic', glyph:'📝', bg:'ok',
@@ -2445,7 +2446,7 @@ Classics.spider = (body, win) => {
     if (stock.length){
       const deals = Math.ceil(stock.length / 10);
       stockEl.innerHTML = `<div class="cl-sp-stock-glyph">↻</div><div class="cl-sp-stock-count">${deals} left</div>`;
-      stockEl.addEventListener('click', dealRow);
+      stockEl.addEventListener('pointerdown', e => { if (e.button === 0) dealRow(); });
     } else {
       stockEl.textContent = '∅';
     }
@@ -2473,10 +2474,10 @@ Classics.spider = (body, win) => {
         el.style.top = (ri * 22) + 'px';
         if (c.up){
           el.innerHTML = `<span class="sp-rank">${c.r}${c.s}</span>`;
-          el.addEventListener('click', () => tryMove(ci, ri));
+          el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove(ci, ri); });
         } else if (ri === col.length - 1){
-          // Single face-down on top — click flips (rare, but possible mid-game after auto-collect)
-          el.addEventListener('click', () => { c.up = true; render(); });
+          // Single face-down on top — pointerdown flips (rare, but possible mid-game after auto-collect)
+          el.addEventListener('pointerdown', e => { if (e.button === 0) { c.up = true; render(); } });
         }
         cp.appendChild(el);
       });
@@ -2546,7 +2547,7 @@ Classics.solitaire = (body, win) => {
     bot.innerHTML = '';
     // Stock
     const stockPile = mkPile('stock');
-    stockPile.addEventListener('click', drawStock);
+    stockPile.addEventListener('pointerdown', e => { if (e.button === 0) drawStock(); });
     if (stock.length){
       const c = mkCardBack(); stockPile.appendChild(c);
     } else if (waste.length){
@@ -2565,7 +2566,7 @@ Classics.solitaire = (body, win) => {
       top3.forEach((c, i) => {
         const el = mkCard(c);
         el.style.top = (i * 6) + 'px';
-        if (i === top3.length - 1) el.addEventListener('click', () => tryMove({from:'waste'}));
+        if (i === top3.length - 1) el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove({from:'waste'}); });
         wastePile.appendChild(el);
       });
     }
@@ -2591,8 +2592,8 @@ Classics.solitaire = (body, win) => {
         const el = mkCard(c);
         el.style.top = (ri * 18) + 'px';
         el.dataset.t = ci; el.dataset.r = ri;
-        if (c.up) el.addEventListener('click', () => tryMove({from:'tableau', t:ci, r:ri}));
-        else if (ri === col.length - 1) el.addEventListener('click', () => { c.up = true; render(); });
+        if (c.up) el.addEventListener('pointerdown', e => { if (e.button === 0) tryMove({from:'tableau', t:ci, r:ri}); });
+        else if (ri === col.length - 1) el.addEventListener('pointerdown', e => { if (e.button === 0) { c.up = true; render(); } });
         cp.appendChild(el);
       });
       bot.appendChild(cp);
