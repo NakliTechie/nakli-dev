@@ -23,7 +23,7 @@
   --tile-bg:var(--panel);
   --shadow:0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25);
   --topbar-h:48px; --footer-h:36px;
-  --icon-cell:96px;
+  --icon-cell:104px;
 }
 
 *{box-sizing:border-box;}
@@ -100,7 +100,7 @@ input{font:inherit; color:inherit;}
 }
 .nw-icon{
   position:absolute;
-  width:var(--icon-cell); height:104px;
+  width:var(--icon-cell); height:118px;
   display:flex; flex-direction:column; align-items:center; gap:6px;
   padding:8px 4px 4px 4px; border-radius:10px;
   text-align:center;
@@ -110,22 +110,18 @@ input{font:inherit; color:inherit;}
 .nw-icon:hover{background:color-mix(in srgb, var(--ink) 6%, transparent);}
 .nw-icon.dragging{opacity:0.5; z-index:50;}
 .nw-icon-tile{
-  width:56px; height:56px; border-radius:14px;
+  width:72px; height:72px; border-radius:16px;
   display:flex; align-items:center; justify-content:center;
-  font-size:24px; font-weight:600;
+  font-size:32px; font-weight:600;
   background:var(--tile-bg); color:var(--ink);
   border:1px solid var(--line);
   box-shadow:0 4px 12px rgba(0,0,0,0.25), inset 0 1px 0 color-mix(in srgb, var(--ink) 10%, transparent);
   position:relative;
 }
-.nw-icon-tile.has-glyph{font-size:28px;}
-.nw-icon-mono{
-  position:absolute; bottom:4px; right:6px;
-  font-size:9px; font-weight:700; opacity:0.5;
-}
+.nw-icon-tile.has-glyph{font-size:38px;}
 .nw-icon-label{
   font-size:11px; line-height:1.15;
-  color:var(--ink); max-width:84px;
+  color:var(--ink); max-width:96px;
   overflow:hidden; text-overflow:ellipsis;
   white-space:nowrap;
 }
@@ -196,10 +192,10 @@ input{font:inherit; color:inherit;}
   background:color-mix(in srgb, var(--ink) 8%, var(--panel)) !important;
 }
 .nw-folder-mini{
-  display:grid; grid-template-columns:repeat(2, 1fr); gap:3px;
-  width:38px; height:38px;
+  display:grid; grid-template-columns:repeat(2, 1fr); gap:4px;
+  width:50px; height:50px;
   align-items:center; justify-items:center;
-  font-size:16px;
+  font-size:20px;
 }
 .nw-folder-mini span{line-height:1; opacity:0.85;}
 
@@ -1064,7 +1060,7 @@ function applyTheme(id){
 // ════════════════════════════════════════════════════════════════════
 // ICON GRID
 // ════════════════════════════════════════════════════════════════════
-const ICON_W = 96, ICON_H = 112; // grid cell (with label below)
+const ICON_W = 104, ICON_H = 124; // grid cell (with label below)
 const GRID_PAD = 24;
 
 // Items shown on the main desktop: classics first, then folders, then any
@@ -1163,8 +1159,7 @@ function renderIcons(){
             const a = APPS.find(x => x.id === aid);
             return `<span>${a?.glyph || '·'}</span>`;
           }).join('')}</div>`
-      : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>
-         <span class="nw-icon-mono">${monoChar}</span>`;
+      : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>`;
     el.innerHTML = `
       <div class="nw-icon-tile ${item.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
         ${previewHTML}
