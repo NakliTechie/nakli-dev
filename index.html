@@ -119,6 +119,7 @@ input{font:inherit; color:inherit;}
   position:relative;
 }
 .nw-icon-tile.has-glyph{font-size:38px;}
+.nw-icon-svg{width:40px; height:40px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round;}
 .nw-icon-label{
   font-size:11px; line-height:1.15;
   color:var(--ink); max-width:96px;
@@ -797,7 +798,8 @@ const APPS = [
   { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
     description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'B' },
   { id:'tijori', name:'Tijori', url:'https://naklitechie.github.io/Tijori/', glyph:'🔐', bg:'brand',
-    description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4 },
+    description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
+    svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
     description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'B' },
   { id:'mechanikon', name:'Mechanikon', url:'https://mechanikon.naklitechie.com', glyph:'⚙️', bg:'brand',
@@ -807,7 +809,8 @@ const APPS = [
   { id:'calendars', name:'Calendars', url:'https://mechanikon.naklitechie.com/calendars/', glyph:'📅', bg:'ok',
     description:'Every system humanity has used to name a day — 28 calendars in concentric rings and a lineage tree.', tags:['simulation','history'], private:true },
   { id:'karkhana', name:'Karkhana', url:'https://naklitechie.github.io/Karkhana/', glyph:'🐧', bg:'act',
-    description:'A real Linux VM in your browser tab. Shell, filesystem, coding agent — no install.', tags:['tool','developer'], iframeable:false },
+    description:'A real Linux VM in your browser tab. Shell, filesystem, coding agent — no install.', tags:['tool','developer'], iframeable:false,
+    svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18"/><polyline points="7 13 10 15 7 17"/><line x1="12" y1="17" x2="16" y2="17"/>` },
   { id:'mod', name:'MoD', url:'https://mod.naklitechie.com', glyph:'🔃', bg:'brand',
     description:'Swipe through your GitHub PRs like a feed. Approve, request changes, skip — in seconds.', tags:['tool','developer','github'], desktopAlign:'right', desktopOrder:3 },
   { id:'mehfil', name:'Mehfil', url:'https://naklitechie.github.io/mehfil/', glyph:'💬', bg:'ok',
@@ -825,13 +828,15 @@ const APPS = [
   { id:'bahi', name:'Bahi', url:'https://bahi.naklitechie.com', glyph:'📒', bg:'ok',
     description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'B' },
   { id:'bofh', name:'BOFH', url:'https://bofh.naklitechie.com', glyph:'🛠️', bg:'brand',
-    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B', desktopAlign:'right', desktopOrder:2 },
+    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B', desktopAlign:'right', desktopOrder:2,
+    svg:`<polyline points="8 6 2 12 8 18"/><polyline points="16 6 22 12 16 18"/><line x1="14" y1="4" x2="10" y2="20"/>` },
   { id:'nemawashi', name:'Nemawashi', url:'https://nemawashi.naklitechie.com', glyph:'🗳️', bg:'act',
     description:'Group decision tool — define options, everyone scores, the best combination surfaces.', tags:['tool','productivity'] },
   { id:'kanzen', name:'KanZen', url:'https://kanzen.naklitechie.com', glyph:'📋', bg:'ok',
     description:'Kanban boards without the noise — local-first Trello alternative. Plain JSON files.', tags:['tool','productivity'] },
   { id:'nakliposter', name:'NakliPoster', url:'https://nakliposter.naklitechie.com', glyph:'📮', bg:'brand',
-    description:'Local-first API client — no account, no cloud. REST, GraphQL, WebSocket, JSON collections.', tags:['tool','ai'], desktopAlign:'right', desktopOrder:1 },
+    description:'Local-first API client — no account, no cloud. REST, GraphQL, WebSocket, JSON collections.', tags:['tool','ai'], desktopAlign:'right', desktopOrder:1,
+    svg:`<path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/>` },
   { id:'hueandcry', name:'Hue & Cry', url:'https://hueandcry.naklitechie.com', glyph:'👗', bg:'brand',
     description:'Photograph a garment, match its colours to classic palettes, discover combinations that work.', tags:['ai','tool'], private:true },
   { id:'vaultmind', name:'VaultMind', url:'https://vaultmind.naklitechie.com', glyph:'🧩', bg:'act',
@@ -1159,7 +1164,9 @@ function renderIcons(){
             const a = APPS.find(x => x.id === aid);
             return `<span>${a?.glyph || '·'}</span>`;
           }).join('')}</div>`
-      : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>`;
+      : item.svg
+        ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${item.svg}</svg>`
+        : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>`;
     el.innerHTML = `
       <div class="nw-icon-tile ${item.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
         ${previewHTML}
@@ -1619,7 +1626,7 @@ function openFolder(folder){
     return `
       <button class="nw-folder-app" data-app-id="${app.id}" title="${(app.description||'').replace(/"/g,'&quot;')} — drag out to put on desktop">
         <div class="nw-folder-app-tile" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
-          ${app.glyph || app.name.charAt(0)}
+          ${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : (app.glyph || app.name.charAt(0))}
         </div>
         <div class="nw-folder-app-label">${app.name}</div>
       </button>`;
