@@ -109,6 +109,12 @@ input{font:inherit; color:inherit;}
 }
 .nw-icon:hover{background:color-mix(in srgb, var(--ink) 6%, transparent);}
 .nw-icon.dragging{opacity:0.5; z-index:50;}
+.nw-icon.is-folder.is-drop-target .nw-icon-tile{
+  border-color:var(--brand);
+  background:color-mix(in srgb, var(--brand) 30%, var(--panel)) !important;
+  transform:scale(1.08);
+  transition:transform 0.15s ease;
+}
 .nw-icon-tile{
   width:72px; height:72px; border-radius:16px;
   display:flex; align-items:center; justify-content:center;
@@ -119,7 +125,8 @@ input{font:inherit; color:inherit;}
   position:relative;
 }
 .nw-icon-tile.has-glyph{font-size:38px;}
-.nw-icon-svg{width:40px; height:40px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round;}
+.nw-icon-svg{width:40px; height:40px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; -webkit-user-drag:none;}
+.nw-icon-svg *{pointer-events:none;}
 .nw-icon-label{
   font-size:11px; line-height:1.15;
   color:var(--ink); max-width:96px;
@@ -198,7 +205,8 @@ input{font:inherit; color:inherit;}
   align-items:center; justify-items:center;
   font-size:20px;
 }
-.nw-folder-mini span{line-height:1; opacity:0.85; display:flex; align-items:center; justify-content:center;}
+.nw-folder-mini span{line-height:1; opacity:0.85; display:flex; align-items:center; justify-content:center; pointer-events:none;}
+.nw-icon-tile, .nw-icon-label, .nw-folder-mini, .nw-icon-glyph{pointer-events:none;}
 .nw-folder-mini .nw-icon-svg{width:22px; height:22px; stroke-width:2.4;}
 
 .nw-folder-popover{
@@ -1197,6 +1205,9 @@ function renderIcons(){
     if (item.private) el.classList.add('private');
     el.dataset.id = item.id;
     el.setAttribute('aria-label', isFolder ? `${item.name} folder` : item.name);
+    el.title = isFolder
+      ? `${item.name} folder · ${item.apps.length} apps`
+      : (item.description ? `${item.name} — ${item.description}` : item.name);
     const bgVar = item.bg || 'brand';
     const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
     const monoChar = (item.name || '?').charAt(0).toUpperCase();
@@ -1256,7 +1267,9 @@ function makeIconDraggable(el, app){
     const origLeft = parseFloat(el.style.left) || 0;
     const origTop = parseFloat(el.style.top) || 0;
     let dragging = false;
-    let droppedOnDock = false;
+    let hoverFolderEl = null;
+    let hoverFolderTimer = null;
+    let absorbed = false;
 
     function overDock(ev){
       const dock = document.getElementById('nw-dock');
@@ -1264,6 +1277,28 @@ function makeIconDraggable(el, app){
       const r = dock.getBoundingClientRect();
       return ev.clientX >= r.left - 12 && ev.clientX <= r.right + 12
           && ev.clientY >= r.top - 12 && ev.clientY <= r.bottom + 12;
+    }
+    function findFolderUnder(ev){
+      if (app.kind === 'folder') return null; // can't drop a folder into a folder
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY);
+      return els.find(e => e !== el && e.classList?.contains('nw-icon') && e.classList.contains('is-folder')) || null;
+    }
+    function clearHoverFolder(){
+      if (hoverFolderTimer) { clearTimeout(hoverFolderTimer); hoverFolderTimer = null; }
+      hoverFolderEl?.classList.remove('is-drop-target');
+      hoverFolderEl = null;
+    }
+    function absorbIntoFolder(folderEl){
+      const folderId = folderEl.dataset.id;
+      const folder = FOLDERS.find(f => f.id === folderId);
+      if (!folder || folder.apps.includes(app.id)) return;
+      folder.apps.push(app.id);
+      state.layout.unfoldered = (state.layout.unfoldered || []).filter(x => x !== app.id);
+      delete state.layout.positions[app.id];
+      saveLayout();
+      absorbed = true;
+      el.remove();
+      renderIcons();
     }
 
     const onMove = ev => {
@@ -1274,9 +1309,18 @@ function makeIconDraggable(el, app){
       if (dragging){
         el.style.left = (origLeft + dx) + 'px';
         el.style.top = (origTop + dy) + 'px';
-        // Bonus: drop a desktop icon on the dock to pin it
         const dock = document.getElementById('nw-dock');
         if (dock) dock.classList.toggle('is-drop-target', overDock(ev));
+        // Hover-over-folder: 500ms dwell => absorb the dragged app.
+        const folderEl = findFolderUnder(ev);
+        if (folderEl !== hoverFolderEl){
+          clearHoverFolder();
+          if (folderEl){
+            hoverFolderEl = folderEl;
+            folderEl.classList.add('is-drop-target');
+            hoverFolderTimer = setTimeout(() => absorbIntoFolder(folderEl), 500);
+          }
+        }
       }
     };
     const onUp = ev => {
@@ -1284,6 +1328,17 @@ function makeIconDraggable(el, app){
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
       document.getElementById('nw-dock')?.classList.remove('is-drop-target');
+      if (absorbed) return;
+      // Release while hovering a folder also absorbs (no need to wait the 500ms).
+      const folderUnder = dragging ? findFolderUnder(ev) : null;
+      clearHoverFolder();
+      if (folderUnder){
+        el.classList.remove('dragging');
+        el._wasDragged = true;
+        absorbIntoFolder(folderUnder);
+        setTimeout(() => { el._wasDragged = false; }, 50);
+        return;
+      }
       if (!dragging) return;
       el.classList.remove('dragging');
       el._wasDragged = true;
@@ -1292,6 +1347,10 @@ function makeIconDraggable(el, app){
         el.style.left = (GRID_PAD + (state.layout.positions[app.id]?.x ?? 0) * ICON_W) + 'px';
         el.style.top = (GRID_PAD + (state.layout.positions[app.id]?.y ?? 0) * ICON_H) + 'px';
         pinItem(app.id);
+      } else if (overDock(ev)){
+        // Folder dropped on dock: folders can't be pinned, so snap back to origin.
+        el.style.left = origLeft + 'px';
+        el.style.top = origTop + 'px';
       } else {
         // Snap to grid; if a different icon already sits at the target cell, swap them.
         const x = Math.max(0, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W));
@@ -1469,6 +1528,7 @@ function updateDock(){
       ? `<svg class="nw-icon-svg nw-dock-item-svg" viewBox="0 0 24 24" aria-hidden="true">${it.icon.svg}</svg>`
       : `<span class="nw-dock-item-glyph">${it.icon.glyph || it.icon.name.charAt(0)}</span>`;
     btn.addEventListener('click', () => {
+      if (btn._wasDragged) { btn._wasDragged = false; return; }
       if (w){
         if (fullscreenWin && fullscreenWin !== w) toggleFullscreen(fullscreenWin);
         focusWindow(w);
@@ -1485,6 +1545,46 @@ function updateDock(){
           onClick: () => it.pinned ? unpinItem(it.id) : pinItem(it.id) },
       ]);
     });
+    if (it.pinned){
+      btn.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        const startX = e.clientX;
+        let dragging = false;
+        const onMove = ev => {
+          if (!dragging && Math.abs(ev.clientX - startX) > 5){
+            dragging = true;
+            btn.style.opacity = '0.5';
+            btn.style.transition = 'none';
+          }
+          if (dragging) btn.style.transform = `translateX(${ev.clientX - startX}px)`;
+        };
+        const onUp = ev => {
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          btn.style.transform = '';
+          btn.style.opacity = '';
+          btn.style.transition = '';
+          if (!dragging) return;
+          btn._wasDragged = true;
+          const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.nw-dock-item');
+          if (target && target !== btn && target.dataset.appId && (state.layout.pinned || []).includes(target.dataset.appId)){
+            const fromId = it.id;
+            const toId = target.dataset.appId;
+            const pinned = (state.layout.pinned || []).filter(x => x !== fromId);
+            const targetIdx = pinned.indexOf(toId);
+            if (targetIdx >= 0){
+              pinned.splice(targetIdx, 0, fromId);
+              state.layout.pinned = pinned;
+              saveLayout();
+              updateDock();
+            }
+          }
+          setTimeout(() => { btn._wasDragged = false; }, 50);
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      });
+    }
     dock.appendChild(btn);
   }
 }
@@ -1621,7 +1721,15 @@ window.addEventListener('message', e => {
 // ════════════════════════════════════════════════════════════════════
 // MODE DISPATCH
 // ════════════════════════════════════════════════════════════════════
+function recordRecent(appId){
+  state.layout.recent = (state.layout.recent || []).filter(x => x !== appId);
+  state.layout.recent.unshift(appId);
+  if (state.layout.recent.length > 12) state.layout.recent.length = 12;
+  saveLayout();
+}
+
 function openApp(app){
+  recordRecent(app.id);
   if (openWindows[app.id]) { focusWindow(openWindows[app.id]); return; }
   const m = effectiveMode(app);
   if (m === 'A') {
@@ -1822,7 +1930,12 @@ function openSpotlight(){
   let active = 0;
 
   function rank(q){
-    if (!q) return APPS.slice(0, 8);
+    if (!q) {
+      const recentIds = state.layout.recent || [];
+      const recents = recentIds.map(id => APPS.find(a => a.id === id)).filter(Boolean);
+      if (recents.length) return recents.slice(0, 8);
+      return APPS.slice(0, 8);
+    }
     const ql = q.toLowerCase();
     const scored = [];
     for (const app of APPS){
@@ -2788,6 +2901,14 @@ function init(){
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
       e.preventDefault();
       openSpotlight();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w'){
+      // Close the frontmost open window, if any.
+      const wins = Object.values(openWindows);
+      if (wins.length){
+        const top = wins.reduce((a, b) => (+a.style.zIndex||0) > (+b.style.zIndex||0) ? a : b);
+        if (top){ e.preventDefault(); closeWindow(top); }
+      }
     }
     if (e.key === 'Escape'){
       if (fullscreenWin){ toggleFullscreen(fullscreenWin); return; }
