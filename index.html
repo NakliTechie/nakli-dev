@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>nakli.dev — the NakliTechie desktop</title>
+<title>naklOS — a private browser desktop</title>
 <meta name="description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta name="author" content="Chirag Patnaik">
-<link rel="canonical" href="https://nakli.dev/">
-<meta property="og:title" content="nakli.dev — the NakliTechie desktop">
+<link rel="canonical" href="https://naklios.dev/">
+<meta property="og:title" content="naklOS — a private browser desktop">
 <meta property="og:description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
@@ -866,8 +866,8 @@ body.is-mobile .nw-dock{display:none;}
   <header id="topbar">
     <div class="brand">
       <span class="brand-mark">n</span>
-      <span>nakli.dev</span>
-      <span class="brand-sub">— the NakliTechie desktop</span>
+      <span>naklOS</span>
+      <span class="brand-sub">— private browser desktop</span>
     </div>
     <div class="topbar-spacer"></div>
     <button id="spotlight-btn" class="topbar-btn" title="Search apps (⌘K)">
@@ -904,7 +904,7 @@ body.is-mobile .nw-dock{display:none;}
 // Heavy apps with maxMode:'basic' fall back to a new tab when user picks Immersive mode.
 // iframeable:false locks an app out of inline windows entirely (Karkhana = v86 VM).
 // kind:'classic' apps are built into this file and always open as inline windows.
-// embedUrl is the same-origin mirror under nakli.dev/apps/<id>/ (see apps/manifest.json).
+// embedUrl is the same-origin mirror under naklios.dev/apps/<id>/ (see apps/manifest.json).
 // Iframes use embedUrl when present (drops sandbox + unlocks FSA picker); standalone /
 // new-tab use the canonical url.
 
@@ -939,7 +939,7 @@ const APPS = [
   { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
     description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'basic',
     svg:`<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8" cy="9" r="1.5"/><polyline points="21 14 14 9 4 16"/><path d="M16 19l-1 2 3-1z"/><path d="M16 19l4-4"/>` },
-  { id:'tijori', name:'Tijori', url:'https://tijori.naklitechie.com/', embedUrl:'https://nakli.dev/apps/tijori/', glyph:'🔐', bg:'brand',
+  { id:'tijori', name:'Tijori', url:'https://tijori.naklitechie.com/', embedUrl:'https://naklios.dev/apps/tijori/', glyph:'🔐', bg:'brand',
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
     svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
@@ -1815,7 +1815,7 @@ function spawnInlineWindow(app){
 function themedAppUrl(app){
   // Pass current theme so cooperating apps can inherit OS color scheme.
   // Apps that don't read these params see them as ignored extras.
-  // For iframe embedding prefer app.embedUrl (same-origin mirror under nakli.dev/apps/<id>/);
+  // For iframe embedding prefer app.embedUrl (same-origin mirror under naklios.dev/apps/<id>/);
   // fall back to app.url (canonical, cross-origin). Same-origin enables FSA picker etc.
   const base = app.embedUrl || app.url;
   const sep = base.includes('?') ? '&' : '?';
@@ -1824,7 +1824,7 @@ function themedAppUrl(app){
 
 function spawnIframeWindow(app){
   const embedSrc = themedAppUrl(app);
-  // Same-origin mirrors (nakli.dev/apps/<id>/) drop the sandbox so FSA/OPFS
+  // Same-origin mirrors (naklios.dev/apps/<id>/) drop the sandbox so FSA/OPFS
   // picker etc. work. Cross-origin apps keep the sandbox — that's the privacy
   // wall the "🔒 sandboxed" badge promises.
   let isSameOrigin = false;

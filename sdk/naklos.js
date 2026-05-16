@@ -5,7 +5,7 @@
  * surface is a no-op when the app loads standalone (window.parent === window),
  * so the same source works in both contexts:
  *
- *   <script src="https://nakli.dev/sdk/naklos.js"></script>
+ *   <script src="https://naklios.dev/sdk/naklos.js"></script>
  *   <script>
  *     naklos.ready();                          // signal "I'm loaded"
  *     naklos.title('My app — unlocked');       // update host window title

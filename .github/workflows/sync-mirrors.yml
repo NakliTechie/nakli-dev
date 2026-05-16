@@ -33,7 +33,7 @@ jobs:
           body: |
             Automated mirror of upstream app `index.html` files into `apps/`.
 
-            Review the diff, then merge. Cloudflare Pages redeploys `nakli.dev`
+            Review the diff, then merge. Cloudflare Pages redeploys `naklios.dev`
             on push to `main` so the mirrored versions go live within minutes.
 
             Source of truth: `apps/manifest.json`.
