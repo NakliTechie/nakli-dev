@@ -408,6 +408,61 @@ input{font:inherit; color:inherit;}
 }
 .nw-foot-link:hover{color:var(--brand);}
 
+/* ── STICKY NOTES ── */
+.nw-sticky{
+  position:absolute;
+  min-width:140px; min-height:100px;
+  border-radius:8px; box-shadow:var(--shadow);
+  border:1px solid color-mix(in srgb, var(--sticky-c) 50%, var(--line));
+  display:flex; flex-direction:column;
+  background:color-mix(in srgb, var(--sticky-c) 25%, var(--panel));
+  color:var(--ink);
+  z-index:5;
+}
+.nw-sticky.dragging{opacity:0.85;}
+.nw-sticky[data-color="yellow"] { --sticky-c:#f5d76e; }
+.nw-sticky[data-color="pink"]   { --sticky-c:#f48fb1; }
+.nw-sticky[data-color="blue"]   { --sticky-c:#90caf9; }
+.nw-sticky[data-color="green"]  { --sticky-c:#a5d6a7; }
+.nw-sticky[data-color="purple"] { --sticky-c:#ce93d8; }
+.nw-sticky-bar{
+  display:flex; align-items:center; gap:6px;
+  padding:4px 6px; height:22px;
+  background:color-mix(in srgb, var(--sticky-c) 55%, transparent);
+  border-bottom:1px solid color-mix(in srgb, var(--sticky-c) 40%, transparent);
+  border-radius:8px 8px 0 0;
+  cursor:grab; user-select:none;
+}
+.nw-sticky.dragging .nw-sticky-bar{cursor:grabbing;}
+.nw-sticky-swatch{
+  width:14px; height:14px; border-radius:50%;
+  background:var(--sticky-c);
+  cursor:pointer; flex-shrink:0;
+  border:1px solid color-mix(in srgb, #000 25%, transparent);
+}
+.nw-sticky-spacer{flex:1;}
+.nw-sticky-close{
+  width:18px; height:18px; padding:0;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:4px; color:var(--muted); font-size:11px;
+  cursor:pointer; background:transparent; border:none;
+}
+.nw-sticky-close:hover{background:color-mix(in srgb, var(--ink) 12%, transparent); color:var(--ink);}
+.nw-sticky-body{
+  flex:1; padding:8px 10px;
+  font-size:13px; line-height:1.4;
+  outline:none; overflow:auto;
+  white-space:pre-wrap; word-wrap:break-word;
+  cursor:text;
+}
+.nw-sticky-body:empty::before{content:'Type…'; color:var(--muted);}
+.nw-sticky-resize{
+  position:absolute; right:0; bottom:0;
+  width:14px; height:14px; cursor:nwse-resize;
+  background:linear-gradient(135deg, transparent 50%, color-mix(in srgb, var(--sticky-c) 55%, transparent) 50%);
+  border-radius:0 0 8px 0;
+}
+
 /* ── DOCK ── */
 .nw-dock{
   position:absolute;
@@ -449,18 +504,20 @@ body.is-mobile .nw-dock{display:none;}
   box-shadow:0 0 0 2px color-mix(in srgb, var(--brand) 40%, transparent), var(--shadow);
 }
 
-/* ── FULLSCREEN ── */
-.nw-fs-btn{
+/* ── FULLSCREEN / MINIMIZE ── */
+.nw-fs-btn, .nw-min-btn{
   width:22px; height:22px; border-radius:6px;
   display:flex; align-items:center; justify-content:center;
   color:var(--muted); font-size:11px;
 }
-.nw-fs-btn:hover{background:color-mix(in srgb, var(--ink) 12%, transparent); color:var(--ink);}
+.nw-min-btn{font-size:14px; line-height:1; padding-bottom:4px;}
+.nw-fs-btn:hover, .nw-min-btn:hover{background:color-mix(in srgb, var(--ink) 12%, transparent); color:var(--ink);}
 .nw-window.is-fullscreen{
   border-radius:0; border:none;
   box-shadow:none;
 }
 .nw-window.is-fullscreen .nw-titlebar{cursor:default;}
+.nw-window.is-minimized{display:none;}
 
 /* ── SANDBOX BADGE ── */
 .nw-title-sandbox{
@@ -469,6 +526,39 @@ body.is-mobile .nw-dock{display:none;}
   background:color-mix(in srgb, var(--ok) 25%, transparent);
   color:color-mix(in srgb, var(--ok) 85%, var(--ink));
   margin-right:4px; font-weight:600;
+}
+
+/* ── CHEAT SHEET ── */
+.nw-cheat-scrim{
+  position:fixed; inset:0; z-index:1500;
+  background:color-mix(in srgb, #000 35%, transparent);
+}
+.nw-cheat{
+  position:fixed; left:50%; top:50%;
+  transform:translate(-50%, -50%);
+  width:min(440px, 90vw); max-height:80vh; overflow:auto;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:14px;
+  box-shadow:var(--shadow);
+  padding:18px 20px; z-index:1501;
+}
+.nw-cheat h3{margin:0 0 12px; font-size:14px; font-weight:700;}
+.nw-cheat-row{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:7px 0; border-bottom:1px solid var(--line);
+  font-size:12px;
+}
+.nw-cheat-row:last-child{border-bottom:none;}
+.nw-cheat-desc{color:var(--ink); flex:1;}
+.nw-cheat-key{
+  display:inline-flex; gap:4px; align-items:center;
+  font-size:11px; color:var(--muted);
+}
+.nw-cheat-key kbd{
+  background:var(--row); border:1px solid var(--line);
+  border-radius:4px; padding:1px 6px;
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size:11px;
 }
 
 /* ── FOOTER ── */
@@ -1033,6 +1123,7 @@ if (!state.layout.pinned){
 }
 state.layout.unfoldered = state.layout.unfoldered || [];
 state.layout.windowPositions = state.layout.windowPositions || {};
+state.layout.stickies = state.layout.stickies || [];
 
 function isPinned(id){ return (state.layout.pinned || []).includes(id); }
 function pinItem(id){
@@ -1264,6 +1355,7 @@ function renderIcons(){
     if (!mobile) makeIconDraggable(el, item);
     area.appendChild(el);
   }
+  renderStickies();
 }
 
 function makeIconDraggable(el, app){
@@ -1427,6 +1519,7 @@ function makeWindow(opts){
       ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. naklOS can't read its data, and it can't reach back into naklOS.">🔒 sandboxed</span>` : ''}
       ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
       <span class="nw-title">${title}</span>
+      <button class="nw-min-btn" title="Minimize (click dock to restore)" aria-label="Minimize">—</button>
       <button class="nw-fs-btn" title="Maximize / restore (Esc to exit)" aria-label="Maximize">⛶</button>
       <button class="nw-close" aria-label="Close">✕</button>
     </div>
@@ -1440,6 +1533,9 @@ function makeWindow(opts){
   });
   win.querySelector('.nw-fs-btn').addEventListener('click', e => {
     e.stopPropagation(); toggleFullscreen(win);
+  });
+  win.querySelector('.nw-min-btn').addEventListener('click', e => {
+    e.stopPropagation(); minimizeWindow(win);
   });
   makeDraggable(win);
   focusWindow(win);
@@ -1485,9 +1581,10 @@ function toggleFullscreen(win){
 function updateDock(){
   const dock = document.getElementById('nw-dock');
   if (!dock) return;
-  // identify which window is on top by z-index
+  // identify which window is on top by z-index (skip minimized)
   let topId = null, topZval = -1;
   for (const [id, w] of Object.entries(openWindows)){
+    if (w.classList.contains('is-minimized')) continue;
     const z = parseInt(w.style.zIndex, 10) || 0;
     if (z > topZval){ topZval = z; topId = id; }
   }
@@ -1597,6 +1694,7 @@ function updateDock(){
 }
 
 function focusWindow(win){
+  if (win.classList.contains('is-minimized')) win.classList.remove('is-minimized');
   if (topZ > 9000){
     Object.values(openWindows)
       .sort((a, b) => (+a.style.zIndex || 0) - (+b.style.zIndex || 0))
@@ -1604,6 +1702,12 @@ function focusWindow(win){
     topZ = 100 + Object.keys(openWindows).length;
   }
   win.style.zIndex = ++topZ;
+  updateDock();
+}
+
+function minimizeWindow(win){
+  if (fullscreenWin === win) toggleFullscreen(win);
+  win.classList.add('is-minimized');
   updateDock();
 }
 
@@ -2082,6 +2186,193 @@ function closeSettings(){
   if (pop) pop.remove();
   settingsOpen = false;
   document.removeEventListener('pointerdown', outsideHandler);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CHEAT SHEET (⌘/)
+// ════════════════════════════════════════════════════════════════════
+let cheatSheetOpen = false;
+function openCheatSheet(){
+  if (cheatSheetOpen) { closeCheatSheet(); return; }
+  cheatSheetOpen = true;
+  const root = document.getElementById('overlay-root');
+  const scrim = document.createElement('div');
+  scrim.className = 'nw-cheat-scrim';
+  scrim.id = 'cheat-scrim';
+  scrim.addEventListener('click', closeCheatSheet);
+  const wrap = document.createElement('div');
+  wrap.className = 'nw-cheat';
+  wrap.id = 'cheat-pop';
+  wrap.innerHTML = `
+    <h3>Keyboard &amp; mouse</h3>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Spotlight (search apps)</span><span class="nw-cheat-key"><kbd>⌘</kbd><kbd>K</kbd></span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Close active window</span><span class="nw-cheat-key"><kbd>⌘</kbd><kbd>W</kbd></span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">This help</span><span class="nw-cheat-key"><kbd>⌘</kbd><kbd>/</kbd></span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Close popovers / exit fullscreen</span><span class="nw-cheat-key"><kbd>Esc</kbd></span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Drag icon onto another</span><span class="nw-cheat-key">Swap positions</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Drag icon onto a folder (hold ~0.4s)</span><span class="nw-cheat-key">Drop into folder</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Drag icon onto the dock</span><span class="nw-cheat-key">Pin to dock</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Drag from folder to desktop</span><span class="nw-cheat-key">Pull out</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Right-click an icon, folder, or dock item</span><span class="nw-cheat-key">Context menu</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">Right-click empty desktop</span><span class="nw-cheat-key">New sticky note</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">— in a window titlebar</span><span class="nw-cheat-key">Minimize</span></div>
+    <div class="nw-cheat-row"><span class="nw-cheat-desc">⛶ in a window titlebar</span><span class="nw-cheat-key">Maximize</span></div>
+  `;
+  root.appendChild(scrim);
+  root.appendChild(wrap);
+}
+function closeCheatSheet(){
+  if (!cheatSheetOpen) return;
+  cheatSheetOpen = false;
+  document.getElementById('cheat-scrim')?.remove();
+  document.getElementById('cheat-pop')?.remove();
+}
+
+// ════════════════════════════════════════════════════════════════════
+// STICKY NOTES
+// ════════════════════════════════════════════════════════════════════
+const STICKY_COLORS = ['yellow', 'pink', 'blue', 'green', 'purple'];
+
+function addSticky(x, y){
+  const s = {
+    id: 's_' + Math.random().toString(36).slice(2, 10),
+    x: Math.max(0, x - 60),
+    y: Math.max(0, y - 14),
+    w: 200, h: 160,
+    text: '',
+    color: STICKY_COLORS[state.layout.stickies.length % STICKY_COLORS.length],
+  };
+  state.layout.stickies.push(s);
+  saveLayout();
+  renderStickies();
+  const el = document.querySelector(`.nw-sticky[data-id="${s.id}"]`);
+  el?.querySelector('.nw-sticky-body').focus();
+}
+
+function updateSticky(id, patch){
+  const s = state.layout.stickies.find(x => x.id === id);
+  if (!s) return;
+  Object.assign(s, patch);
+  saveLayout();
+}
+
+function deleteSticky(id){
+  state.layout.stickies = state.layout.stickies.filter(s => s.id !== id);
+  saveLayout();
+  renderStickies();
+}
+
+function renderStickies(){
+  const area = document.getElementById('icon-area');
+  if (!area) return;
+  area.querySelectorAll('.nw-sticky').forEach(el => el.remove());
+  for (const s of state.layout.stickies){
+    const el = document.createElement('div');
+    el.className = 'nw-sticky';
+    el.dataset.id = s.id;
+    el.dataset.color = s.color;
+    el.style.left = s.x + 'px';
+    el.style.top = s.y + 'px';
+    el.style.width = s.w + 'px';
+    el.style.height = s.h + 'px';
+    el.innerHTML = `
+      <div class="nw-sticky-bar">
+        <span class="nw-sticky-swatch" title="Cycle color"></span>
+        <span class="nw-sticky-spacer"></span>
+        <button class="nw-sticky-close" aria-label="Delete sticky" title="Delete">✕</button>
+      </div>
+      <div class="nw-sticky-body" contenteditable="true" spellcheck="false"></div>
+      <div class="nw-sticky-resize" aria-hidden="true"></div>
+    `;
+    el.querySelector('.nw-sticky-body').textContent = s.text;
+    area.appendChild(el);
+    wireSticky(el, s);
+  }
+}
+
+function wireSticky(el, s){
+  const body = el.querySelector('.nw-sticky-body');
+  body.addEventListener('input', () => updateSticky(s.id, { text: body.textContent }));
+
+  el.querySelector('.nw-sticky-close').addEventListener('click', e => {
+    e.stopPropagation();
+    deleteSticky(s.id);
+  });
+
+  el.querySelector('.nw-sticky-swatch').addEventListener('click', e => {
+    e.stopPropagation();
+    const idx = STICKY_COLORS.indexOf(s.color);
+    const next = STICKY_COLORS[(idx + 1) % STICKY_COLORS.length];
+    s.color = next;
+    el.dataset.color = next;
+    saveLayout();
+  });
+
+  const bar = el.querySelector('.nw-sticky-bar');
+  bar.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.nw-sticky-close, .nw-sticky-swatch')) return;
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const origX = s.x, origY = s.y;
+    let dragging = false;
+    const onMove = ev => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!dragging && Math.hypot(dx, dy) > 3){
+        dragging = true;
+        el.classList.add('dragging');
+      }
+      if (dragging){
+        s.x = Math.max(0, origX + dx);
+        s.y = Math.max(0, origY + dy);
+        el.style.left = s.x + 'px';
+        el.style.top = s.y + 'px';
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      if (dragging){
+        el.classList.remove('dragging');
+        saveLayout();
+      }
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+
+  el.querySelector('.nw-sticky-resize').addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const origW = s.w, origH = s.h;
+    const onMove = ev => {
+      s.w = Math.max(140, origW + ev.clientX - startX);
+      s.h = Math.max(100, origH + ev.clientY - startY);
+      el.style.width = s.w + 'px';
+      el.style.height = s.h + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      saveLayout();
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+
+  el.addEventListener('contextmenu', e => {
+    if (e.target.closest('.nw-sticky-body')) return; // native menu for paste/copy
+    e.preventDefault();
+    e.stopPropagation();
+    showContextMenu(e.clientX, e.clientY, [
+      { label: 'Cycle color', onClick: () => el.querySelector('.nw-sticky-swatch').click() },
+      { separator: true },
+      { label: 'Delete sticky', danger: true, onClick: () => deleteSticky(s.id) },
+    ]);
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -3014,20 +3305,37 @@ function init(){
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('mode-pill').addEventListener('click', e => { e.stopPropagation(); openSettings(); });
 
+  // Right-click on empty desktop → "New sticky note"
+  document.getElementById('icon-area').addEventListener('contextmenu', e => {
+    if (e.target.closest('.nw-icon, .nw-sticky')) return;
+    if (isMobile()) return;
+    e.preventDefault();
+    const area = document.getElementById('icon-area').getBoundingClientRect();
+    const x = e.clientX - area.left, y = e.clientY - area.top;
+    showContextMenu(e.clientX, e.clientY, [
+      { label: 'New sticky note', onClick: () => addSticky(x, y) },
+    ]);
+  });
+
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
       e.preventDefault();
       openSpotlight();
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w'){
-      // Close the frontmost open window, if any.
-      const wins = Object.values(openWindows);
+      // Close the frontmost visible window, if any. Minimized windows are skipped.
+      const wins = Object.values(openWindows).filter(w => !w.classList.contains('is-minimized'));
       if (wins.length){
         const top = wins.reduce((a, b) => (+a.style.zIndex||0) > (+b.style.zIndex||0) ? a : b);
         if (top){ e.preventDefault(); closeWindow(top); }
       }
     }
+    if ((e.metaKey || e.ctrlKey) && e.key === '/'){
+      e.preventDefault();
+      openCheatSheet();
+    }
     if (e.key === 'Escape'){
+      if (cheatSheetOpen){ closeCheatSheet(); return; }
       if (fullscreenWin){ toggleFullscreen(fullscreenWin); return; }
       if (folderOpenId){ closeFolder(); return; }
       const pop = document.getElementById('settings-pop');
@@ -3054,6 +3362,8 @@ window.naklOS = {
   setMode, getMode, effectiveMode,
   pinItem, unpinItem, isPinned,
   moveAppToDesktop, isInFolder,
+  addSticky, deleteSticky, openCheatSheet,
+  minimizeWindow,
 };
 </script>
 </body>
