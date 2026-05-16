@@ -92,7 +92,7 @@ input{font:inherit; color:inherit;}
 #icon-grid{
   position:absolute;
   top:var(--topbar-h); left:0; right:0; bottom:var(--footer-h);
-  overflow:auto;
+  overflow:hidden;
 }
 .icon-area{
   position:relative; width:100%; height:100%;
@@ -1261,13 +1261,19 @@ function getDesktopItems(){
   return items;
 }
 
+function getGridDims(){
+  const area = document.getElementById('icon-area').getBoundingClientRect();
+  return {
+    cols: Math.max(1, Math.floor((area.width  - GRID_PAD*2) / ICON_W)),
+    rows: Math.max(1, Math.floor((area.height - GRID_PAD*2) / ICON_H)),
+  };
+}
+
 function computeAutoPositions(){
   // Two-pass column-major placement: left-aligned items fill from x=0 rightward,
   // right-aligned items (desktopAlign:'right') fill from x=cols-1 leftward,
   // sorted by desktopOrder so we control top-to-bottom rank.
-  const area = document.getElementById('icon-area').getBoundingClientRect();
-  const cols = Math.max(1, Math.floor((area.width - GRID_PAD*2) / ICON_W));
-  const rows = Math.max(1, Math.floor((area.height - GRID_PAD*2) / ICON_H));
+  const { cols, rows } = getGridDims();
   const used = new Set();
   for (const [id, pos] of Object.entries(state.layout.positions || {})){
     used.add(`${pos.x},${pos.y}`);
@@ -1483,8 +1489,10 @@ function makeIconDraggable(el, app){
         el.style.top = origTop + 'px';
       } else {
         // Snap to grid; if a different icon already sits at the target cell, swap them.
-        const x = Math.max(0, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W));
-        const y = Math.max(0, Math.round((parseFloat(el.style.top) - GRID_PAD) / ICON_H));
+        // Clamp to bounds so dragging off-screen doesn't lose the icon or trigger a scrollbar.
+        const { cols, rows } = getGridDims();
+        const x = Math.max(0, Math.min(cols - 1, Math.round((parseFloat(el.style.left) - GRID_PAD) / ICON_W)));
+        const y = Math.max(0, Math.min(rows - 1, Math.round((parseFloat(el.style.top) - GRID_PAD) / ICON_H)));
         const origX = Math.round((origLeft - GRID_PAD) / ICON_W);
         const origY = Math.round((origTop - GRID_PAD) / ICON_H);
         let displaced = null;
@@ -2035,8 +2043,9 @@ function openFolder(folder){
           const inArea = ev.clientX >= area.left && ev.clientX <= area.right
                       && ev.clientY >= area.top && ev.clientY <= area.bottom;
           if (inArea){
-            const x = Math.max(0, Math.round((ev.clientX - area.left - GRID_PAD) / ICON_W));
-            const y = Math.max(0, Math.round((ev.clientY - area.top - GRID_PAD) / ICON_H));
+            const { cols, rows } = getGridDims();
+            const x = Math.max(0, Math.min(cols - 1, Math.round((ev.clientX - area.left - GRID_PAD) / ICON_W)));
+            const y = Math.max(0, Math.min(rows - 1, Math.round((ev.clientY - area.top - GRID_PAD) / ICON_H)));
             state.layout.unfoldered = state.layout.unfoldered || [];
             if (!state.layout.unfoldered.includes(app.id)) state.layout.unfoldered.push(app.id);
             state.layout.positions[app.id] = {x, y};
@@ -3362,6 +3371,22 @@ function init(){
   applyTheme(state.theme);
   updateDock();
   document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
+
+  // One-time sanity pass: drop any saved icon positions that fall outside the
+  // current viewport's grid. Stale entries can sneak in from older builds where
+  // the drop handler didn't clamp — they'd render off-screen and look invisible.
+  if (state.layout.positions){
+    const { cols, rows } = getGridDims();
+    let pruned = false;
+    for (const [id, p] of Object.entries(state.layout.positions)){
+      if (p.x >= cols || p.y >= rows || p.x < 0 || p.y < 0){
+        delete state.layout.positions[id];
+        pruned = true;
+      }
+    }
+    if (pruned) saveLayout();
+  }
+
   renderIcons();
 
   document.getElementById('spotlight-btn').addEventListener('click', openSpotlight);
