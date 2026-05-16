@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>naklOS — a private browser desktop</title>
+<title>nakliOS — a private browser desktop</title>
 <meta name="description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta name="author" content="Chirag Patnaik">
 <link rel="canonical" href="https://naklios.dev/">
-<meta property="og:title" content="naklOS — a private browser desktop">
+<meta property="og:title" content="nakliOS — a private browser desktop">
 <meta property="og:description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
@@ -866,7 +866,7 @@ body.is-mobile .nw-dock{display:none;}
   <header id="topbar">
     <div class="brand">
       <span class="brand-mark">n</span>
-      <span>naklOS</span>
+      <span>nakliOS</span>
       <span class="brand-sub">— private browser desktop</span>
     </div>
     <div class="topbar-spacer"></div>
@@ -1100,17 +1100,17 @@ const THEMES = [
 // ════════════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════════════
-const LS_KEY = { mode:'naklOS.mode', theme:'naklOS.theme', layout:'naklOS.layout' };
+const LS_KEY = { mode:'nakliOS.mode', theme:'nakliOS.theme', layout:'nakliOS.layout' };
 
 // Migrate from v1.1 dual-key storage if present
 (function migrateThemeKey(){
   if (localStorage.getItem(LS_KEY.theme)) return;
-  const oldWp = localStorage.getItem('naklOS.wallpaper');
+  const oldWp = localStorage.getItem('nakliOS.wallpaper');
   if (oldWp && THEMES.find(t => t.id === oldWp)){
     localStorage.setItem(LS_KEY.theme, oldWp);
   }
-  localStorage.removeItem('naklOS.palette');
-  localStorage.removeItem('naklOS.wallpaper');
+  localStorage.removeItem('nakliOS.palette');
+  localStorage.removeItem('nakliOS.wallpaper');
 })();
 
 // Migrate v2.10.x mode key: 'A'|'B' → 'basic', 'C' → 'immersive'
@@ -1547,7 +1547,7 @@ function makeWindow(opts){
   win.style.top = py + 'px';
   win.innerHTML = `
     <div class="nw-titlebar">
-      ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. naklOS can't read its data, and it can't reach back into naklOS.">🔒 sandboxed</span>` : ''}
+      ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. nakliOS can't read its data, and it can't reach back into nakliOS.">🔒 sandboxed</span>` : ''}
       ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
       <span class="nw-title">${title}</span>
       <button class="nw-min-btn" title="Minimize (click dock to restore)" aria-label="Minimize">—</button>
@@ -2644,8 +2644,8 @@ function mdToHtml(src){
 }
 
 Classics.notepad = (body, win) => {
-  const KEY = 'naklOS.notepad.v1';
-  const MODE_KEY = 'naklOS.notepad.mode';
+  const KEY = 'nakliOS.notepad.v1';
+  const MODE_KEY = 'nakliOS.notepad.mode';
   const saved = localStorage.getItem(KEY) || '';
   const mode = localStorage.getItem(MODE_KEY) || 'edit'; // 'edit' | 'preview'
   body.innerHTML = `
@@ -3419,7 +3419,7 @@ if (document.readyState === 'loading'){
 }
 
 // Expose for debugging / future cross-tab API (per CONV.md)
-window.naklOS = {
+window.nakliOS = {
   state, APPS, THEMES, FOLDERS,
   applyTheme, openApp, openFolder, openSpotlight, openSettings,
   setMode, getMode, effectiveMode,

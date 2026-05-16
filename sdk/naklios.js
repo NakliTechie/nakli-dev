@@ -1,5 +1,5 @@
 /*!
- * naklios.js — cooperative SDK for apps hosted inside naklOS (Immersive mode)
+ * naklios.js — cooperative SDK for apps hosted inside nakliOS (Immersive mode)
  *
  * Drop this file into your app's <head> or copy its contents inline. The
  * surface is a no-op when the app loads standalone (window.parent === window),
@@ -13,22 +13,22 @@
  *     naklios.theme.onChange(t => paint(t));    // restyle on host theme change
  *   </script>
  *
- * naklios.capabilities.hosted is true only when running inside naklOS.
+ * naklios.capabilities.hosted is true only when running inside nakliOS.
  *
- * Single source of truth: /Users/chiragpatnaik/Code/Browser/naklOS/sdk/naklios.js
+ * Single source of truth: /Users/chiragpatnaik/Code/Browser/nakliOS/sdk/naklios.js
  * Vendor it inline in each app to keep the no-network-dependency ethos.
  * License: MIT.
  */
 (function () {
-  var inNaklOS = false;
-  try { inNaklOS = !!(window.parent && window.parent !== window); } catch (_) {}
+  var inNakliOS = false;
+  try { inNakliOS = !!(window.parent && window.parent !== window); } catch (_) {}
 
   var currentTheme = null;
   var themeListeners = new Set();
   var beforeCloseCb = null;
 
   function send(type, data) {
-    if (!inNaklOS) return;
+    if (!inNakliOS) return;
     try {
       var msg = Object.assign({ type: type }, data || {});
       window.parent.postMessage(msg, '*');
@@ -51,7 +51,7 @@
   window.naklios = {
     version: 1,
     capabilities: {
-      hosted: inNaklOS,
+      hosted: inNakliOS,
       version: 1,
     },
     ready: function () { send('naklios:ready'); },

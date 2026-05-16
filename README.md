@@ -1,10 +1,10 @@
-# naklOS
+# nakliOS
 
-A private, browser-native desktop for single-file tools. Apps stay standalone; naklOS gives them a home — a spotlight (⌘K), themed wallpapers, folders, a dock, sticky notes, and an Immersive mode where cooperative apps feel native inside the OS instead of foreign in iframes.
+A private, browser-native desktop for single-file tools. Apps stay standalone; nakliOS gives them a home — a spotlight (⌘K), themed wallpapers, folders, a dock, sticky notes, and an Immersive mode where cooperative apps feel native inside the OS instead of foreign in iframes.
 
 **Try it: [naklios.dev](https://naklios.dev/)**
 
-40-odd privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. The [NakliTechie collection](https://naklitechie.github.io/) is the first apps naklOS hosts. No build step, no backend, no telemetry.
+40-odd privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. The [NakliTechie collection](https://naklitechie.github.io/) is the first apps nakliOS hosts. No build step, no backend, no telemetry.
 
 ## Modes
 
@@ -35,7 +35,7 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
 3. In the upstream source repo, add a small dispatcher workflow at `.github/workflows/notify-naklios.yml`:
 
    ```yaml
-   name: Notify naklOS to re-mirror
+   name: Notify nakliOS to re-mirror
    on:
      push:
        branches: [main]
