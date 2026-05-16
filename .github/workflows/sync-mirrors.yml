@@ -1,0 +1,38 @@
+name: Sync app mirrors
+
+# Pulls the latest index.html for each app in apps/manifest.json and opens a PR
+# if anything changed. Runs once a day at 04:00 UTC; can also be triggered
+# manually from the Actions tab via "Run workflow".
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync mirrors
+        run: bash scripts/sync-mirrors.sh
+
+      - name: Create pull request if anything changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: 'chore: sync app mirrors'
+          branch: sync/mirrors
+          commit-message: 'chore: sync app mirrors from upstream repos'
+          body: |
+            Automated mirror of upstream app `index.html` files into `apps/`.
+
+            Review the diff, then merge. Cloudflare Pages redeploys `nakli.dev`
+            on push to `main` so the mirrored versions go live within minutes.
+
+            Source of truth: `apps/manifest.json`.
+          delete-branch: true

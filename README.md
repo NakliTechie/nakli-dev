@@ -22,7 +22,17 @@ One line in the `APPS` array at the top of `index.html`:
   tags:['tool','ai'] }
 ```
 
-Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`.
+Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`, `embedUrl:'https://nakli.dev/apps/<id>/'` (same-origin mirror for FSA-needing apps; see `apps/manifest.json`).
+
+## Mirroring an app for same-origin embedding
+
+Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-System-Access-using app inside Immersive mode, mirror it under `apps/<id>/` so it loads from `nakli.dev` itself.
+
+1. Add an entry to [`apps/manifest.json`](apps/manifest.json) pointing at the upstream repo/branch/file.
+2. Run `bash scripts/sync-mirrors.sh` (or let the scheduled workflow do it on the next 6-hour cycle).
+3. Set `embedUrl: 'https://nakli.dev/apps/<id>/'` on the app's `APPS` entry.
+
+The Immersive iframe will drop its sandbox and use the mirror; standalone visits and new-tab opens continue to use the canonical `url`.
 
 ## License
 
