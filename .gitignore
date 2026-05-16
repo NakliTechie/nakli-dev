@@ -6,6 +6,12 @@
 !wrangler.jsonc
 !sdk/
 !sdk/*
+!apps/
+!apps/**
+!scripts/
+!scripts/*
+!.github/
+!.github/**
 
 # wrangler files
 .wrangler
