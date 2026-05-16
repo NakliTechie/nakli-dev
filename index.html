@@ -756,7 +756,7 @@ body.is-mobile .nw-dock{display:none;}
       <span>Search apps…</span>
       <span class="kbd" id="kbd-hint">⌘K</span>
     </button>
-    <span id="mode-pill" title="Click Settings to change mode">B</span>
+    <span id="mode-pill" title="Click Settings to change mode">Basic</span>
     <span id="clock">—</span>
     <button id="settings-btn" class="topbar-btn" title="Settings">⚙</button>
   </header>
@@ -783,12 +783,12 @@ body.is-mobile .nw-dock{display:none;}
 // ════════════════════════════════════════════════════════════════════
 // APPS
 // ════════════════════════════════════════════════════════════════════
-// Heavy apps with maxMode:'B' fall back to a new tab when user picks Mode C.
+// Heavy apps with maxMode:'basic' fall back to a new tab when user picks Immersive mode.
 // iframeable:false locks an app out of inline windows entirely (Karkhana = v86 VM).
-// kind:'classic' apps are built into this file and open as inline windows in Mode B+.
+// kind:'classic' apps are built into this file and always open as inline windows.
 
 const APPS = [
-  // ── Built-in classics (always inline windows when not Mode A) ──
+  // ── Built-in classics (always inline windows) ──
   { id:'minesweeper', name:'Minesweeper', kind:'classic', glyph:'💣', bg:'brand',
     description:'Classic Windows-style mine sweeping. Right-click to flag.', tags:['game','classic'],
     svg:`<rect x="3" y="3" width="18" height="18" rx="2"/><polygon points="12 8 16 12 12 16 8 12"/>` },
@@ -807,22 +807,22 @@ const APPS = [
 
   // ── NakliTechie apps (in portfolio updated-order) ──
   { id:'mantra', name:'Mantra', url:'https://mantra.naklitechie.com/', glyph:'📿', bg:'act',
-    description:'Type a prompt once and see how Claude, GPT, Gemini, and local models answer — side by side. Your API keys never leave your browser.', tags:['ai','developer','tool'], maxMode:'B',
+    description:'Type a prompt once and see how Claude, GPT, Gemini, and local models answer — side by side. Your API keys never leave your browser.', tags:['ai','developer','tool'], maxMode:'basic',
     svg:`<circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M5.5 12L20 6"/><path d="M5.5 12L20 12"/><path d="M5.5 12L20 18"/>` },
   { id:'sansadlocal', name:'SansadLocal', url:'https://sansadlocal.naklitechie.com', glyph:'🏛️', bg:'act',
-    description:'Browse, search, and summarise reports from India\'s 24 Parliamentary Standing Committees. AI in your browser.', tags:['ai','civic','research'], maxMode:'B',
+    description:'Browse, search, and summarise reports from India\'s 24 Parliamentary Standing Committees. AI in your browser.', tags:['ai','civic','research'], maxMode:'basic',
     svg:`<line x1="3" y1="21" x2="21" y2="21"/><line x1="4" y1="21" x2="4" y2="9"/><line x1="8" y1="21" x2="8" y2="9"/><line x1="12" y1="21" x2="12" y2="9"/><line x1="16" y1="21" x2="16" y2="9"/><line x1="20" y1="21" x2="20" y2="9"/><polygon points="3 9 12 4 21 9"/>` },
   { id:'fretlocal', name:'FretLocal', url:'https://naklitechie.github.io/FretLocal/', glyph:'🎸', bg:'brand',
     description:'Guitar fretboard note trainer. Pick a famous riff or drill any strings.', tags:['game','music'],
     svg:`<line x1="6" y1="3" x2="6" y2="21"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="18" y1="3" x2="18" y2="21"/><line x1="3" y1="7" x2="21" y2="7"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="17" x2="21" y2="17"/>` },
   { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
-    description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'B',
+    description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'basic',
     svg:`<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8" cy="9" r="1.5"/><polyline points="21 14 14 9 4 16"/><path d="M16 19l-1 2 3-1z"/><path d="M16 19l4-4"/>` },
   { id:'tijori', name:'Tijori', url:'https://naklitechie.github.io/Tijori/', glyph:'🔐', bg:'brand',
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
     svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
-    description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'B',
+    description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'basic',
     svg:`<circle cx="5" cy="8" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="12" cy="6" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="18" r="1.5"/><circle cx="19" cy="9" r="1.5"/><circle cx="19" cy="15" r="1.5"/><line x1="6.5" y1="8" x2="10.5" y2="6"/><line x1="6.5" y1="8" x2="10.5" y2="12"/><line x1="6.5" y1="16" x2="10.5" y2="12"/><line x1="6.5" y1="16" x2="10.5" y2="18"/><line x1="13.5" y1="6" x2="17.5" y2="9"/><line x1="13.5" y1="12" x2="17.5" y2="9"/><line x1="13.5" y1="12" x2="17.5" y2="15"/><line x1="13.5" y1="18" x2="17.5" y2="15"/>` },
   { id:'mechanikon', name:'Mechanikon', url:'https://mechanikon.naklitechie.com', glyph:'⚙️', bg:'brand',
     description:'A digital museum of interactive simulations of historical mechanisms — clocks, astronomical devices.', tags:['simulation','history'], private:true,
@@ -840,10 +840,10 @@ const APPS = [
     description:'Swipe through your GitHub PRs like a feed. Approve, request changes, skip — in seconds.', tags:['tool','developer','github'], desktopAlign:'right', desktopOrder:3,
     svg:`<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><line x1="6" y1="8" x2="6" y2="16"/><path d="M6 6h6c3 0 6 3 6 6v4"/>` },
   { id:'mehfil', name:'Mehfil', url:'https://naklitechie.github.io/mehfil/', glyph:'💬', bg:'ok',
-    description:'Encrypted team chat in a single HTML file. No accounts, no central server.', tags:['tool','privacy','security'], maxMode:'B',
+    description:'Encrypted team chat in a single HTML file. No accounts, no central server.', tags:['tool','privacy','security'], maxMode:'basic',
     svg:`<path d="M4 6c0-1.5 1.5-3 3-3h10c1.5 0 3 1.5 3 3v6c0 1.5-1.5 3-3 3h-6l-4 4v-4H7c-1.5 0-3-1.5-3-3z"/>` },
   { id:'bolo', name:'Bolo', url:'https://naklitechie.github.io/bolo/', glyph:'🎙️', bg:'brand',
-    description:'Record screen, webcam, mic — transcribes locally with Whisper, trims clips, burns captions.', tags:['tool','media'], maxMode:'B',
+    description:'Record screen, webcam, mic — transcribes locally with Whisper, trims clips, burns captions.', tags:['tool','media'], maxMode:'basic',
     svg:`<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>` },
   { id:'dotspin', name:'DotSpin', url:'https://naklitechie.github.io/dotspin/', glyph:'◐', bg:'act',
     description:'15 dot-matrix CSS spinners. One element each, zero JS, zero dependencies.', tags:['library','css','ui'],
@@ -858,10 +858,10 @@ const APPS = [
     description:'Colour palette library — each palette named after a tradition, place, or craft.', tags:['tool','design'],
     svg:`<path d="M12 3c5 0 9 4 9 8 0 2-1.5 3.5-3 3.5h-1.5c-1 0-1.5 0.5-1.5 1.5v1c0 1.5-1 2-2 2-5 0-9-4-9-8s5-8 8-8z"/><circle cx="7" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="11" r="1" fill="currentColor" stroke="none"/>` },
   { id:'bahi', name:'Bahi', url:'https://bahi.naklitechie.com', glyph:'📒', bg:'ok',
-    description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'B',
+    description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'basic',
     svg:`<path d="M5 4h13c0.5 0 1 0.5 1 1v15c0 0.5-0.5 1-1 1H5z"/><line x1="5" y1="4" x2="5" y2="21"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>` },
   { id:'bofh', name:'BOFH', url:'https://bofh.naklitechie.com', glyph:'🛠️', bg:'brand',
-    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'B', desktopAlign:'right', desktopOrder:2,
+    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'basic', desktopAlign:'right', desktopOrder:2,
     svg:`<polyline points="8 6 2 12 8 18"/><polyline points="16 6 22 12 16 18"/><line x1="14" y1="4" x2="10" y2="20"/>` },
   { id:'nemawashi', name:'Nemawashi', url:'https://nemawashi.naklitechie.com', glyph:'🗳️', bg:'act',
     description:'Group decision tool — define options, everyone scores, the best combination surfaces.', tags:['tool','productivity'],
@@ -876,13 +876,13 @@ const APPS = [
     description:'Photograph a garment, match its colours to classic palettes, discover combinations that work.', tags:['ai','tool'], private:true,
     svg:`<path d="M9 4l-3 4v12h12V8l-3-4z"/><line x1="9" y1="4" x2="15" y2="4"/><circle cx="9" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1" fill="currentColor" stroke="none"/>` },
   { id:'vaultmind', name:'VaultMind', url:'https://vaultmind.naklitechie.com', glyph:'🧩', bg:'act',
-    description:'Obsidian vault explorer — force graph, full-text search, AI chat, in-place markdown editing.', tags:['ai','productivity'], maxMode:'B',
+    description:'Obsidian vault explorer — force graph, full-text search, AI chat, in-place markdown editing.', tags:['ai','productivity'], maxMode:'basic',
     svg:`<circle cx="12" cy="6" r="2"/><circle cx="6" cy="14" r="2"/><circle cx="18" cy="14" r="2"/><circle cx="12" cy="20" r="2"/><line x1="11" y1="7.5" x2="7" y2="12.5"/><line x1="13" y1="7.5" x2="17" y2="12.5"/><line x1="7" y1="15.5" x2="11" y2="18.5"/><line x1="17" y1="15.5" x2="13" y2="18.5"/>` },
   { id:'kolocal', name:'KoLocal', url:'https://naklitechie.github.io/KoLocal/', glyph:'⚫', bg:'ok',
     description:'Play Go (Baduk) against an AI opponent. Supports 9×9, 13×13, and 19×19 boards.', tags:['game','ai'],
     svg:`<rect x="3" y="3" width="18" height="18" rx="1"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><circle cx="9" cy="9" r="2" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="2"/>` },
   { id:'localmind', name:'LocalMind', url:'https://naklitechie.github.io/LocalMind/', glyph:'🧭', bg:'brand',
-    description:'Private AI research agent — web search, document ingestion, RAG memory. Runs in your browser.', tags:['ai','chat'], maxMode:'B',
+    description:'Private AI research agent — web search, document ingestion, RAG memory. Runs in your browser.', tags:['ai','chat'], maxMode:'basic',
     svg:`<circle cx="12" cy="12" r="9"/><polygon points="12 5 14 12 12 13 10 12"/><polygon points="12 19 14 12 12 11 10 12"/>` },
   { id:'blurlocal', name:'BlurLocal', url:'https://naklitechie.github.io/blurlocal/', glyph:'😶', bg:'act',
     description:'Detect and blur faces in photos and videos. Gaussian and pixelate modes, fully local.', tags:['ai','media','tool'],
@@ -947,7 +947,7 @@ const FOLDERED_APP_IDS = new Set(FOLDERS.flatMap(f => f.apps));
 // ════════════════════════════════════════════════════════════════════
 // THEMES — the OS color scheme. Each theme bundles a palette (UI tints)
 // with a wallpaper gradient (desktop bg). One picker, no fragmentation.
-// Apps in Mode C inherit the theme via ?nakliOS-theme=<id> on the iframe URL.
+// Apps in Immersive mode inherit the theme via ?nakliOS-theme=<id> on the iframe URL.
 // ════════════════════════════════════════════════════════════════════
 const THEMES = [
   { id:'aurora', name:'Aurora', mood:'dark',
@@ -992,6 +992,13 @@ const LS_KEY = { mode:'naklOS.mode', theme:'naklOS.theme', layout:'naklOS.layout
   localStorage.removeItem('naklOS.wallpaper');
 })();
 
+// Migrate v2.10.x mode key: 'A'|'B' → 'basic', 'C' → 'immersive'
+(function migrateModeKey(){
+  const v = localStorage.getItem(LS_KEY.mode);
+  if (v === 'A' || v === 'B') localStorage.setItem(LS_KEY.mode, 'basic');
+  else if (v === 'C') localStorage.setItem(LS_KEY.mode, 'immersive');
+})();
+
 const state = {
   mode: localStorage.getItem(LS_KEY.mode) || null,
   theme: localStorage.getItem(LS_KEY.theme) || 'aurora',
@@ -1000,21 +1007,18 @@ const state = {
 
 function isCoarse(){ return matchMedia('(pointer: coarse)').matches; }
 function isMobile(){ return isCoarse() || innerWidth < 720; }
-function getDefaultMode(){ return isMobile() ? 'A' : 'B'; }
+function getDefaultMode(){ return 'basic'; }
 function getMode(){ return state.mode || getDefaultMode(); }
 
 function setMode(m){
   state.mode = m;
   localStorage.setItem(LS_KEY.mode, m);
-  document.getElementById('mode-pill').textContent = m;
+  document.getElementById('mode-pill').textContent = m === 'immersive' ? 'Immersive' : 'Basic';
 }
 function effectiveMode(app){
-  if (isMobile()) return 'A';
+  if (isMobile()) return 'basic';
   let m = getMode();
-  if (app && app.maxMode) {
-    const order = {A:0,B:1,C:2};
-    if (order[m] > order[app.maxMode]) m = app.maxMode;
-  }
+  if (m === 'immersive' && app && app.maxMode === 'basic') m = 'basic';
   return m;
 }
 
@@ -1735,19 +1739,13 @@ function openApp(app){
   recordRecent(app.id);
   if (openWindows[app.id]) { focusWindow(openWindows[app.id]); return; }
   const m = effectiveMode(app);
-  if (m === 'A') {
-    if (app.kind === 'classic') return spawnInlineWindow(app); // classics always inline
-    return window.open(app.url, '_blank', 'noopener');
-  }
-  if (m === 'B') {
-    if (app.kind === 'classic') return spawnInlineWindow(app);
-    return window.open(app.url, '_blank', 'noopener');
-  }
-  if (m === 'C') {
+  if (m === 'immersive') {
     if (app.kind === 'classic') return spawnInlineWindow(app);
     if (app.iframeable === false) return window.open(app.url, '_blank', 'noopener');
     return spawnIframeWindow(app);
   }
+  // Basic
+  if (app.kind === 'classic') return spawnInlineWindow(app);
   return window.open(app.url, '_blank', 'noopener');
 }
 
@@ -2013,15 +2011,14 @@ function openSettings(){
 
   const curMode = getMode();
   const modes = [
-    { id:'A', name:'Quiet', desc:'Click an icon → opens in a new tab. Honest launcher.' },
-    { id:'B', name:'Playful', desc:'Built-in classics open as draggable windows. New tab for the rest.' },
-    { id:'C', name:'Immersive', desc:'NakliTechie apps open in windowed iframes. Bigger apps still tab out.', badge:'EXPERIMENTAL' },
+    { id:'basic', name:'Basic', desc:'Built-in classics open as draggable windows. New tab for the rest.' },
+    { id:'immersive', name:'Immersive', desc:'NakliTechie apps open in windowed iframes. Bigger apps still tab out.', badge:'EXPERIMENTAL' },
   ];
   const modeHTML = modes.map(m => `
     <label class="nw-mode-opt ${m.id === curMode ? 'is-active' : ''}">
       <input type="radio" name="nw-mode" value="${m.id}" ${m.id === curMode ? 'checked' : ''}>
       <div class="nw-mode-label">
-        <div class="nw-mode-name">${m.name} <span style="color:var(--faint); font-weight:400;">— Mode ${m.id}</span>${m.badge ? `<span class="nw-badge">${m.badge}</span>` : ''}</div>
+        <div class="nw-mode-name">${m.name}${m.badge ? `<span class="nw-badge">${m.badge}</span>` : ''}</div>
         <div class="nw-mode-desc">${m.desc}</div>
       </div>
     </label>
@@ -2041,7 +2038,7 @@ function openSettings(){
   wrap.innerHTML = `
     <h4>Mode</h4>
     ${modeHTML}
-    ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Mode A is always used.</div>` : ''}
+    ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Basic mode is always used.</div>` : ''}
     <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
     <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
     <h4>About</h4>
@@ -3010,8 +3007,7 @@ Classics.solitaire = (body, win) => {
 function init(){
   applyTheme(state.theme);
   updateDock();
-  if (state.mode) document.getElementById('mode-pill').textContent = getMode();
-  else document.getElementById('mode-pill').textContent = getDefaultMode();
+  document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
   renderIcons();
 
   document.getElementById('spotlight-btn').addEventListener('click', openSpotlight);

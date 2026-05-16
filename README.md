@@ -8,8 +8,7 @@ A single-file, browser-native desktop launcher for the [NakliTechie](https://nak
 
 ## Modes
 
-- **Quiet** — every click opens a new tab (default on mobile).
-- **Playful** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; everything else opens a tab. Default on desktop.
+- **Basic** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; everything else opens a new tab. Default.
 - **Immersive** *(experimental)* — light apps open as iframe windows inside the desktop.
 
 ## Adding a new app
@@ -23,7 +22,7 @@ One line in the `APPS` array at the top of `index.html`:
   tags:['tool','ai'] }
 ```
 
-Optional fields: `maxMode:'B'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`.
+Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`.
 
 ## License
 
