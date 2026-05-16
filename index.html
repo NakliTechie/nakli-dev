@@ -408,6 +408,32 @@ input{font:inherit; color:inherit;}
 }
 .nw-foot-link:hover{color:var(--brand);}
 
+/* ── FOLDER SYNC ── */
+.nw-fs-btn-primary{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:6px 12px; border-radius:8px;
+  background:var(--brand); color:var(--panel);
+  font-size:12px; font-weight:600;
+  border:none; cursor:pointer;
+  transition:filter 0.12s;
+}
+.nw-fs-btn-primary:hover{filter:brightness(1.1);}
+.nw-fs-connected{
+  display:flex; align-items:center; gap:8px;
+  padding:8px 10px; border-radius:8px;
+  background:var(--row); border:1px solid var(--line);
+  font-size:12px; color:var(--ink); margin-bottom:6px;
+}
+.nw-fs-connected-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.nw-fs-link-btn{
+  background:none; border:none; padding:0; cursor:pointer;
+  color:var(--muted); font-size:11px; text-decoration:underline;
+}
+.nw-fs-link-btn:hover{color:var(--brand);}
+.nw-fs-blurb{
+  font-size:11px; color:var(--muted); line-height:1.4; margin-top:6px;
+}
+
 /* ── STICKY NOTES ── */
 .nw-sticky{
   position:absolute;
@@ -942,6 +968,13 @@ const APPS = [
   { id:'tijori', name:'Tijori', url:'https://tijori.naklitechie.com/', embedUrl:'https://naklios.dev/apps/tijori/', glyph:'🔐', bg:'brand',
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
     svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
+  { id:'files', name:'Files',
+    url:'https://naklios.dev/apps/files/',
+    embedUrl:'https://naklios.dev/apps/files/',
+    glyph:'📁', bg:'ok',
+    description:'Browse the folder nakliOS saves to (only meaningful once you connect a folder in Settings).',
+    tags:['tool','filesystem'], desktopAlign:'right', desktopOrder:5,
+    svg:`<path d="M3 7c0-1 0.7-2 2-2h4l2 2h8c1 0 2 1 2 2v8c0 1-1 2-2 2H5c-1 0-2-1-2-2z"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
     description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'basic',
     svg:`<circle cx="5" cy="8" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="12" cy="6" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="18" r="1.5"/><circle cx="19" cy="9" r="1.5"/><circle cx="19" cy="15" r="1.5"/><line x1="6.5" y1="8" x2="10.5" y2="6"/><line x1="6.5" y1="8" x2="10.5" y2="12"/><line x1="6.5" y1="16" x2="10.5" y2="12"/><line x1="6.5" y1="16" x2="10.5" y2="18"/><line x1="13.5" y1="6" x2="17.5" y2="9"/><line x1="13.5" y1="12" x2="17.5" y2="9"/><line x1="13.5" y1="12" x2="17.5" y2="15"/><line x1="13.5" y1="18" x2="17.5" y2="15"/>` },
@@ -1102,6 +1135,27 @@ const THEMES = [
 // ════════════════════════════════════════════════════════════════════
 const LS_KEY = { mode:'nakliOS.mode', theme:'nakliOS.theme', layout:'nakliOS.layout' };
 
+// Migrate v2.15 brand rename: naklOS.* → nakliOS.* (preserve existing users' state)
+(function migrateBrandKeys(){
+  for (const k of ['mode', 'theme', 'layout']){
+    const newK = `nakliOS.${k}`;
+    if (localStorage.getItem(newK) !== null) continue;
+    const oldV = localStorage.getItem(`naklOS.${k}`);
+    if (oldV !== null){
+      localStorage.setItem(newK, oldV);
+      localStorage.removeItem(`naklOS.${k}`);
+    }
+  }
+  // Also rename a couple of orphan keys the v1.1 migration referenced
+  for (const k of ['palette', 'wallpaper', 'notepad.v1', 'notepad.mode']){
+    const oldV = localStorage.getItem(`naklOS.${k}`);
+    if (oldV !== null && localStorage.getItem(`nakliOS.${k}`) === null){
+      localStorage.setItem(`nakliOS.${k}`, oldV);
+      localStorage.removeItem(`naklOS.${k}`);
+    }
+  }
+})();
+
 // Migrate from v1.1 dual-key storage if present
 (function migrateThemeKey(){
   if (localStorage.getItem(LS_KEY.theme)) return;
@@ -1124,6 +1178,9 @@ const state = {
   mode: localStorage.getItem(LS_KEY.mode) || null,
   theme: localStorage.getItem(LS_KEY.theme) || 'aurora',
   layout: JSON.parse(localStorage.getItem(LS_KEY.layout) || '{"version":1,"positions":{},"hidden":[]}'),
+  appPermissions: JSON.parse(localStorage.getItem('nakliOS.appPermissions') || '{}'),
+  fsHandle: null,        // populated after fsReconnect() succeeds
+  fsFolderName: null,    // display name from the handle
 };
 
 function isCoarse(){ return matchMedia('(pointer: coarse)').matches; }
@@ -1135,6 +1192,7 @@ function setMode(m){
   state.mode = m;
   localStorage.setItem(LS_KEY.mode, m);
   document.getElementById('mode-pill').textContent = m === 'immersive' ? 'Immersive' : 'Basic';
+  fsScheduleStateWrite();
 }
 function effectiveMode(app){
   if (isMobile()) return 'basic';
@@ -1145,6 +1203,11 @@ function effectiveMode(app){
 
 function saveLayout(){
   localStorage.setItem(LS_KEY.layout, JSON.stringify(state.layout));
+  fsScheduleStateWrite();
+}
+function saveAppPermissions(){
+  localStorage.setItem('nakliOS.appPermissions', JSON.stringify(state.appPermissions));
+  fsScheduleStateWrite();
 }
 
 // Default-pin the four classics so new users see something useful in the dock.
@@ -1155,6 +1218,246 @@ if (!state.layout.pinned){
 state.layout.unfoldered = state.layout.unfoldered || [];
 state.layout.windowPositions = state.layout.windowPositions || {};
 state.layout.stickies = state.layout.stickies || [];
+
+// ════════════════════════════════════════════════════════════════════
+// FILESYSTEM (File System Access)
+// ════════════════════════════════════════════════════════════════════
+// nakliOS owns one folder handle (picked once via showDirectoryPicker, stored
+// in IndexedDB). nakliOS shadow-writes its state.json there; cooperative apps
+// in Immersive mode read/write under apps/<id>/ via the naklios.fs.* SDK.
+
+const IDB_NAME = 'nakliOS';
+const IDB_STORE = 'handles';
+
+function idbOpen(){
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore(IDB_STORE); };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbGet(key){
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbSet(key, val){
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(val, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbDel(key){
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+// Path safety: clamp app paths to apps/<appId>/. Reject traversal.
+function fsSafePath(appId, path){
+  if (typeof path !== 'string' || !path) throw new Error('Path required');
+  const segs = path.split('/').filter(s => s && s !== '.');
+  if (segs.some(s => s === '..' || s.startsWith('/'))) throw new Error('Invalid path: ' + path);
+  if (!segs.length) throw new Error('Empty path');
+  if (!appId || typeof appId !== 'string') throw new Error('Internal: missing appId');
+  return ['apps', appId, ...segs].join('/');
+}
+
+// Walk a path to its parent directory handle. Optionally create dirs.
+async function fsGetDir(path, create=false){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  const segs = path.split('/').filter(Boolean);
+  let dir = state.fsHandle;
+  for (let i = 0; i < segs.length - 1; i++){
+    dir = await dir.getDirectoryHandle(segs[i], { create });
+  }
+  return { dir, name: segs[segs.length - 1] };
+}
+
+async function fsRead(path){
+  const { dir, name } = await fsGetDir(path);
+  const fh = await dir.getFileHandle(name);
+  const file = await fh.getFile();
+  return await file.text();
+}
+async function fsReadBinary(path){
+  const { dir, name } = await fsGetDir(path);
+  const fh = await dir.getFileHandle(name);
+  const file = await fh.getFile();
+  return new Uint8Array(await file.arrayBuffer());
+}
+async function fsWrite(path, data){
+  const { dir, name } = await fsGetDir(path, true);
+  const fh = await dir.getFileHandle(name, { create: true });
+  const ws = await fh.createWritable();
+  await ws.write(data);
+  await ws.close();
+}
+async function fsAppend(path, line){
+  let existing = '';
+  try { existing = await fsRead(path); } catch(_){}
+  const trail = (line.endsWith('\n') ? line : line + '\n');
+  await fsWrite(path, existing + trail);
+}
+async function fsList(prefix=''){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  // Walk into the prefix dir and enumerate
+  const segs = prefix.split('/').filter(Boolean);
+  let dir = state.fsHandle;
+  try {
+    for (const seg of segs) dir = await dir.getDirectoryHandle(seg);
+  } catch(_){ return []; }
+  const out = [];
+  for await (const [name, handle] of dir.entries()){
+    out.push(prefix ? `${prefix}/${name}` + (handle.kind === 'directory' ? '/' : '')
+                    : name + (handle.kind === 'directory' ? '/' : ''));
+  }
+  return out.sort();
+}
+async function fsDelete(path){
+  const { dir, name } = await fsGetDir(path);
+  await dir.removeEntry(name, { recursive: true });
+}
+async function fsExists(path){
+  try {
+    const { dir, name } = await fsGetDir(path);
+    await dir.getFileHandle(name);
+    return true;
+  } catch(_){
+    try {
+      const { dir, name } = await fsGetDir(path);
+      await dir.getDirectoryHandle(name);
+      return true;
+    } catch(_){ return false; }
+  }
+}
+
+// Connection / lifecycle.
+async function fsConnect(){
+  if (!('showDirectoryPicker' in window)) {
+    alert('Your browser doesn\'t support the File System Access API. Try Chrome/Edge desktop.');
+    return false;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'nakliOS' });
+    state.fsHandle = handle;
+    state.fsFolderName = handle.name;
+    await idbSet('fsHandle', handle);
+    // Write current state to file immediately so the folder is initialized
+    await fsWriteState();
+    if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+    return true;
+  } catch (e){
+    if (e.name !== 'AbortError') console.error('fsConnect failed:', e);
+    return false;
+  }
+}
+async function fsReconnect(){
+  const stored = await idbGet('fsHandle').catch(() => null);
+  if (!stored) return false;
+  try {
+    const perm = await stored.queryPermission({ mode: 'readwrite' });
+    if (perm === 'granted'){
+      state.fsHandle = stored;
+      state.fsFolderName = stored.name;
+      return true;
+    }
+    if (perm === 'prompt'){
+      // Park the handle for user-initiated re-grant via Settings.
+      state.fsHandle = null;
+      state.fsFolderName = stored.name;
+      window._fsPendingHandle = stored;
+      return false;
+    }
+  } catch(_){}
+  return false;
+}
+async function fsRegrantPending(){
+  const stored = window._fsPendingHandle;
+  if (!stored) return false;
+  try {
+    const perm = await stored.requestPermission({ mode: 'readwrite' });
+    if (perm === 'granted'){
+      state.fsHandle = stored;
+      state.fsFolderName = stored.name;
+      window._fsPendingHandle = null;
+      if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+      return true;
+    }
+  } catch(_){}
+  return false;
+}
+async function fsDisconnect(){
+  state.fsHandle = null;
+  state.fsFolderName = null;
+  await idbDel('fsHandle').catch(() => {});
+  if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+}
+
+// State.json shadow: serialize the user-visible state into a single JSON
+// file in the connected folder. Debounced so a flurry of saveLayout()s
+// becomes one write.
+let _stateWriteTimer = null;
+function fsScheduleStateWrite(){
+  if (!state.fsHandle) return;
+  clearTimeout(_stateWriteTimer);
+  _stateWriteTimer = setTimeout(() => fsWriteState().catch(e => console.warn('state write failed:', e)), 500);
+}
+function serializeState(){
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    mode: state.mode,
+    theme: state.theme,
+    layout: state.layout,
+    appPermissions: state.appPermissions,
+  };
+}
+async function fsWriteState(){
+  if (!state.fsHandle) return;
+  const snapshot = serializeState();
+  const json = JSON.stringify(snapshot, null, 2);
+  const fh = await state.fsHandle.getFileHandle('state.json', { create: true });
+  const ws = await fh.createWritable();
+  await ws.write(json);
+  await ws.close();
+  localStorage.setItem('nakliOS.lastSync', String(snapshot.savedAt));
+}
+async function fsReadState(){
+  if (!state.fsHandle) return null;
+  try {
+    const fh = await state.fsHandle.getFileHandle('state.json');
+    const text = await (await fh.getFile()).text();
+    return JSON.parse(text);
+  } catch(_){ return null; }
+}
+// On boot, if the file's savedAt is newer than localStorage's lastSync,
+// hydrate from file. Otherwise keep current (and write file once).
+async function fsHydrateIfNewer(){
+  const remote = await fsReadState();
+  if (!remote) return false;
+  const localSync = parseInt(localStorage.getItem('nakliOS.lastSync') || '0', 10);
+  if (!remote.savedAt || remote.savedAt <= localSync) return false;
+  // Newer-than-local → hydrate everything
+  if (remote.mode != null) { state.mode = remote.mode; localStorage.setItem(LS_KEY.mode, remote.mode); }
+  if (remote.theme != null) { state.theme = remote.theme; localStorage.setItem(LS_KEY.theme, remote.theme); }
+  if (remote.layout) { state.layout = remote.layout; localStorage.setItem(LS_KEY.layout, JSON.stringify(remote.layout)); }
+  if (remote.appPermissions) { state.appPermissions = remote.appPermissions; localStorage.setItem('nakliOS.appPermissions', JSON.stringify(remote.appPermissions)); }
+  localStorage.setItem('nakliOS.lastSync', String(remote.savedAt));
+  return true;
+}
 
 function isPinned(id){ return (state.layout.pinned || []).includes(id); }
 function pinItem(id){
@@ -1235,6 +1538,7 @@ function applyTheme(id){
   if (desk) desk.classList.toggle('wp-light', t.mood === 'light');
   state.theme = t.id;
   localStorage.setItem(LS_KEY.theme, t.id);
+  fsScheduleStateWrite();
   // Update any open iframe windows so apps that listen can re-theme
   document.querySelectorAll('.nw-window iframe').forEach(f => {
     try { f.contentWindow.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
@@ -1868,19 +2172,75 @@ function spawnIframeWindow(app){
       // Send the theme so any listening app can apply it
       const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
       iframe.contentWindow.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*');
+      // Push capabilities (fs availability) so the SDK can flip naklios.capabilities.fs
+      postCapabilities(iframe, app.id);
     } catch(_){}
   });
 }
 
-window.addEventListener('message', e => {
+// On-demand permission prompt for FS access. Cached per-app in state.
+function fsEnsurePermission(appId){
+  if (state.appPermissions[appId] === 'granted') return true;
+  if (state.appPermissions[appId] === 'denied') return false;
+  const app = APPS.find(a => a.id === appId);
+  const name = app?.name || appId;
+  const ok = confirm(
+    `Let ${name} read and write its data in your nakliOS folder?\n\n` +
+    `It will be limited to apps/${appId}/ — no other folders or apps' data.\n\n` +
+    `You can revoke this later in Settings.`
+  );
+  state.appPermissions[appId] = ok ? 'granted' : 'denied';
+  saveAppPermissions();
+  return ok;
+}
+
+// Resolve { dir, name } for fs reply ops. Throws if path unsafe or no handle.
+async function fsHostHandle(msg, type, appId){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  if (!fsEnsurePermission(appId)) throw new Error('Permission denied');
+  const safe = fsSafePath(appId, msg.path || '');
+  switch (type){
+    case 'read':       return await fsRead(safe);
+    case 'readBinary': return await fsReadBinary(safe);
+    case 'write':      await fsWrite(safe, msg.data); return null;
+    case 'append':     await fsAppend(safe, String(msg.line ?? '')); return null;
+    case 'delete':     await fsDelete(safe); return null;
+    case 'exists':     return await fsExists(safe);
+  }
+  throw new Error('Unknown fs op: ' + type);
+}
+// list() is the only op that scopes to apps/<id>/ even when path is empty
+async function fsHostList(msg, appId){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  if (!fsEnsurePermission(appId)) throw new Error('Permission denied');
+  const subPath = (msg.prefix || '').split('/').filter(s => s && s !== '.' && s !== '..').join('/');
+  const fullPrefix = subPath ? `apps/${appId}/${subPath}` : `apps/${appId}`;
+  // Strip apps/<appId>/ from results so apps see app-relative paths
+  const all = await fsList(fullPrefix);
+  const stripPrefix = `apps/${appId}/`;
+  return all.map(p => p.startsWith(stripPrefix) ? p.slice(stripPrefix.length) : p);
+}
+
+// Tell an iframe its current capabilities. Called on load and on changes.
+function postCapabilities(iframe, appId){
+  const fsCap = !!state.fsHandle && state.appPermissions[appId] !== 'denied';
+  try { iframe.contentWindow.postMessage({ type:'naklios:capabilities', fs: fsCap }, '*'); } catch(_){}
+}
+function broadcastCapabilities(){
+  document.querySelectorAll('.nw-window iframe').forEach(iframe => {
+    const appId = iframe.closest('.nw-window')?.dataset.id;
+    if (appId) postCapabilities(iframe, appId);
+  });
+}
+
+window.addEventListener('message', async e => {
   if (!knownIframes.has(e.source)) return;
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
-  const findWin = () => {
-    const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
-      .find(f => f.contentWindow === e.source);
-    return iframe ? iframe.closest('.nw-window') : null;
-  };
+  const findIframe = () => Array.from(document.querySelectorAll('.nw-window iframe'))
+    .find(f => f.contentWindow === e.source);
+  const findWin = () => { const f = findIframe(); return f ? f.closest('.nw-window') : null; };
+  const getAppId = () => findWin()?.dataset.id || null;
   if (msg.type === 'naklios:ready'){
     const win = findWin();
     if (win){
@@ -1897,6 +2257,21 @@ window.addEventListener('message', e => {
     // App is asking for the current theme (e.g., late-loading app missed the load event)
     const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
     try { e.source.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
+  } else if (msg.type === 'naklios:capabilities-request'){
+    const iframe = findIframe(); const appId = getAppId();
+    if (iframe && appId) postCapabilities(iframe, appId);
+  } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:fs:')){
+    const reply = { type: 'naklios:fs:reply', requestId: msg.requestId };
+    try {
+      const appId = getAppId();
+      if (!appId) throw new Error('Unknown app');
+      const op = msg.type.slice('naklios:fs:'.length);
+      if (op === 'list') reply.result = await fsHostList(msg, appId);
+      else reply.result = await fsHostHandle(msg, op, appId);
+    } catch (err){
+      reply.error = String(err?.message || err);
+    }
+    try { e.source.postMessage(reply, '*'); } catch(_){}
   }
 });
 
@@ -2211,12 +2586,38 @@ function openSettings(){
       </div>`;
   }).join('');
 
+  const connected = !!state.fsHandle;
+  const parked = !state.fsHandle && !!state.fsFolderName; // permission needs re-grant
+  const folderName = state.fsFolderName || '';
+  const fsHTML = `
+    ${connected ? `
+      <div class="nw-fs-connected">
+        <span>📁</span>
+        <span class="nw-fs-connected-name" title="${folderName}">${folderName}</span>
+        <button class="nw-fs-link-btn" id="fs-disconnect">Disconnect</button>
+      </div>
+    ` : parked ? `
+      <div class="nw-fs-connected">
+        <span>📁</span>
+        <span class="nw-fs-connected-name" title="${folderName}">${folderName} — re-grant access</span>
+        <button class="nw-fs-btn-primary" id="fs-regrant">Re-grant</button>
+      </div>
+    ` : `
+      <button class="nw-fs-btn-primary" id="fs-connect">📁 Connect folder…</button>
+    `}
+    <div class="nw-fs-blurb">${connected
+      ? 'naklOS shadow-writes state to <code>state.json</code> in this folder. Cooperative apps in Immersive can read/write under <code>apps/&lt;id&gt;/</code>.'
+      : 'Connect a folder (iCloud Drive, Dropbox, or local) and naklOS will mirror its state there. Cooperative apps can use the same folder for multi-device sync.'}</div>
+  `;
+
   wrap.innerHTML = `
     <h4>Mode</h4>
     ${modeHTML}
     ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Basic mode is always used.</div>` : ''}
     <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
     <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
+    <h4>Folder sync</h4>
+    ${fsHTML}
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
@@ -2237,6 +2638,20 @@ function openSettings(){
     if (!el) return;
     applyTheme(el.dataset.tid);
     wrap.querySelectorAll('.nw-wp').forEach(p => p.classList.toggle('is-active', p === el));
+  });
+
+  wrap.querySelector('#fs-connect')?.addEventListener('click', async () => {
+    const ok = await fsConnect();
+    if (ok){ closeSettings(); openSettings(); }
+  });
+  wrap.querySelector('#fs-regrant')?.addEventListener('click', async () => {
+    const ok = await fsRegrantPending();
+    if (ok){ await fsWriteState(); closeSettings(); openSettings(); }
+  });
+  wrap.querySelector('#fs-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect the folder? naklOS will keep working locally; your folder data stays where it is.')) return;
+    await fsDisconnect();
+    closeSettings(); openSettings();
   });
 
   // close on outside click
@@ -3367,10 +3782,28 @@ Classics.solitaire = (body, win) => {
 // ════════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════════
-function init(){
+async function init(){
   applyTheme(state.theme);
   updateDock();
   document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
+
+  // Try to reconnect to the previously-picked folder. If still granted, this
+  // sets state.fsHandle; if 'prompt', it parks the handle for re-grant via Settings.
+  // Either way, we don't block boot — fire-and-forget.
+  fsReconnect().then(async (ok) => {
+    if (!ok) return;
+    // If the folder's state.json is newer than localStorage's last sync, hydrate.
+    const hydrated = await fsHydrateIfNewer();
+    if (hydrated){
+      applyTheme(state.theme);
+      document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
+      renderIcons();
+      updateDock();
+    } else {
+      // Local state wins → push current state up to the file
+      await fsWriteState().catch(() => {});
+    }
+  }).catch(e => console.warn('fs boot reconnect failed:', e));
 
   // One-time sanity pass: drop any saved icon positions that fall outside the
   // current viewport's grid. Stale entries can sneak in from older builds where
@@ -3443,7 +3876,10 @@ if (document.readyState === 'loading'){
   init();
 }
 
-// Expose for debugging / future cross-tab API (per CONV.md)
+// Expose for debugging / future cross-tab API (per CONV.md).
+// Same-origin "system" apps (like the file explorer) reach into nakliOS.fs.*
+// directly. Third-party apps must go through the postMessage SDK
+// (sdk/naklios.js) — that route is namespace-enforced.
 window.nakliOS = {
   state, APPS, THEMES, FOLDERS,
   applyTheme, openApp, openFolder, openSpotlight, openSettings,
@@ -3452,6 +3888,13 @@ window.nakliOS = {
   moveAppToDesktop, isInFolder,
   addSticky, deleteSticky, openCheatSheet,
   minimizeWindow,
+  // Filesystem — system-app access (no namespace enforcement).
+  fs: {
+    read: fsRead, readBinary: fsReadBinary,
+    write: fsWrite, append: fsAppend,
+    list: fsList, delete: fsDelete, exists: fsExists,
+  },
+  fsConnect, fsDisconnect, fsRegrantPending,
 };
 </script>
 </body>

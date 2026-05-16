@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Files — nakliOS</title>
+<meta name="description" content="Browse the folder nakliOS saves to.">
+<style>
+:root{
+  --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
+  --brand:#c8512a; --row:#221a13;
+  --muted:color-mix(in srgb, var(--ink) 60%, var(--body));
+  --faint:color-mix(in srgb, var(--ink) 30%, var(--body));
+  --line:color-mix(in srgb, var(--ink) 14%, transparent);
+  --line-strong:color-mix(in srgb, var(--ink) 30%, transparent);
+}
+*{box-sizing:border-box;}
+html,body{margin:0; padding:0; height:100%; background:var(--body); color:var(--ink);
+  font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size:13px;}
+body{display:flex; flex-direction:column;}
+header{
+  display:flex; align-items:center; gap:12px;
+  padding:8px 14px; background:var(--panel);
+  border-bottom:1px solid var(--line); flex:0 0 auto;
+}
+header h1{margin:0; font-size:14px; font-weight:700;}
+header .folder{color:var(--muted); font-size:12px;}
+header .spacer{flex:1;}
+button{
+  background:var(--row); color:var(--ink); border:1px solid var(--line);
+  padding:4px 10px; font-size:12px; border-radius:6px; cursor:pointer;
+  font-family:inherit;
+}
+button:hover{background:color-mix(in srgb, var(--brand) 18%, var(--row));}
+button.danger:hover{background:color-mix(in srgb, #d94545 30%, var(--row)); color:#fff;}
+.main{flex:1; display:flex; min-height:0;}
+.sidebar{
+  width:260px; flex:0 0 auto; overflow:auto;
+  background:color-mix(in srgb, var(--panel) 70%, var(--body));
+  border-right:1px solid var(--line);
+  padding:8px 0;
+}
+.tree-node{
+  display:flex; align-items:center; gap:6px;
+  padding:5px 12px; cursor:pointer; user-select:none;
+  font-size:12px; color:var(--ink);
+}
+.tree-node:hover{background:var(--row);}
+.tree-node.active{background:color-mix(in srgb, var(--brand) 22%, var(--panel)); color:var(--ink);}
+.tree-node .chev{
+  width:12px; display:inline-block; text-align:center; color:var(--muted);
+  transition:transform 0.12s;
+}
+.tree-node.expanded .chev{transform:rotate(90deg);}
+.tree-node .icon{font-size:13px; opacity:0.8;}
+.tree-children{margin-left:14px;}
+.body{flex:1; display:flex; flex-direction:column; min-width:0;}
+.toolbar{
+  display:flex; align-items:center; gap:8px;
+  padding:6px 14px; background:var(--panel);
+  border-bottom:1px solid var(--line); flex:0 0 auto;
+  font-size:11px; color:var(--muted);
+}
+.toolbar .crumbs{flex:1;}
+.toolbar .crumbs span{color:var(--ink);}
+.list{flex:1; overflow:auto;}
+.list-row{
+  display:flex; align-items:center; gap:10px;
+  padding:6px 14px; cursor:default;
+  border-bottom:1px solid color-mix(in srgb, var(--line) 50%, transparent);
+}
+.list-row:hover{background:color-mix(in srgb, var(--row) 60%, transparent);}
+.list-row.selected{background:color-mix(in srgb, var(--brand) 18%, var(--panel));}
+.list-row .name{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.list-row .size{color:var(--muted); font-size:11px; min-width:80px; text-align:right; font-variant-numeric:tabular-nums;}
+.list-row .icon{opacity:0.8; min-width:18px; text-align:center;}
+.preview{
+  flex:0 0 auto; max-height:40%; min-height:140px; overflow:auto;
+  border-top:1px solid var(--line-strong);
+  background:var(--panel);
+  padding:10px 14px; font-size:12px;
+}
+.preview h3{margin:0 0 6px; font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.05em;}
+.preview pre{margin:0; white-space:pre-wrap; word-wrap:break-word; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; color:var(--ink);}
+.preview img{max-width:100%; max-height:300px; border-radius:6px;}
+.preview .meta{color:var(--muted); font-size:11px;}
+.preview .meta span{margin-right:14px;}
+.empty{
+  flex:1; display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:13px; padding:40px;
+  text-align:center;
+}
+.empty .btn-cta{
+  display:inline-block; margin-top:14px;
+  padding:8px 16px; background:var(--brand); color:var(--panel);
+  border-radius:8px; cursor:pointer; font-weight:600; font-size:12px;
+}
+.context-menu{
+  position:fixed; z-index:1000;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.35); padding:4px 0; min-width:160px;
+}
+.context-menu button{
+  display:block; width:100%; text-align:left;
+  padding:6px 14px; background:none; border:none; border-radius:0;
+  color:var(--ink); font-size:12px; cursor:pointer;
+}
+.context-menu button:hover{background:var(--row);}
+.context-menu button.danger{color:#e88;}
+.context-menu .sep{height:1px; background:var(--line); margin:4px 0;}
+footer{
+  flex:0 0 auto; padding:6px 14px;
+  background:var(--panel); border-top:1px solid var(--line);
+  color:var(--muted); font-size:11px;
+  display:flex; gap:12px;
+}
+footer .spacer{flex:1;}
+</style>
+</head>
+<body>
+<!-- naklios.js SDK — vendored inline. Defined before the main script so
+     naklios.title() / naklios.ready() are available when refresh() runs. -->
+<script>
+(function(){
+  var inNakliOS = false;
+  try { inNakliOS = !!(window.parent && window.parent !== window); } catch(_){}
+  function send(type, data){
+    if (!inNakliOS) return;
+    try { window.parent.postMessage(Object.assign({ type: type }, data || {}), '*'); } catch(_){}
+  }
+  window.naklios = {
+    ready: function(){ send('naklios:ready'); },
+    title: function(s){ send('naklios:title', { title: String(s) }); },
+    close: function(){ send('naklios:close'); },
+  };
+})();
+</script>
+
+<header>
+  <h1>📁 Files</h1>
+  <span class="folder" id="folder-name">—</span>
+  <span class="spacer"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<div class="main">
+  <aside class="sidebar" id="tree"></aside>
+  <div class="body">
+    <div class="toolbar">
+      <span class="crumbs" id="crumbs">/</span>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="preview" id="preview" hidden></div>
+  </div>
+</div>
+<footer>
+  <span id="status">Loading…</span>
+  <span class="spacer"></span>
+  <span>nakliOS · Files</span>
+</footer>
+
+<script>
+(function(){
+'use strict';
+
+// Privileged system app: same-origin with nakliOS, so it reaches into the
+// host's exposed nakliOS.fs.* directly (no SDK postMessage round-trip).
+// Third-party apps use sdk/naklios.js — namespace-enforced.
+
+const host = window.parent && window.parent !== window ? window.parent : null;
+const $ = id => document.getElementById(id);
+
+let currentPath = '';     // selected folder, '' = root
+let selectedFile = null;  // selected file path (full from root)
+let expanded = new Set(); // expanded folder paths
+let listing = [];         // current dir entries
+
+function setStatus(text){ $('status').textContent = text; }
+function fmtSize(bytes){
+  if (bytes == null) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  if (bytes < 1024*1024*1024) return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  return (bytes/(1024*1024*1024)).toFixed(2) + ' GB';
+}
+function fmtDate(ts){
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleString();
+}
+function fmtPath(p){ return '/' + p; }
+
+async function isDir(path){
+  const list = await host.nakliOS.fs.list(path).catch(() => null);
+  return Array.isArray(list);
+}
+// Use a simpler heuristic: trailing slash from fsList means directory.
+function isDirEntry(name){ return name.endsWith('/'); }
+function basename(p){ return p.split('/').filter(Boolean).pop() || ''; }
+function parent(p){
+  const segs = p.split('/').filter(Boolean);
+  segs.pop();
+  return segs.join('/');
+}
+
+function notConnected(){
+  $('list').innerHTML = '';
+  $('preview').hidden = true;
+  $('tree').innerHTML = '';
+  document.querySelector('.body').innerHTML = `
+    <div class="empty">
+      <div>
+        No folder is connected to nakliOS yet.<br>
+        Open Settings (⚙ in the topbar) → Folder sync → Connect folder.
+        <br><br>
+        This file explorer browses whatever folder you pick. Without it, there's nothing to see.
+      </div>
+    </div>
+  `;
+  $('status').textContent = 'Not connected';
+}
+
+async function refresh(){
+  if (!host || !host.nakliOS){
+    notConnected();
+    return;
+  }
+  if (!host.nakliOS.state.fsHandle){
+    notConnected();
+    return;
+  }
+  const name = host.nakliOS.state.fsFolderName || '(folder)';
+  $('folder-name').textContent = name;
+  naklios.title('Files — ' + name);
+  await renderTree();
+  await openPath(currentPath);
+}
+
+async function renderTree(){
+  const root = $('tree');
+  root.innerHTML = '';
+  await renderTreeNode(root, '', 'root', '📁');
+}
+
+async function renderTreeNode(parentEl, path, label, icon){
+  let entries = [];
+  try { entries = await host.nakliOS.fs.list(path); } catch(_){}
+  const dirs = entries.filter(isDirEntry).map(d => d.replace(/\/$/, ''));
+
+  const node = document.createElement('div');
+  node.className = 'tree-node';
+  node.dataset.path = path;
+  if (path === currentPath) node.classList.add('active');
+  if (expanded.has(path) || path === '') node.classList.add('expanded');
+
+  const hasChildren = dirs.length > 0;
+  const chev = hasChildren ? '▸' : ' ';
+  const displayLabel = label === 'root' ? (host.nakliOS.state.fsFolderName || 'root') : label;
+  node.innerHTML = `
+    <span class="chev">${chev}</span>
+    <span class="icon">${icon}</span>
+    <span class="label">${displayLabel}</span>
+  `;
+  node.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (expanded.has(path)) expanded.delete(path);
+    else expanded.add(path);
+    document.querySelectorAll('.tree-node.active').forEach(n => n.classList.remove('active'));
+    node.classList.add('active');
+    currentPath = path;
+    await openPath(path);
+    await renderTree();
+  });
+  parentEl.appendChild(node);
+
+  if ((expanded.has(path) || path === '') && hasChildren){
+    const children = document.createElement('div');
+    children.className = 'tree-children';
+    for (const dir of dirs){
+      const fullPath = path ? `${path}/${dir}` : dir;
+      const dirIcon = path === '' && dir === 'apps' ? '📂' : '📁';
+      await renderTreeNode(children, fullPath, dir, dirIcon);
+    }
+    parentEl.appendChild(children);
+  }
+}
+
+async function openPath(path){
+  currentPath = path;
+  $('crumbs').innerHTML = path
+    ? `<span>${'/' + path.split('/').join(' / ')}</span>`
+    : '<span>/</span>';
+
+  let entries = [];
+  try { entries = await host.nakliOS.fs.list(path); }
+  catch (e){ setStatus('Error: ' + e.message); return; }
+
+  // Sort: directories first, alphabetical within each
+  const dirs = entries.filter(isDirEntry).sort();
+  const files = entries.filter(e => !isDirEntry(e)).sort();
+  listing = [...dirs, ...files];
+
+  const list = $('list');
+  list.innerHTML = '';
+  if (!listing.length){
+    list.innerHTML = '<div class="empty"><div>This folder is empty.</div></div>';
+    setStatus(`${dirs.length} folders · 0 files`);
+    return;
+  }
+
+  for (const entry of listing){
+    const fullPath = path ? `${path}/${entry.replace(/\/$/, '')}` : entry.replace(/\/$/, '');
+    const isDir = isDirEntry(entry);
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    row.dataset.path = fullPath;
+    row.dataset.isDir = isDir ? '1' : '0';
+    row.innerHTML = `
+      <span class="icon">${isDir ? '📁' : iconFor(entry)}</span>
+      <span class="name">${entry.replace(/\/$/, '')}</span>
+      <span class="size" id="size-${cssEscape(fullPath)}"></span>
+    `;
+    row.addEventListener('click', () => selectRow(row));
+    row.addEventListener('dblclick', async () => {
+      if (isDir){
+        expanded.add(fullPath);
+        currentPath = fullPath;
+        await openPath(fullPath);
+        await renderTree();
+      } else {
+        await previewFile(fullPath);
+      }
+    });
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, fullPath, isDir);
+    });
+    list.appendChild(row);
+
+    // Lazy-load file size
+    if (!isDir){
+      readFileSize(fullPath).then(sz => {
+        const el = document.getElementById(`size-${cssEscape(fullPath)}`);
+        if (el) el.textContent = fmtSize(sz);
+      }).catch(() => {});
+    }
+  }
+
+  setStatus(`${dirs.length} folders · ${files.length} files`);
+}
+
+function cssEscape(s){ return s.replace(/[^a-zA-Z0-9]/g, '_'); }
+
+function iconFor(name){
+  if (name.endsWith('.json')) return '🗂️';
+  if (name.endsWith('.jsonl')) return '📜';
+  if (name.endsWith('.md') || name.endsWith('.txt')) return '📝';
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return '🖼️';
+  if (/\.(mp3|wav|ogg|m4a|flac)$/i.test(name)) return '🎵';
+  if (/\.(mp4|mov|webm|avi)$/i.test(name)) return '🎬';
+  return '📄';
+}
+
+async function readFileSize(path){
+  // Use fsHandle directly to get a FileHandle + Blob.size without reading content
+  try {
+    const handle = await walkToFile(path);
+    const file = await handle.getFile();
+    return file.size;
+  } catch(_){ return null; }
+}
+
+async function walkToFile(path){
+  const segs = path.split('/').filter(Boolean);
+  let dir = host.nakliOS.state.fsHandle;
+  for (let i = 0; i < segs.length - 1; i++){
+    dir = await dir.getDirectoryHandle(segs[i]);
+  }
+  return await dir.getFileHandle(segs[segs.length - 1]);
+}
+
+function selectRow(row){
+  document.querySelectorAll('.list-row.selected').forEach(r => r.classList.remove('selected'));
+  row.classList.add('selected');
+  const path = row.dataset.path;
+  selectedFile = row.dataset.isDir === '1' ? null : path;
+  if (selectedFile) previewFile(selectedFile);
+  else $('preview').hidden = true;
+}
+
+async function previewFile(path){
+  const pv = $('preview');
+  pv.hidden = false;
+  pv.innerHTML = `<h3>Preview · ${basename(path)}</h3><div class="meta">Loading…</div>`;
+  try {
+    const fh = await walkToFile(path);
+    const file = await fh.getFile();
+    const meta = `<div class="meta">
+      <span>${fmtSize(file.size)}</span>
+      <span>${fmtDate(file.lastModified)}</span>
+      <span>${fmtPath(path)}</span>
+    </div>`;
+
+    // Choose preview by extension/type
+    if (file.size > 1024 * 1024) {
+      pv.innerHTML = `<h3>Preview · ${basename(path)}</h3>${meta}<div class="meta" style="margin-top:8px;">File is over 1 MB — preview skipped.</div>`;
+      return;
+    }
+    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) {
+      const url = URL.createObjectURL(file);
+      pv.innerHTML = `<h3>Preview · ${basename(path)}</h3>${meta}<img src="${url}" alt="">`;
+      return;
+    }
+    const text = await file.text();
+    let formatted = text;
+    if (path.endsWith('.json')) {
+      try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch(_){}
+    }
+    pv.innerHTML = `<h3>Preview · ${basename(path)}</h3>${meta}<pre>${escapeHtml(formatted)}</pre>`;
+  } catch (e){
+    pv.innerHTML = `<h3>Preview · ${basename(path)}</h3><div class="meta">Error: ${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s){
+  return s.replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
+}
+
+function showContextMenu(x, y, path, isDir){
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.id = 'ctx-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  const inner = [];
+  if (!isDir){
+    inner.push(`<button id="ctx-open">Open / preview</button>`);
+    inner.push(`<button id="ctx-download">Download…</button>`);
+    inner.push(`<div class="sep"></div>`);
+  }
+  inner.push(`<button id="ctx-delete" class="danger">Delete…</button>`);
+  menu.innerHTML = inner.join('');
+  document.body.appendChild(menu);
+
+  menu.querySelector('#ctx-open')?.addEventListener('click', () => {
+    closeContextMenu();
+    previewFile(path);
+  });
+  menu.querySelector('#ctx-download')?.addEventListener('click', async () => {
+    closeContextMenu();
+    try {
+      const fh = await walkToFile(path);
+      const file = await fh.getFile();
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url; a.download = basename(path); document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e){ alert('Download failed: ' + e.message); }
+  });
+  menu.querySelector('#ctx-delete')?.addEventListener('click', async () => {
+    closeContextMenu();
+    if (!confirm(`Delete ${fmtPath(path)}?\n\nThis cannot be undone.`)) return;
+    try {
+      await host.nakliOS.fs.delete(path);
+      await refresh();
+    } catch (e){ alert('Delete failed: ' + e.message); }
+  });
+
+  setTimeout(() => document.addEventListener('pointerdown', closeContextMenuOnOutside, true), 0);
+}
+function closeContextMenu(){
+  document.getElementById('ctx-menu')?.remove();
+  document.removeEventListener('pointerdown', closeContextMenuOnOutside, true);
+}
+function closeContextMenuOnOutside(e){
+  const menu = document.getElementById('ctx-menu');
+  if (menu && !menu.contains(e.target)) closeContextMenu();
+}
+
+// Wire toolbar
+$('refresh').addEventListener('click', () => refresh());
+
+// Boot
+refresh().catch(e => setStatus('Error: ' + e.message)).then(() => naklios.ready());
+
+})();
+</script>
+</body>
+</html>
