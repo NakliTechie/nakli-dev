@@ -528,6 +528,34 @@ body.is-mobile .nw-dock{display:none;}
   margin-right:4px; font-weight:600;
 }
 
+/* ── LOADING SKELETON (iframe windows) ── */
+.nw-skeleton{
+  position:absolute; inset:0; z-index:10;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; background:var(--panel); color:var(--ink);
+  pointer-events:none;
+}
+.nw-skeleton-svg{
+  width:56px; height:56px; opacity:0.7;
+  stroke:currentColor; fill:none; stroke-width:2;
+  stroke-linecap:round; stroke-linejoin:round;
+}
+.nw-skeleton-glyph{font-size:42px; opacity:0.7;}
+.nw-skeleton-name{font-size:13px; color:var(--muted); font-weight:600;}
+.nw-skeleton-bar{
+  width:120px; height:3px; border-radius:3px;
+  background:var(--line); overflow:hidden; position:relative;
+}
+.nw-skeleton-bar::after{
+  content:''; position:absolute; left:-40%; top:0; bottom:0;
+  width:40%; border-radius:3px; background:var(--brand);
+  animation:nw-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes nw-shimmer{
+  0%   { transform:translateX(0); }
+  100% { transform:translateX(350%); }
+}
+
 /* ── CHEAT SHEET ── */
 .nw-cheat-scrim{
   position:fixed; inset:0; z-index:1500;
@@ -908,7 +936,7 @@ const APPS = [
   { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
     description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'basic',
     svg:`<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8" cy="9" r="1.5"/><polyline points="21 14 14 9 4 16"/><path d="M16 19l-1 2 3-1z"/><path d="M16 19l4-4"/>` },
-  { id:'tijori', name:'Tijori', url:'https://naklitechie.github.io/Tijori/', glyph:'🔐', bg:'brand',
+  { id:'tijori', name:'Tijori', url:'https://tijori.naklitechie.com/', glyph:'🔐', bg:'brand',
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
     svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
@@ -1794,6 +1822,17 @@ function spawnIframeWindow(app){
     badge:'EXPERIMENTAL', sandboxed:true,
   });
   const body = win.querySelector('.nw-body');
+
+  // Loading skeleton — removed on naklos:ready or after a 5s fallback.
+  const skel = document.createElement('div');
+  skel.className = 'nw-skeleton';
+  const iconHTML = app.svg
+    ? `<svg class="nw-skeleton-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>`
+    : `<div class="nw-skeleton-glyph">${app.glyph || app.name.charAt(0)}</div>`;
+  skel.innerHTML = `${iconHTML}<div class="nw-skeleton-name">${app.name}</div><div class="nw-skeleton-bar"></div>`;
+  body.appendChild(skel);
+  win._skeletonTimeout = setTimeout(() => skel.remove(), 5000);
+
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-popups allow-forms allow-downloads');
   iframe.setAttribute('referrerpolicy', 'no-referrer');
@@ -1814,14 +1853,23 @@ window.addEventListener('message', e => {
   if (!knownIframes.has(e.source)) return;
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
-  if (msg.type === 'naklos:close'){
+  const findWin = () => {
     const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
       .find(f => f.contentWindow === e.source);
-    if (iframe) closeWindow(iframe.closest('.nw-window'));
+    return iframe ? iframe.closest('.nw-window') : null;
+  };
+  if (msg.type === 'naklos:ready'){
+    const win = findWin();
+    if (win){
+      clearTimeout(win._skeletonTimeout);
+      win.querySelector('.nw-skeleton')?.remove();
+    }
+  } else if (msg.type === 'naklos:close'){
+    const win = findWin();
+    if (win) closeWindow(win);
   } else if (msg.type === 'naklos:title' && typeof msg.title === 'string'){
-    const iframe = Array.from(document.querySelectorAll('.nw-window iframe'))
-      .find(f => f.contentWindow === e.source);
-    if (iframe) iframe.closest('.nw-window').querySelector('.nw-title').textContent = msg.title;
+    const win = findWin();
+    if (win) win.querySelector('.nw-title').textContent = msg.title;
   } else if (msg.type === 'naklos:theme-request'){
     // App is asking for the current theme (e.g., late-loading app missed the load event)
     const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
