@@ -32,7 +32,7 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
 
 1. Add an entry to [`apps/manifest.json`](apps/manifest.json) pointing at the upstream repo/branch/file.
 2. Set `embedUrl: 'https://naklios.dev/apps/<id>/'` on the app's `APPS` entry in `index.html`.
-3. In the upstream source repo, add a small dispatcher workflow at `.github/workflows/notify-naklos.yml`:
+3. In the upstream source repo, add a small dispatcher workflow at `.github/workflows/notify-naklios.yml`:
 
    ```yaml
    name: Notify naklOS to re-mirror
@@ -46,10 +46,10 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
        steps:
          - run: gh workflow run sync-mirrors.yml --repo NakliTechie/nakli-dev --ref main
            env:
-             GH_TOKEN: ${{ secrets.NAKLOS_DISPATCH_TOKEN }}
+             GH_TOKEN: ${{ secrets.NAKLIOS_DISPATCH_TOKEN }}
    ```
 
-4. In that same source repo, add the secret `NAKLOS_DISPATCH_TOKEN` (Settings → Secrets and variables → Actions). It's a fine-grained PAT with **Actions: Read and write** on `NakliTechie/nakli-dev`. The same PAT can be reused across every source repo.
+4. In that same source repo, add the secret `NAKLIOS_DISPATCH_TOKEN` (Settings → Secrets and variables → Actions). It's a fine-grained PAT with **Actions: Read and write** on `NakliTechie/nakli-dev`. The same PAT can be reused across every source repo.
 
 5. Run `bash scripts/sync-mirrors.sh` locally once to seed the initial mirror, then commit.
 

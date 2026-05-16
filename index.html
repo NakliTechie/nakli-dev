@@ -1068,7 +1068,7 @@ const FOLDERED_APP_IDS = new Set(FOLDERS.flatMap(f => f.apps));
 // ════════════════════════════════════════════════════════════════════
 // THEMES — the OS color scheme. Each theme bundles a palette (UI tints)
 // with a wallpaper gradient (desktop bg). One picker, no fragmentation.
-// Apps in Immersive mode inherit the theme via ?nakliOS-theme=<id> on the iframe URL.
+// Apps in Immersive mode inherit the theme via ?naklios-theme=<id> on the iframe URL.
 // ════════════════════════════════════════════════════════════════════
 const THEMES = [
   { id:'aurora', name:'Aurora', mood:'dark',
@@ -1237,7 +1237,7 @@ function applyTheme(id){
   localStorage.setItem(LS_KEY.theme, t.id);
   // Update any open iframe windows so apps that listen can re-theme
   document.querySelectorAll('.nw-window iframe').forEach(f => {
-    try { f.contentWindow.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
+    try { f.contentWindow.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
   });
 }
 
@@ -1748,7 +1748,7 @@ function closeWindow(win){
   delete openWindows[id];
   const iframe = win.querySelector('iframe');
   if (iframe){
-    try { iframe.contentWindow.postMessage({ type:'naklos:beforeclose' }, '*'); } catch(_){}
+    try { iframe.contentWindow.postMessage({ type:'naklios:beforeclose' }, '*'); } catch(_){}
     knownIframes.delete(iframe.contentWindow);
   }
   win.remove();
@@ -1819,7 +1819,7 @@ function themedAppUrl(app){
   // fall back to app.url (canonical, cross-origin). Same-origin enables FSA picker etc.
   const base = app.embedUrl || app.url;
   const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}nakliOS-theme=${encodeURIComponent(state.theme)}`;
+  return `${base}${sep}naklios-theme=${encodeURIComponent(state.theme)}`;
 }
 
 function spawnIframeWindow(app){
@@ -1836,7 +1836,7 @@ function spawnIframeWindow(app){
   });
   const body = win.querySelector('.nw-body');
 
-  // Loading skeleton — removed on naklos:ready or after a 5s fallback.
+  // Loading skeleton — removed on naklios:ready or after a 5s fallback.
   const skel = document.createElement('div');
   skel.className = 'nw-skeleton';
   const iconHTML = app.svg
@@ -1859,7 +1859,7 @@ function spawnIframeWindow(app){
       knownIframes.add(iframe.contentWindow);
       // Send the theme so any listening app can apply it
       const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
-      iframe.contentWindow.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*');
+      iframe.contentWindow.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*');
     } catch(_){}
   });
 }
@@ -1873,22 +1873,22 @@ window.addEventListener('message', e => {
       .find(f => f.contentWindow === e.source);
     return iframe ? iframe.closest('.nw-window') : null;
   };
-  if (msg.type === 'naklos:ready'){
+  if (msg.type === 'naklios:ready'){
     const win = findWin();
     if (win){
       clearTimeout(win._skeletonTimeout);
       win.querySelector('.nw-skeleton')?.remove();
     }
-  } else if (msg.type === 'naklos:close'){
+  } else if (msg.type === 'naklios:close'){
     const win = findWin();
     if (win) closeWindow(win);
-  } else if (msg.type === 'naklos:title' && typeof msg.title === 'string'){
+  } else if (msg.type === 'naklios:title' && typeof msg.title === 'string'){
     const win = findWin();
     if (win) win.querySelector('.nw-title').textContent = msg.title;
-  } else if (msg.type === 'naklos:theme-request'){
+  } else if (msg.type === 'naklios:theme-request'){
     // App is asking for the current theme (e.g., late-loading app missed the load event)
     const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
-    try { e.source.postMessage({ type:'naklos:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
+    try { e.source.postMessage({ type:'naklios:theme', theme:t.id, colors:t.colors, mood:t.mood }, '*'); } catch(_){}
   }
 });
 

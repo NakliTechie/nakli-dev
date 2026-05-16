@@ -3,7 +3,7 @@ name: Sync app mirrors
 # Pulls the latest index.html for each app in apps/manifest.json and opens a PR
 # if anything changed. Triggered by:
 #   - source repos pushing to their main branch (via `gh workflow run` in their
-#     own CI — see e.g. NakliTechie/Tijori .github/workflows/notify-naklos.yml)
+#     own CI — see e.g. NakliTechie/Tijori .github/workflows/notify-naklios.yml)
 #   - manual: Actions tab → "Sync app mirrors" → "Run workflow"
 # No schedule — apps change infrequently and the push-trigger from source repos
 # keeps mirrors fresh within a minute of any upstream change.

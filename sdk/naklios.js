@@ -1,21 +1,21 @@
 /*!
- * naklos.js — cooperative SDK for apps hosted inside naklOS (Immersive mode)
+ * naklios.js — cooperative SDK for apps hosted inside naklOS (Immersive mode)
  *
  * Drop this file into your app's <head> or copy its contents inline. The
  * surface is a no-op when the app loads standalone (window.parent === window),
  * so the same source works in both contexts:
  *
- *   <script src="https://naklios.dev/sdk/naklos.js"></script>
+ *   <script src="https://naklios.dev/sdk/naklios.js"></script>
  *   <script>
- *     naklos.ready();                          // signal "I'm loaded"
- *     naklos.title('My app — unlocked');       // update host window title
- *     naklos.close();                          // self-close from a Done button
- *     naklos.theme.onChange(t => paint(t));    // restyle on host theme change
+ *     naklios.ready();                          // signal "I'm loaded"
+ *     naklios.title('My app — unlocked');       // update host window title
+ *     naklios.close();                          // self-close from a Done button
+ *     naklios.theme.onChange(t => paint(t));    // restyle on host theme change
  *   </script>
  *
- * naklos.capabilities.hosted is true only when running inside naklOS.
+ * naklios.capabilities.hosted is true only when running inside naklOS.
  *
- * Single source of truth: /Users/chiragpatnaik/Code/Browser/naklOS/sdk/naklos.js
+ * Single source of truth: /Users/chiragpatnaik/Code/Browser/naklOS/sdk/naklios.js
  * Vendor it inline in each app to keep the no-network-dependency ethos.
  * License: MIT.
  */
@@ -38,25 +38,25 @@
   window.addEventListener('message', function (e) {
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 'naklos:theme') {
+    if (msg.type === 'naklios:theme') {
       currentTheme = { id: msg.theme, colors: msg.colors, mood: msg.mood };
       themeListeners.forEach(function (cb) {
         try { cb(currentTheme); } catch (_) {}
       });
-    } else if (msg.type === 'naklos:beforeclose') {
+    } else if (msg.type === 'naklios:beforeclose') {
       if (beforeCloseCb) { try { beforeCloseCb(); } catch (_) {} }
     }
   });
 
-  window.naklos = {
+  window.naklios = {
     version: 1,
     capabilities: {
       hosted: inNaklOS,
       version: 1,
     },
-    ready: function () { send('naklos:ready'); },
-    title: function (s) { send('naklos:title', { title: String(s) }); },
-    close: function () { send('naklos:close'); },
+    ready: function () { send('naklios:ready'); },
+    title: function (s) { send('naklios:title', { title: String(s) }); },
+    close: function () { send('naklios:close'); },
     beforeClose: function (cb) { beforeCloseCb = typeof cb === 'function' ? cb : null; },
     theme: {
       get current() { return currentTheme; },
@@ -66,7 +66,7 @@
         if (currentTheme) { try { cb(currentTheme); } catch (_) {} }
         return function () { themeListeners.delete(cb); };
       },
-      request: function () { send('naklos:theme-request'); },
+      request: function () { send('naklios:theme-request'); },
     },
   };
 })();

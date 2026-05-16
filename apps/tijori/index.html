@@ -1007,8 +1007,8 @@ textarea { resize: vertical; min-height: 80px; }
   <a href="https://github.com/NakliTechie/Tijori">⌨ Source</a>
 </div>
 
-<!-- naklos.js SDK — vendored inline. Standalone-safe (no-op when window === window.parent).
-     Canonical source: https://github.com/NakliTechie/nakli-dev/blob/main/sdk/naklos.js -->
+<!-- naklios.js SDK — vendored inline. Standalone-safe (no-op when window === window.parent).
+     Canonical source: https://github.com/NakliTechie/nakli-dev/blob/main/sdk/naklios.js -->
 <script>
 (function(){
   var inNaklOS = false;
@@ -1023,19 +1023,19 @@ textarea { resize: vertical; min-height: 80px; }
   window.addEventListener('message', function(e){
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 'naklos:theme'){
+    if (msg.type === 'naklios:theme'){
       currentTheme = { id: msg.theme, colors: msg.colors, mood: msg.mood };
       themeListeners.forEach(function(cb){ try { cb(currentTheme); } catch(_){} });
-    } else if (msg.type === 'naklos:beforeclose'){
+    } else if (msg.type === 'naklios:beforeclose'){
       if (beforeCloseCb){ try { beforeCloseCb(); } catch(_){} }
     }
   });
-  window.naklos = {
+  window.naklios = {
     version: 1,
     capabilities: { hosted: inNaklOS, version: 1 },
-    ready: function(){ send('naklos:ready'); },
-    title: function(s){ send('naklos:title', { title: String(s) }); },
-    close: function(){ send('naklos:close'); },
+    ready: function(){ send('naklios:ready'); },
+    title: function(s){ send('naklios:title', { title: String(s) }); },
+    close: function(){ send('naklios:close'); },
     beforeClose: function(cb){ beforeCloseCb = typeof cb === 'function' ? cb : null; },
     theme: {
       get current(){ return currentTheme; },
@@ -1045,7 +1045,7 @@ textarea { resize: vertical; min-height: 80px; }
         if (currentTheme) { try { cb(currentTheme); } catch(_){} }
         return function(){ themeListeners.delete(cb); };
       },
-      request: function(){ send('naklos:theme-request'); },
+      request: function(){ send('naklios:theme-request'); },
     },
   };
 })();
@@ -1515,7 +1515,7 @@ function lock() {
   $('unlock-pass').value = '';
   hideAllModals();
   showScreen('unlock');
-  naklos.title('Tijori');
+  naklios.title('Tijori');
 }
 
 function resetIdleTimer() {
@@ -2485,7 +2485,7 @@ async function handleCreateVault() {
     await createVault(dir, pw, label);
     $('create-password').value = ''; $('create-password2').value = '';
     showScreen('vault'); toast('Vault created!');
-    naklos.title('Tijori — unlocked');
+    naklios.title('Tijori — unlocked');
   } catch (e) { toast(e.message, { error: true }); }
   finally { btn.disabled = false; btn.textContent = 'Create vault'; }
 }
@@ -2502,7 +2502,7 @@ async function handleUnlock() {
     await unlockVault(S.dirHandle, pw);
     $('unlock-pass').value = ''; hint.textContent = '';
     showScreen('vault');
-    naklos.title('Tijori — unlocked');
+    naklios.title('Tijori — unlocked');
   } catch (e) {
     hint.textContent = e.message;
     hint.style.color = 'var(--danger)';
@@ -2521,7 +2521,7 @@ async function handleRegisterDevice() {
     await registerDevice(S.dirHandle, pw, S.deviceId, label);
     $('register-password').value = '';
     showScreen('vault'); toast('Device registered!');
-    naklos.title('Tijori — unlocked');
+    naklios.title('Tijori — unlocked');
   } catch (e) { toast(e.message, { error: true }); }
   finally { btn.disabled = false; btn.textContent = 'Register device'; }
 }
@@ -2957,7 +2957,7 @@ function stopQrReceive() {
   if (_qrStream) { _qrStream.getTracks().forEach(t => t.stop()); _qrStream = null; }
 }
 
-init().finally(() => naklos.ready());
+init().finally(() => naklios.ready());
 </script>
 </body>
 </html>
