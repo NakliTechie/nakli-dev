@@ -11,9 +11,21 @@
  *     naklios.title('My app — unlocked');       // update host window title
  *     naklios.close();                          // self-close from a Done button
  *     naklios.theme.onChange(t => paint(t));    // restyle on host theme change
+ *
+ *     // Filesystem (when hosted with a connected folder):
+ *     if (naklios.capabilities.fs){
+ *       await naklios.fs.write('vault.json', JSON.stringify(vault));
+ *       const data = await naklios.fs.read('vault.json');
+ *     }
  *   </script>
  *
  * naklios.capabilities.hosted is true only when running inside nakliOS.
+ * naklios.capabilities.fs is true only when the host has a folder connected
+ *   AND the user has granted this app permission to read/write under it.
+ *   Listen for changes via naklios.capabilities.onChange(cb).
+ *
+ * Paths in fs methods are relative to apps/<your-app-id>/ in the host folder.
+ * Traversal (../) is blocked at the host.
  *
  * Single source of truth: /Users/chiragpatnaik/Code/Browser/nakliOS/sdk/naklios.js
  * Vendor it inline in each app to keep the no-network-dependency ethos.
@@ -25,7 +37,13 @@
 
   var currentTheme = null;
   var themeListeners = new Set();
+  var capListeners = new Set();
   var beforeCloseCb = null;
+  var capabilities = { hosted: inNakliOS, version: 1, fs: false };
+
+  // Request/reply correlation for fs RPCs
+  var pendingRpc = new Map();   // requestId → { resolve, reject }
+  var rpcCounter = 0;
 
   function send(type, data) {
     if (!inNakliOS) return;
@@ -33,6 +51,22 @@
       var msg = Object.assign({ type: type }, data || {});
       window.parent.postMessage(msg, '*');
     } catch (_) {}
+  }
+
+  function rpc(type, payload) {
+    if (!inNakliOS) return Promise.reject(new Error('Not hosted — naklios.* unavailable standalone'));
+    return new Promise(function (resolve, reject) {
+      var requestId = 'r' + (++rpcCounter) + '_' + Date.now();
+      pendingRpc.set(requestId, { resolve: resolve, reject: reject });
+      send(type, Object.assign({ requestId: requestId }, payload || {}));
+      // 30s timeout — host should respond near-instantly; this is a safety net.
+      setTimeout(function () {
+        if (pendingRpc.has(requestId)) {
+          pendingRpc.delete(requestId);
+          reject(new Error('naklios RPC timeout: ' + type));
+        }
+      }, 30000);
+    });
   }
 
   window.addEventListener('message', function (e) {
@@ -45,15 +79,23 @@
       });
     } else if (msg.type === 'naklios:beforeclose') {
       if (beforeCloseCb) { try { beforeCloseCb(); } catch (_) {} }
+    } else if (msg.type === 'naklios:capabilities') {
+      if (typeof msg.fs === 'boolean') capabilities.fs = msg.fs;
+      capListeners.forEach(function (cb) {
+        try { cb(capabilities); } catch (_) {}
+      });
+    } else if (msg.type === 'naklios:fs:reply' && msg.requestId) {
+      var p = pendingRpc.get(msg.requestId);
+      if (!p) return;
+      pendingRpc.delete(msg.requestId);
+      if (msg.error) p.reject(new Error(msg.error));
+      else p.resolve(msg.result);
     }
   });
 
   window.naklios = {
     version: 1,
-    capabilities: {
-      hosted: inNakliOS,
-      version: 1,
-    },
+    capabilities: capabilities,   // mutated in place; read fields directly
     ready: function () { send('naklios:ready'); },
     title: function (s) { send('naklios:title', { title: String(s) }); },
     close: function () { send('naklios:close'); },
@@ -67,6 +109,25 @@
         return function () { themeListeners.delete(cb); };
       },
       request: function () { send('naklios:theme-request'); },
+    },
+    onCapabilitiesChange: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      capListeners.add(cb);
+      try { cb(capabilities); } catch (_) {}
+      return function () { capListeners.delete(cb); };
+    },
+    requestCapabilities: function () { send('naklios:capabilities-request'); },
+    fs: {
+      // All paths are app-relative (under apps/<your-id>/ in the host folder).
+      // Returns Promises. Reject if no folder connected, permission denied,
+      // or path tries to traverse.
+      read:       function (path)       { return rpc('naklios:fs:read', { path: path }); },
+      readBinary: function (path)       { return rpc('naklios:fs:readBinary', { path: path }); },
+      write:      function (path, data) { return rpc('naklios:fs:write', { path: path, data: data }); },
+      append:     function (path, line) { return rpc('naklios:fs:append', { path: path, line: line }); },
+      list:       function (prefix)     { return rpc('naklios:fs:list', { prefix: prefix || '' }); },
+      delete:     function (path)       { return rpc('naklios:fs:delete', { path: path }); },
+      exists:     function (path)       { return rpc('naklios:fs:exists', { path: path }); },
     },
   };
 })();
