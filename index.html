@@ -2166,8 +2166,14 @@ function spawnIframeWindow(app){
   iframe.title = app.name;
   iframe.src = embedSrc;
   body.appendChild(iframe);
+  // Register synchronously so messages posted by the iframe's first scripts
+  // (typically naklios.title / naklios.ready) aren't dropped by the host's
+  // knownIframes guard — the load event fires AFTER the iframe's sync scripts
+  // have already postMessaged.
+  try { knownIframes.add(iframe.contentWindow); } catch(_){}
   iframe.addEventListener('load', () => {
     try {
+      // Belt-and-suspenders: re-add in case the contentWindow identity changed.
       knownIframes.add(iframe.contentWindow);
       // Send the theme so any listening app can apply it
       const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
