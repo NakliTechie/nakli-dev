@@ -1,12 +1,12 @@
 name: Sync app mirrors
 
 # Pulls the latest index.html for each app in apps/manifest.json and opens a PR
-# if anything changed. Runs every 6 hours; can also be triggered manually from
-# the Actions tab via "Run workflow".
+# if anything changed. Runs once a day at 04:00 UTC; can also be triggered
+# manually from the Actions tab via "Run workflow".
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 permissions:
