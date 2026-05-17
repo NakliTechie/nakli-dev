@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Books — nakliOS</title>
+<meta name="description" content="A browser-native ePub reader for nakliOS.">
+<style>
+:root{
+  --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
+  --brand:#c8512a; --row:#221a13;
+  --muted:color-mix(in srgb, var(--ink) 60%, var(--body));
+  --line:color-mix(in srgb, var(--ink) 14%, transparent);
+}
+*{box-sizing:border-box;}
+html,body{margin:0; padding:0; height:100%; background:var(--body); color:var(--ink);
+  font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size:14px;
+  display:flex; align-items:center; justify-content:center;}
+.card{
+  max-width:520px; padding:36px 40px;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+  text-align:left;
+}
+h1{margin:0 0 6px; font-size:20px; font-weight:700;}
+.tag{
+  display:inline-block; font-size:10px; padding:2px 7px;
+  background:color-mix(in srgb, var(--brand) 30%, transparent);
+  color:var(--brand); border-radius:4px;
+  font-weight:600; text-transform:uppercase; letter-spacing:0.05em;
+  margin-bottom:14px;
+}
+p{color:var(--muted); line-height:1.55; margin:8px 0;}
+ul{margin:16px 0 0; padding-left:20px; color:var(--muted); line-height:1.7;}
+ul li{margin-bottom:4px;}
+.muted{color:var(--muted); font-size:12px; margin-top:18px;}
+code{
+  background:var(--row); padding:1px 5px; border-radius:3px;
+  font-family:ui-monospace, monospace; font-size:12px;
+  color:var(--ink);
+}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="tag">Coming soon</div>
+  <h1>📖 Books</h1>
+  <p>A browser-native reader for ePub and PDF, built for nakliOS. Drag a book in, read it where you left off, take notes in the margins.</p>
+  <p>Planned for v1:</p>
+  <ul>
+    <li>Library view — covers in a grid, sorted by recently-read</li>
+    <li>ePub + PDF rendering via <code>epub.js</code> / <code>pdf.js</code></li>
+    <li>Reading position synced across devices via the nakliOS folder</li>
+    <li>Highlights + margin notes, stored alongside each book</li>
+    <li>Reader chrome respects nakliOS theme</li>
+  </ul>
+  <p class="muted">Storage: <code>apps/books/library/*.epub</code> and <code>apps/books/notes/&lt;book-id&gt;.json</code> in your connected folder.</p>
+</div>
+
+<!-- naklios.js SDK — vendored inline so the title + ready signals work
+     when this stub is opened inside nakliOS. Standalone-safe. -->
+<script>
+(function(){
+  var inNakliOS = false;
+  try { inNakliOS = !!(window.parent && window.parent !== window); } catch(_){}
+  function send(type, data){
+    if (!inNakliOS) return;
+    try { window.parent.postMessage(Object.assign({ type: type }, data || {}), '*'); } catch(_){}
+  }
+  window.naklios = {
+    ready: function(){ send('naklios:ready'); },
+    title: function(s){ send('naklios:title', { title: String(s) }); },
+    close: function(){ send('naklios:close'); },
+  };
+  naklios.ready();
+})();
+</script>
+</body>
+</html>
