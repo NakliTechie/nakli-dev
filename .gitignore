@@ -12,6 +12,8 @@
 !scripts/*
 !.github/
 !.github/**
+!vendor/
+!vendor/**
 
 # wrangler files
 .wrangler

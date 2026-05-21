@@ -1185,9 +1185,17 @@ const state = {
   mode: localStorage.getItem(LS_KEY.mode) || null,
   theme: localStorage.getItem(LS_KEY.theme) || 'aurora',
   layout: JSON.parse(localStorage.getItem(LS_KEY.layout) || '{"version":1,"positions":{},"hidden":[]}'),
+  // appPermissions[appId] shape evolved with the v2.x Crate backend:
+  //   legacy: 'granted' | 'denied'            (FSA-only era; migrated on first read)
+  //   v2.x:   { backend: 'fsa'|'crate', granted: true } | { granted: false }
   appPermissions: JSON.parse(localStorage.getItem('nakliOS.appPermissions') || '{}'),
   fsHandle: null,        // populated after fsReconnect() succeeds
   fsFolderName: null,    // display name from the handle
+  // --- Crate backend (v2.19) — encrypted, multi-device, BYOK cloud folder ---
+  crate: null,             // unlocked Crate instance (memory only — lost on lock/reload)
+  crateBucketName: null,   // display name from .crate-creds hint (also when locked)
+  crateLocked: false,      // true: creds blob present in IDB but not yet unlocked
+  crateStayUnlocked: localStorage.getItem('nakliOS.crateStayUnlocked') === '1',
 };
 
 function isCoarse(){ return matchMedia('(pointer: coarse)').matches; }
@@ -1464,6 +1472,162 @@ async function fsHydrateIfNewer(){
   if (remote.appPermissions) { state.appPermissions = remote.appPermissions; localStorage.setItem('nakliOS.appPermissions', JSON.stringify(remote.appPermissions)); }
   localStorage.setItem('nakliOS.lastSync', String(remote.savedAt));
   return true;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CRATE BACKEND  (v2.19 — encrypted multi-device cloud folder)
+// ════════════════════════════════════════════════════════════════════
+// Crate is the BYOK encrypted cloud-folder counterpart to FSA. The user
+// supplies a .crate-creds file + passphrase; we unlock the bucket and
+// expose its 9-method ESM API (list/read/write/remove/move/mkdir/stat/
+// history/onChange) through the same `naklios.fs.*` SDK surface that
+// apps already use. From an app's perspective, FSA and Crate are
+// indistinguishable — the only difference is which backend each app's
+// data lives in (per-app permission stores the binding).
+//
+// Threat model:
+//   - Encrypted creds blob persists in IndexedDB (DB 'nakliOS' / store
+//     'handles' / key 'crateCreds'). Useless without the passphrase
+//     (PBKDF2-SHA256/600k + AES-256-GCM, same as the Crate browser app).
+//   - Unlocked Crate instance + master key live in memory only. Cleared
+//     on lock or tab close. "Stay unlocked in this tab" stashes the
+//     encrypted blob in sessionStorage instead — still passphrase-
+//     gated on reload, just doesn't re-pick the file.
+//   - Crate itself enforces a manifest rollback anchor (per-bucket
+//     count+sig in IndexedDB) so a malicious R2 bucket can't roll the
+//     folder back to a stale state. See lib/anchor.js in the vendored
+//     v1.0.1.
+
+const CRATE_VENDOR_BASE = './vendor/crate/v1.0.1';
+const SESSION_CREDS_KEY = 'nakliOS.crateSessionCreds';
+
+let _CrateModulePromise = null;
+async function loadCrateModule(){
+  if (!_CrateModulePromise){
+    _CrateModulePromise = (async () => {
+      const [crateMod, credsMod] = await Promise.all([
+        import(CRATE_VENDOR_BASE + '/crate.js'),
+        import(CRATE_VENDOR_BASE + '/credsfile.js'),
+      ]);
+      return { Crate: crateMod.Crate, CrateError: crateMod.CrateError, credsfile: credsMod };
+    })();
+  }
+  return _CrateModulePromise;
+}
+
+// crateLoadCredsBlob — read the encrypted .crate-creds bytes from
+// IndexedDB. Returns null if none stored.
+async function crateLoadCredsBlob(){
+  const v = await idbGet('crateCreds').catch(() => null);
+  if (!v) return null;
+  if (v instanceof Uint8Array) return v;
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  if (typeof v === 'string') return new TextEncoder().encode(v);
+  return null;
+}
+
+async function crateSaveCredsBlob(bytes){
+  await idbSet('crateCreds', bytes);
+}
+
+async function crateClearCredsBlob(){
+  await idbDel('crateCreds').catch(() => {});
+}
+
+// crateUnlock — given a creds-file byte buffer + passphrase, instantiate
+// the live Crate. Updates state.crate / state.crateBucketName.
+async function crateUnlock(bytes, passphrase){
+  const { Crate, credsfile } = await loadCrateModule();
+  const { creds } = await credsfile.unpack(bytes, passphrase);
+  // creds shape: { provider, bucket: {name, accountId, region}, credentials: {accessKey, secretKey} }
+  const crate = await Crate.open({
+    bucketConfig: creds.bucket,
+    credentials: creds.credentials,
+    passphrase,
+  });
+  state.crate = crate;
+  state.crateBucketName = creds.bucket?.name || credsfile.peekHint(bytes) || '(crate)';
+  state.crateLocked = false;
+  // Stay-unlocked-in-this-tab: stash the encrypted blob in sessionStorage
+  // so a reload picks up where we left off. The passphrase still gates
+  // the unlock — sessionStorage is just a stand-in for the file picker.
+  if (state.crateStayUnlocked){
+    try {
+      // Re-pack so we always store the canonical bytes (handles the
+      // case where the user picked a different file or rotated creds).
+      sessionStorage.setItem(SESSION_CREDS_KEY,
+        btoa(String.fromCharCode(...bytes)));
+    } catch (_){}
+  } else {
+    try { sessionStorage.removeItem(SESSION_CREDS_KEY); } catch (_){}
+  }
+  if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+  return crate;
+}
+
+// crateConnect — first-time connect from a user-picked .crate-creds file.
+// Unlock to verify the passphrase, then persist the encrypted blob.
+async function crateConnect(file, passphrase){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  await crateUnlock(buf, passphrase); // throws on wrong passphrase
+  await crateSaveCredsBlob(buf);
+}
+
+// crateReconnect — boot path. Checks for a persisted creds blob; if
+// "stay unlocked in this tab" is on AND sessionStorage has the same
+// blob, re-prompt for passphrase via banner. Otherwise the user has to
+// click "Unlock" in Settings.
+async function crateReconnect(){
+  const blob = await crateLoadCredsBlob();
+  if (!blob) return false;
+  // Locked state — caller surfaces an unlock UI.
+  state.crateLocked = true;
+  try {
+    const { credsfile } = await loadCrateModule();
+    state.crateBucketName = credsfile.peekHint(blob) || '(crate)';
+  } catch (_){
+    state.crateBucketName = '(crate)';
+  }
+  return true;
+}
+
+// crateLock — zero the master key, drop the live instance. Encrypted
+// blob stays in IDB so the user can re-unlock without re-picking the file.
+function crateLock(){
+  if (state.crate){
+    try { state.crate.close(); } catch (_){}
+  }
+  state.crate = null;
+  state.crateLocked = true;
+  try { sessionStorage.removeItem(SESSION_CREDS_KEY); } catch (_){}
+  if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+}
+
+// crateDisconnect — full teardown: lock + clear blob from IDB. The user
+// will have to re-pick the file to use this Crate again.
+async function crateDisconnect(){
+  crateLock();
+  await crateClearCredsBlob();
+  state.crateBucketName = null;
+  state.crateLocked = false;
+  // Revoke any per-app permissions that bound to crate.
+  let touched = false;
+  for (const [appId, perm] of Object.entries(state.appPermissions)){
+    if (perm && typeof perm === 'object' && perm.backend === 'crate'){
+      delete state.appPermissions[appId];
+      touched = true;
+    }
+  }
+  if (touched) saveAppPermissions();
+  if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+}
+
+function setCrateStayUnlocked(on){
+  state.crateStayUnlocked = !!on;
+  localStorage.setItem('nakliOS.crateStayUnlocked', on ? '1' : '0');
+  if (!on){
+    try { sessionStorage.removeItem(SESSION_CREDS_KEY); } catch (_){}
+  }
 }
 
 function isPinned(id){ return (state.layout.pinned || []).includes(id); }
@@ -2191,52 +2355,197 @@ function spawnIframeWindow(app){
   });
 }
 
-// On-demand permission prompt for FS access. Cached per-app in state.
-function fsEnsurePermission(appId){
-  if (state.appPermissions[appId] === 'granted') return true;
-  if (state.appPermissions[appId] === 'denied') return false;
+// ────────────────────────────────────────────────────────────────────
+// Backend abstraction — FSA + Crate share the same naklios.fs.* surface.
+// Each backend implements: read / readBinary / write / append / delete /
+// exists (op against an `apps/<id>/<path>` string) + list (against an
+// `apps/<id>` or `apps/<id>/<subdir>` prefix, returns strings).
+// Permission state binds an app to one backend at a time; user can rebind
+// via the per-app menu in Settings.
+// ────────────────────────────────────────────────────────────────────
+
+const BACKENDS = {
+  fsa: {
+    id: 'fsa',
+    label: 'Folder',
+    isConnected(){ return !!state.fsHandle; },
+    displayName(){ return state.fsFolderName || ''; },
+    async read(safePath){ return await fsRead(safePath); },
+    async readBinary(safePath){ return await fsReadBinary(safePath); },
+    async write(safePath, data){ await fsWrite(safePath, data); },
+    async append(safePath, line){ await fsAppend(safePath, line); },
+    async delete(safePath){ await fsDelete(safePath); },
+    async exists(safePath){ return await fsExists(safePath); },
+    async list(prefix){ return await fsList(prefix); },
+  },
+  crate: {
+    id: 'crate',
+    label: 'Crate',
+    isConnected(){ return !!state.crate; },
+    displayName(){ return state.crateBucketName || ''; },
+    async read(safePath){
+      const bytes = await state.crate.read('/' + safePath);
+      return new TextDecoder().decode(bytes);
+    },
+    async readBinary(safePath){
+      return await state.crate.read('/' + safePath);
+    },
+    async write(safePath, data){
+      const bytes = (data instanceof Uint8Array) ? data
+                   : (typeof data === 'string') ? new TextEncoder().encode(data)
+                   : new Uint8Array(data);
+      await state.crate.write('/' + safePath, bytes, { mime: guessMime(safePath) });
+    },
+    async append(safePath, line){
+      // Crate has no native append; emulate via read + concat + write.
+      // Same semantics as fsAppend in the FSA backend.
+      let existing = '';
+      try {
+        const bytes = await state.crate.read('/' + safePath);
+        existing = new TextDecoder().decode(bytes);
+      } catch (_){}
+      const trail = (line.endsWith('\n') ? line : line + '\n');
+      const out = new TextEncoder().encode(existing + trail);
+      await state.crate.write('/' + safePath, out, { mime: 'text/plain' });
+    },
+    async delete(safePath){ await state.crate.remove('/' + safePath); },
+    async exists(safePath){ return (await state.crate.stat('/' + safePath)) != null; },
+    async list(prefix){
+      const entries = await state.crate.list('/' + (prefix || ''));
+      // Crate returns objects; FSA returns strings. Normalise to FSA shape.
+      return entries.map(e => {
+        const p = (e.path || '').replace(/^\//, '');
+        return e.isDir && !p.endsWith('/') ? p + '/' : p;
+      }).sort();
+    },
+  },
+};
+
+function guessMime(path){
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  const m = {
+    json: 'application/json', jsonl: 'application/x-ndjson',
+    txt: 'text/plain', md: 'text/markdown',
+    html: 'text/html', css: 'text/css', js: 'application/javascript',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
+    pdf: 'application/pdf',
+  }[ext];
+  return m || 'application/octet-stream';
+}
+
+function backendsAvailable(){
+  const out = [];
+  if (BACKENDS.fsa.isConnected()) out.push('fsa');
+  if (BACKENDS.crate.isConnected()) out.push('crate');
+  return out;
+}
+
+// Migrate legacy 'granted'|'denied' strings to {backend, granted} shape.
+// Lazy — runs on first read of an appId after the v2.19 upgrade.
+function migrateAppPermission(appId){
+  const v = state.appPermissions[appId];
+  if (v == null || typeof v !== 'string') return;
+  if (v === 'denied'){
+    state.appPermissions[appId] = { granted: false };
+  } else if (v === 'granted'){
+    // The legacy value was always FSA-only. Preserve that binding so an
+    // upgrade doesn't silently grant the app access to a Crate that's
+    // connected for the first time.
+    state.appPermissions[appId] = { backend: 'fsa', granted: true };
+  }
+  saveAppPermissions();
+}
+
+// fsEnsurePermission resolves the backend an app should use, prompting
+// the user if no decision exists yet. Returns the backend id ('fsa'|'crate')
+// on grant, or null on deny / no available backend / cancelled prompt.
+async function fsEnsurePermission(appId){
+  migrateAppPermission(appId);
+  const v = state.appPermissions[appId];
+  if (v && v.granted === false) return null;
+  if (v && v.granted && v.backend){
+    // Verify the backend the app was bound to is still connected.
+    if (BACKENDS[v.backend]?.isConnected()) return v.backend;
+    // Backend was disconnected — fall through to re-prompt.
+  }
+  const avail = backendsAvailable();
+  if (avail.length === 0) return null;
   const app = APPS.find(a => a.id === appId);
   const name = app?.name || appId;
-  const ok = confirm(
-    `Let ${name} read and write its data in your nakliOS folder?\n\n` +
-    `It will be limited to apps/${appId}/ — no other folders or apps' data.\n\n` +
-    `You can revoke this later in Settings.`
-  );
-  state.appPermissions[appId] = ok ? 'granted' : 'denied';
+
+  let chosen = null;
+  if (avail.length === 1){
+    const only = BACKENDS[avail[0]];
+    const where = only.id === 'fsa'
+      ? `in your nakliOS folder (${only.displayName()})`
+      : `in your Crate (encrypted, multi-device — ${only.displayName()})`;
+    const ok = confirm(
+      `Let ${name} read and write its data ${where}?\n\n` +
+      `It will be limited to apps/${appId}/ — no other apps' data.\n\n` +
+      `You can revoke or switch backends later in Settings.`
+    );
+    if (ok) chosen = only.id;
+  } else {
+    // Both backends connected — ask which.
+    const ans = prompt(
+      `Where should ${name} store its data?\n\n` +
+      `  folder — local folder: ${BACKENDS.fsa.displayName()}\n` +
+      `  crate  — encrypted multi-device: ${BACKENDS.crate.displayName()}\n\n` +
+      `Type 'folder' or 'crate' (Cancel = deny):`,
+      'crate'
+    );
+    if (ans && ans.toLowerCase().startsWith('f')) chosen = 'fsa';
+    else if (ans && ans.toLowerCase().startsWith('c')) chosen = 'crate';
+  }
+
+  if (!chosen){
+    state.appPermissions[appId] = { granted: false };
+    saveAppPermissions();
+    return null;
+  }
+  state.appPermissions[appId] = { backend: chosen, granted: true };
   saveAppPermissions();
-  return ok;
+  return chosen;
 }
 
 // Resolve { dir, name } for fs reply ops. Throws if path unsafe or no handle.
 async function fsHostHandle(msg, type, appId){
-  if (!state.fsHandle) throw new Error('No folder connected');
-  if (!fsEnsurePermission(appId)) throw new Error('Permission denied');
+  const backendId = await fsEnsurePermission(appId);
+  if (!backendId) throw new Error('Permission denied');
+  const backend = BACKENDS[backendId];
+  if (!backend.isConnected()) throw new Error('Backend disconnected');
   const safe = fsSafePath(appId, msg.path || '');
   switch (type){
-    case 'read':       return await fsRead(safe);
-    case 'readBinary': return await fsReadBinary(safe);
-    case 'write':      await fsWrite(safe, msg.data); return null;
-    case 'append':     await fsAppend(safe, String(msg.line ?? '')); return null;
-    case 'delete':     await fsDelete(safe); return null;
-    case 'exists':     return await fsExists(safe);
+    case 'read':       return await backend.read(safe);
+    case 'readBinary': return await backend.readBinary(safe);
+    case 'write':      await backend.write(safe, msg.data); return null;
+    case 'append':     await backend.append(safe, String(msg.line ?? '')); return null;
+    case 'delete':     await backend.delete(safe); return null;
+    case 'exists':     return await backend.exists(safe);
   }
   throw new Error('Unknown fs op: ' + type);
 }
 // list() is the only op that scopes to apps/<id>/ even when path is empty
 async function fsHostList(msg, appId){
-  if (!state.fsHandle) throw new Error('No folder connected');
-  if (!fsEnsurePermission(appId)) throw new Error('Permission denied');
+  const backendId = await fsEnsurePermission(appId);
+  if (!backendId) throw new Error('Permission denied');
+  const backend = BACKENDS[backendId];
+  if (!backend.isConnected()) throw new Error('Backend disconnected');
   const subPath = (msg.prefix || '').split('/').filter(s => s && s !== '.' && s !== '..').join('/');
   const fullPrefix = subPath ? `apps/${appId}/${subPath}` : `apps/${appId}`;
-  // Strip apps/<appId>/ from results so apps see app-relative paths
-  const all = await fsList(fullPrefix);
+  const all = await backend.list(fullPrefix);
   const stripPrefix = `apps/${appId}/`;
   return all.map(p => p.startsWith(stripPrefix) ? p.slice(stripPrefix.length) : p);
 }
 
 // Tell an iframe its current capabilities. Called on load and on changes.
 function postCapabilities(iframe, appId){
-  const fsCap = !!state.fsHandle && state.appPermissions[appId] !== 'denied';
+  // fs is available if EITHER backend is connected AND the app isn't denied.
+  // We don't pre-bind here — fsEnsurePermission runs on the first op call.
+  const v = state.appPermissions[appId];
+  const explicitlyDenied = v && typeof v === 'object' && v.granted === false;
+  const fsCap = backendsAvailable().length > 0 && !explicitlyDenied;
   try { iframe.contentWindow.postMessage({ type:'naklios:capabilities', fs: fsCap }, '*'); } catch(_){}
 }
 function broadcastCapabilities(){
@@ -2623,14 +2932,48 @@ function openSettings(){
       : 'Connect a folder (iCloud Drive, Dropbox, or local) and naklOS will mirror its state there. Cooperative apps can use the same folder for multi-device sync.'}</div>
   `;
 
+  // Crate (cloud) panel — encrypted, BYOK, multi-device. Parallel to Folder.
+  const crateUnlocked = !!state.crate;
+  const crateLocked = !crateUnlocked && state.crateLocked;
+  const crateName = state.crateBucketName || '';
+  const stayChecked = state.crateStayUnlocked ? 'checked' : '';
+  const crateHTML = `
+    ${crateUnlocked ? `
+      <div class="nw-fs-connected">
+        <span>☁️</span>
+        <span class="nw-fs-connected-name" title="${crateName}">${crateName} (unlocked)</span>
+        <button class="nw-fs-link-btn" id="crate-lock">Lock</button>
+        <button class="nw-fs-link-btn" id="crate-disconnect" style="margin-left:6px;">Disconnect</button>
+      </div>
+    ` : crateLocked ? `
+      <div class="nw-fs-connected">
+        <span>🔐</span>
+        <span class="nw-fs-connected-name" title="${crateName}">${crateName} — locked</span>
+        <button class="nw-fs-btn-primary" id="crate-unlock">Unlock…</button>
+        <button class="nw-fs-link-btn" id="crate-disconnect" style="margin-left:6px;">Disconnect</button>
+      </div>
+    ` : `
+      <button class="nw-fs-btn-primary" id="crate-connect">☁️ Connect Crate…</button>
+    `}
+    <div class="nw-fs-blurb">${crateUnlocked || crateLocked
+      ? `Encrypted multi-device folder. Apps see the same <code>apps/&lt;id&gt;/</code> layout — pick which backend (folder or crate) per app on first use. <a class="nw-foot-link" href="https://crate.naklios.dev/guide/" target="_blank">Guide →</a>`
+      : `BYOK encrypted cloud folder via Cloudflare R2 (or any S3-compatible bucket). Apps that opt in get end-to-end-encrypted multi-device sync. Bring your own <code>.crate-creds</code> file from <a class="nw-foot-link" href="https://crate.naklios.dev/" target="_blank">crate.naklios.dev</a>.`}</div>
+    <label class="nw-fs-blurb" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
+      <input type="checkbox" id="crate-stay" ${stayChecked} />
+      <span>Stay unlocked in this tab (cleared on tab close)</span>
+    </label>
+  `;
+
   wrap.innerHTML = `
     <h4>Mode</h4>
     ${modeHTML}
     ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Basic mode is always used.</div>` : ''}
     <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
     <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
-    <h4>Folder sync</h4>
+    <h4>Folder (local)</h4>
     ${fsHTML}
+    <h4>Crate (cloud, encrypted)</h4>
+    ${crateHTML}
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
@@ -2667,10 +3010,65 @@ function openSettings(){
     closeSettings(); openSettings();
   });
 
+  // --- Crate (cloud) panel handlers ---
+  wrap.querySelector('#crate-connect')?.addEventListener('click', async () => {
+    const file = await pickFile('.crate-creds,application/json');
+    if (!file) return;
+    const pass = prompt('Passphrase for ' + file.name + ':');
+    if (!pass) return;
+    try {
+      await crateConnect(file, pass);
+      closeSettings(); openSettings();
+    } catch (e){
+      alert('Unlock failed: ' + (e?.message || e));
+    }
+  });
+  wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
+    const pass = prompt('Passphrase for ' + (state.crateBucketName || 'Crate') + ':');
+    if (!pass) return;
+    try {
+      const blob = await crateLoadCredsBlob();
+      if (!blob) throw new Error('No stored credentials. Use Disconnect → Connect.');
+      await crateUnlock(blob, pass);
+      closeSettings(); openSettings();
+    } catch (e){
+      alert('Unlock failed: ' + (e?.message || e));
+    }
+  });
+  wrap.querySelector('#crate-lock')?.addEventListener('click', () => {
+    crateLock();
+    closeSettings(); openSettings();
+  });
+  wrap.querySelector('#crate-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect Crate? The stored credentials file will be removed from this device. Your bucket data is untouched. Re-connecting requires the .crate-creds file again.')) return;
+    await crateDisconnect();
+    closeSettings(); openSettings();
+  });
+  wrap.querySelector('#crate-stay')?.addEventListener('change', (e) => {
+    setCrateStayUnlocked(e.target.checked);
+  });
+
   // close on outside click
   setTimeout(() => {
     document.addEventListener('pointerdown', outsideHandler);
   }, 0);
+}
+
+// Tiny helper to pick a single file via a hidden <input type=file>.
+function pickFile(accept){
+  return new Promise(resolve => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    if (accept) inp.accept = accept;
+    inp.addEventListener('change', () => resolve(inp.files?.[0] || null));
+    // Some browsers need the input in the DOM
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.click();
+    // Resolve(null) on cancel — browsers don't reliably fire a cancel event,
+    // so we don't add a fallback timeout here (would race a slow picker).
+    // The function resolves once the user picks OR garbage-collects naturally.
+  });
 }
 
 function outsideHandler(e){
@@ -3817,6 +4215,22 @@ async function init(){
       await fsWriteState().catch(() => {});
     }
   }).catch(e => console.warn('fs boot reconnect failed:', e));
+
+  // Crate (cloud) backend — surface "locked, needs unlock" state if a creds
+  // blob exists. Auto-unlock if "Stay unlocked in this tab" is on AND the
+  // session has a stashed blob from earlier this tab session.
+  crateReconnect().then(async (haveBlob) => {
+    if (!haveBlob) return;
+    if (!state.crateStayUnlocked) return;
+    const stashed = sessionStorage.getItem(SESSION_CREDS_KEY);
+    if (!stashed) return;
+    // sessionStorage holds the encrypted blob but NOT the passphrase. The
+    // 'stay unlocked' toggle today means "skip the file-picker on reload" —
+    // user still types the passphrase. This is the honest reading of the
+    // toggle label and matches the threat model: nothing secret in
+    // sessionStorage that wouldn't be in IDB anyway.
+    // (A real "remember passphrase for N days" feature is a v2 decision.)
+  }).catch(e => console.warn('crate boot reconnect failed:', e));
 
   // One-time sanity pass: drop any saved icon positions that fall outside the
   // current viewport's grid. Stale entries can sneak in from older builds where

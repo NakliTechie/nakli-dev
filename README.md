@@ -61,6 +61,17 @@ The Immersive iframe drops its sandbox and uses the mirror; standalone visits an
 
 Manual trigger anytime: Actions tab → **Sync app mirrors** → **Run workflow**.
 
+## Storage backends — Folder + Crate
+
+Cooperative apps that want persistent state use the `naklios.fs.*` SDK surface. The host fulfils those calls with one of two backends, configured in Settings:
+
+- **Folder (local)** — a directory you pick via File System Access. Lives on disk. Multi-device only via iCloud Drive / Dropbox / Google Drive of your choice.
+- **Crate (cloud, encrypted)** — BYOK end-to-end-encrypted folder on Cloudflare R2 (or any S3-compatible bucket). Multi-device sync is built in. Set up your bucket + download the `.crate-creds` file from [crate.naklios.dev](https://crate.naklios.dev/), then connect it here.
+
+Both can be connected at the same time. On first use, each app is asked which backend to store its data in — choice is remembered per-app and switchable later. Apps see the same `apps/<id>/` layout regardless of backend, so the same source code works against either.
+
+The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and loaded dynamically the first time the user clicks **Connect Crate** — zero cost for users who don't opt in.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
