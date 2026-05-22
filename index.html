@@ -1676,14 +1676,60 @@ let _CrateModulePromise = null;
 async function loadCrateModule(){
   if (!_CrateModulePromise){
     _CrateModulePromise = (async () => {
-      const [crateMod, credsMod] = await Promise.all([
+      const [crateMod, credsMod, bucketMod] = await Promise.all([
         import(CRATE_VENDOR_BASE + '/crate.js'),
         import(CRATE_VENDOR_BASE + '/credsfile.js'),
+        import(CRATE_VENDOR_BASE + '/bucket.js'),
       ]);
-      return { Crate: crateMod.Crate, CrateError: crateMod.CrateError, credsfile: credsMod };
+      return {
+        Crate: crateMod.Crate,
+        CrateError: crateMod.CrateError,
+        credsfile: credsMod,
+        bucket: bucketMod,
+      };
     })();
   }
   return _CrateModulePromise;
+}
+
+// Probe whether a `CORS_OR_NETWORK` failure is actually a CORS misconfig or
+// a different network problem (cache, outage, extension). Runs an explicit
+// OPTIONS preflight against the bucket — the OPTIONS itself isn't cached by
+// the browser the way the preflight-DECISION is, so we get a fresh answer
+// from R2 even when the regular GET is blocked client-side by the cache.
+//
+// Returns:
+//   { kind: 'cors',    detail, allowedOrigin }  → bucket genuinely lacks our origin
+//   { kind: 'network', detail }                 → preflight OK; fetch fails for other reasons
+//   { kind: 'unknown', detail }                 → couldn't run the probe
+async function crateDiagnoseCorsOrNetwork(bucketConfig){
+  try {
+    const { bucket } = await loadCrateModule();
+    const provider = bucketConfig?.provider || 'r2';
+    const epFn = bucket.endpoints?.[provider];
+    if (!epFn){
+      return { kind: 'unknown', detail: `No endpoint builder for provider ${provider}` };
+    }
+    const baseUrl = epFn(bucketConfig.accountId, bucketConfig.name, bucketConfig.region);
+    const probeUrl = baseUrl.replace(/\/?$/, '/') + '.crate/crate.json';
+    const origin = location.origin;
+    const result = await bucket.corsPreflight({ url: probeUrl, origin });
+    if (result.ok){
+      return {
+        kind: 'network',
+        detail: 'Preflight succeeded — bucket allows ' + origin + '. The actual fetch is failing for another reason.',
+        allowedOrigin: result.allowedOrigin,
+      };
+    }
+    return {
+      kind: 'cors',
+      detail: result.message || 'Preflight rejected',
+      allowedOrigin: result.allowedOrigin,
+    };
+  } catch (err){
+    console.warn('[crate] CORS diagnosis failed:', err);
+    return { kind: 'unknown', detail: err?.message || String(err) };
+  }
 }
 
 // crateLoadCredsBlob — read the encrypted .crate-creds bytes from
@@ -1736,15 +1782,26 @@ function crateIsCorsError(error){
 // fixing their bucket's CORS policy. Two buttons: a Copy-to-clipboard for
 // the JSON, and an Open-Cloudflare-R2 deep link. Resolves when dismissed.
 //
+// Optionally takes a `diag` from crateDiagnoseCorsOrNetwork — when present,
+// the dialog includes the actual preflight response so the user can compare
+// the bucket's reported allowed origins against what they configured.
+//
 // Safe to call while another modal is open (e.g. the passphrase dialog) —
 // native <dialog>.showModal() stacks, browser handles the focus/Escape
 // stack natively.
-function crateShowCorsRemediation(){
+function crateShowCorsRemediation(diag){
   return new Promise(resolve => {
     const dlg = document.createElement('dialog');
     dlg.className = 'nw-dlg';
-    // Use innerHTML for layout; the JSON is HTML-escaped before injection.
     const jsonHtml = _dlgEscape(CRATE_CORS_JSON);
+    const diagBlock = diag ? `
+      <p class="nw-dlg-hint">
+        Bucket preflight reported:
+        <code>Access-Control-Allow-Origin: ${_dlgEscape(diag.allowedOrigin || '(none)')}</code>.
+        Your origin is <code>${_dlgEscape(location.origin)}</code>.
+        ${diag.detail ? ' — ' + _dlgEscape(diag.detail) : ''}
+      </p>
+    ` : '';
     dlg.innerHTML = `
       <form method="dialog" class="nw-dlg-form" style="max-width:520px;">
         <h3 class="nw-dlg-title">Allow naklios.dev to access your bucket</h3>
@@ -1759,11 +1816,9 @@ function crateShowCorsRemediation(){
           <code>crate.naklios.dev</code>):
         </p>
         <pre class="nw-dlg-pre"><button type="button" class="nw-dlg-copy-btn" id="cors-copy">Copy</button>${jsonHtml}</pre>
+        ${diagBlock}
         <p class="nw-dlg-hint">
-          The change usually applies within seconds. Browsers cache CORS
-          preflights for up to an hour (<code>MaxAgeSeconds</code>) — if
-          you've already updated CORS but still see the error, try an
-          incognito tab.
+          The change usually applies within seconds.
         </p>
         <menu class="nw-dlg-actions">
           <button type="submit" value="open" class="nw-dlg-btn">Open Cloudflare R2 →</button>
@@ -1802,6 +1857,55 @@ function crateShowCorsRemediation(){
       resolve();
     }, { once: true });
 
+    dlg.showModal();
+  });
+}
+
+// crateShowNetworkError — themed dialog for the case where the CORS
+// preflight succeeds but the actual signed GET still fails. Most common
+// cause: the browser cached a previous failed preflight decision and is
+// blocking the request client-side without re-asking the bucket.
+function crateShowNetworkError(diag){
+  return new Promise(resolve => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg';
+    const detailHtml = diag?.detail ? `
+      <pre class="nw-dlg-pre">${_dlgEscape(diag.detail)}</pre>
+    ` : '';
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form" style="max-width:520px;">
+        <h3 class="nw-dlg-title">Bucket reachable, but the fetch failed</h3>
+        <p class="nw-dlg-body">
+          Your bucket's CORS policy is configured correctly —
+          <code>${_dlgEscape(location.origin)}</code> is in the allowed
+          origins. But the actual fetch to
+          <code>.crate/crate.json</code> isn't going through. That's almost
+          always one of:
+        </p>
+        <p class="nw-dlg-body">
+          <strong>1. Browser cached a failed preflight from earlier.</strong>
+          The browser remembers "no" decisions for up to
+          <code>MaxAgeSeconds</code> (an hour by default). Close the entire
+          browser window — not just the tab — and reopen it. Incognito
+          windows have their own cache; close the window completely.
+        </p>
+        <p class="nw-dlg-body">
+          <strong>2. Network outage, VPN, or extension blocking R2.</strong>
+          Check that <code>*.r2.cloudflarestorage.com</code> reaches the
+          internet from this tab. Try toggling off any privacy extensions.
+        </p>
+        ${detailHtml}
+        <p class="nw-dlg-hint">
+          DevTools → Network tab shows the actual request that failed if
+          you want to dig further.
+        </p>
+        <menu class="nw-dlg-actions">
+          <button type="submit" value="ok" class="nw-dlg-btn primary" autofocus>Got it</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+    dlg.addEventListener('close', () => { dlg.remove(); resolve(); }, { once: true });
     dlg.showModal();
   });
 }
@@ -1935,21 +2039,53 @@ function setCrateStayUnlocked(on){
 // First-time Crate connect — file picker → passphrase dialog →
 // crateConnect (which throws on wrong passphrase). CORS errors get
 // the remediation dialog. Returns true if the unlock succeeded.
+// Common error handling for both connect + unlock validators: detect the
+// CORS_OR_NETWORK heuristic, run a precise preflight probe to disambiguate
+// CORS-misconfig vs cached-preflight-or-network-issue, show the right dialog,
+// then throw a brief message for the passphrase dialog's inline error.
+async function _crateHandleConnectError(e, bucketGetter){
+  // Always log the raw error so DevTools shows the underlying cause.
+  console.warn('[crate] unlock failed:', e);
+  if (!crateIsCorsError(e)) throw e;
+  // Disambiguate CORS-vs-network with an explicit OPTIONS probe.
+  let bucketConfig = null;
+  try { bucketConfig = await bucketGetter(); } catch(_){}
+  const diag = bucketConfig
+    ? await crateDiagnoseCorsOrNetwork(bucketConfig)
+    : { kind: 'unknown', detail: 'No bucket config available for diagnosis' };
+  console.warn('[crate] CORS diagnosis:', diag);
+  if (diag.kind === 'network'){
+    await crateShowNetworkError(diag);
+    throw new Error('Bucket reachable, but the fetch failed. See the dialog — usually a cached preflight; close the window completely and reopen.');
+  }
+  // 'cors' or 'unknown' → CORS remediation is the best help we can give.
+  await crateShowCorsRemediation(diag.kind === 'cors' ? diag : null);
+  throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
+}
+
 async function crateInteractiveConnect(){
   const file = await pickFile('.crate-creds,application/json');
   if (!file) return false;
+  // Stash the file's unpacked bucket config so the error handler can run
+  // a CORS probe without re-asking the user for the passphrase.
+  let lastBucket = null;
   await nakliosPassphrase({
     title: 'Connect Crate',
     body: 'Enter the passphrase for ' + file.name + '.',
     validate: async (pass) => {
       try {
+        // Capture the bucket config from a successful unpack so the
+        // diagnosis (if needed) has it. We re-do this work inside
+        // crateConnect anyway — fine to do an extra unpack.
+        try {
+          const { credsfile } = await loadCrateModule();
+          const buf = new Uint8Array(await file.arrayBuffer());
+          const creds = await credsfile.unpack(buf, pass);
+          lastBucket = { ...creds.bucket, provider: creds.provider };
+        } catch(_){ /* unpack failed → fall through to crateConnect which throws cleanly */ }
         await crateConnect(file, pass);
       } catch (e){
-        if (crateIsCorsError(e)){
-          await crateShowCorsRemediation();
-          throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
-        }
-        throw e;
+        await _crateHandleConnectError(e, () => lastBucket);
       }
     },
   });
@@ -1966,17 +2102,22 @@ async function crateInteractiveUnlock(){
     );
     return false;
   }
+  let lastBucket = null;
   await nakliosPassphrase({
     bucketHint: state.crateBucketName || 'Crate',
     validate: async (pass) => {
       try {
+        // Unpack once to capture the bucket config for potential diagnosis.
+        // The throw on wrong passphrase happens here; if we get past it,
+        // crateUnlock will re-unpack (cheap) and open the bucket.
+        try {
+          const { credsfile } = await loadCrateModule();
+          const creds = await credsfile.unpack(blob, pass);
+          lastBucket = { ...creds.bucket, provider: creds.provider };
+        } catch(_){ /* let crateUnlock surface the real failure */ }
         await crateUnlock(blob, pass);
       } catch (e){
-        if (crateIsCorsError(e)){
-          await crateShowCorsRemediation();
-          throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
-        }
-        throw e;
+        await _crateHandleConnectError(e, () => lastBucket);
       }
     },
   });
