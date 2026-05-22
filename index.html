@@ -615,6 +615,101 @@ body.is-mobile .nw-dock{display:none;}
   font-size:11px;
 }
 
+/* ── DIALOGS (alert / confirm / passphrase) ── */
+/* Themed <dialog> replacements for the browser's native prompt/confirm/alert.
+   We use real <dialog> + showModal() so focus trap + Escape-to-close are
+   browser-native; the rest is styled to match the OS chrome. */
+.nw-dlg{
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:14px;
+  box-shadow:var(--shadow);
+  padding:0; max-width:min(440px, 90vw);
+  font: inherit;
+}
+.nw-dlg::backdrop{
+  background:color-mix(in srgb, #000 45%, transparent);
+  backdrop-filter:blur(4px);
+  -webkit-backdrop-filter:blur(4px);
+}
+.nw-dlg-form{
+  padding:18px 20px;
+  display:flex; flex-direction:column; gap:14px;
+  border:0; margin:0;
+}
+.nw-dlg-title{
+  margin:0; font-size:14px; font-weight:700; letter-spacing:0.01em;
+}
+.nw-dlg-body{
+  margin:0; font-size:13px; color:var(--ink); line-height:1.5;
+  white-space:pre-wrap;
+}
+.nw-dlg-body code{
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size:12px;
+  background:var(--row); padding:1px 5px; border-radius:4px;
+}
+.nw-dlg-actions{
+  margin:6px 0 0 0; padding:0; list-style:none;
+  display:flex; justify-content:flex-end; gap:8px;
+}
+.nw-dlg-btn{
+  padding:7px 14px; border-radius:8px;
+  background:var(--row); color:var(--ink);
+  border:1px solid var(--line);
+  font:inherit; cursor:pointer;
+}
+.nw-dlg-btn:hover{
+  background:color-mix(in srgb, var(--ink) 10%, var(--row));
+  border-color:var(--line-strong);
+}
+.nw-dlg-btn:focus-visible{
+  outline:2px solid var(--brand); outline-offset:1px;
+}
+.nw-dlg-btn.primary{
+  background:var(--brand); color:var(--panel);
+  border-color:var(--brand); font-weight:600;
+}
+.nw-dlg-btn.primary:hover{ filter:brightness(1.08); }
+.nw-dlg-btn.danger{
+  background:#c83a3a; border-color:#c83a3a; color:#fff;
+  font-weight:600;
+}
+.nw-dlg-btn.danger:hover{ background:#d44; }
+.nw-dlg-error .nw-dlg-title{ color:#e07a7a; }
+
+/* Passphrase dialog — dedicated styles for the password input row +
+   inline-error region. The dialog itself uses the .nw-dlg shell above. */
+.nw-dlg-pass-row{
+  display:flex; align-items:stretch; gap:6px;
+}
+.nw-dlg-pass-input{
+  flex:1; min-width:0;
+  padding:8px 12px;
+  background:var(--row); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:8px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing:0.02em;
+}
+.nw-dlg-pass-input:focus{
+  outline:2px solid var(--brand); outline-offset:1px;
+  border-color:var(--brand);
+}
+.nw-dlg-pass-toggle{
+  background:var(--row); border:1px solid var(--line-strong);
+  border-radius:8px; padding:0 10px;
+  cursor:pointer; color:var(--muted);
+  font-size:14px;
+}
+.nw-dlg-pass-toggle:hover{ color:var(--ink); }
+.nw-dlg-inline-error{
+  margin:0; color:#e07a7a; font-size:12px;
+}
+.nw-dlg-inline-error[hidden]{ display:none; }
+.nw-dlg-hint{
+  margin:0; color:var(--muted); font-size:12px;
+}
+
 /* ── FOOTER ── */
 #footer-nav{
   position:absolute; bottom:0; left:0; right:0; height:var(--footer-h);
@@ -1362,7 +1457,10 @@ async function fsExists(path){
 // Connection / lifecycle.
 async function fsConnect(){
   if (!('showDirectoryPicker' in window)) {
-    alert('Your browser doesn\'t support the File System Access API. Try Chrome/Edge desktop.');
+    await nakliosAlert(
+      'Your browser doesn\'t support the File System Access API. Try Chrome, Edge, or Brave on desktop — or use Crate instead for end-to-end-encrypted multi-device sync.',
+      { title: 'Folder connect unavailable', kind: 'error' }
+    );
     return false;
   }
   try {
@@ -1692,6 +1790,229 @@ function closeContextMenu(){
   const menu = document.getElementById('nw-context-menu');
   if (menu) menu.remove();
   document.removeEventListener('pointerdown', dismissContextMenu, true);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// DIALOG PRIMITIVES — themed <dialog> replacements for prompt/confirm/alert
+// ════════════════════════════════════════════════════════════════════
+// Native dialogs (prompt/confirm/alert) are jarring — useful when you WANT
+// the user jolted, but they break the OS-shaped illusion. These helpers
+// use real <dialog> + showModal() so focus trap + Escape-to-close are
+// browser-native; styling matches the rest of nakliOS chrome.
+//
+//   nakliosAlert(msg, opts?)     → Promise<void>
+//   nakliosConfirm(msg, opts?)   → Promise<boolean>
+//
+// opts:
+//   title       — header text (default: "nakliOS" / "Are you sure?")
+//   okLabel     — label for the primary button
+//   cancelLabel — label for the cancel button (confirm only)
+//   danger      — bool, styles the primary action as destructive (red)
+//   kind        — 'error' for red title accent (alert only)
+//
+// The passphrase dialog (nakliosPassphrase) is built separately because it
+// has password-input hygiene rules — see the unlock dialog work in task #5.
+
+function _dlgEscape(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])
+  );
+}
+
+// Core constructor — appends a <dialog>, shows it modally, resolves with
+// the returnValue of whichever button closed it (or 'cancel' on Escape).
+// The dialog removes itself from the DOM on close.
+function _nakliosDialog({ title, body, buttons, kind, allowHtmlBody }){
+  return new Promise(resolve => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg' + (kind ? ' nw-dlg-' + kind : '');
+    // Body can be plain text (default, safe) or pre-escaped HTML (for the
+    // rare callers that need <code> / <strong>). Default safe.
+    const bodyHtml = allowHtmlBody ? body : _dlgEscape(body);
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form">
+        ${title ? `<h3 class="nw-dlg-title">${_dlgEscape(title)}</h3>` : ''}
+        <div class="nw-dlg-body">${bodyHtml}</div>
+        <menu class="nw-dlg-actions">
+          ${buttons.map(b => `<button
+              value="${_dlgEscape(b.value)}"
+              class="nw-dlg-btn${b.primary ? ' primary' : ''}${b.danger ? ' danger' : ''}"
+              ${b.primary || b.danger ? 'autofocus' : ''}
+            >${_dlgEscape(b.label)}</button>`).join('')}
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+    dlg.addEventListener('close', () => {
+      const val = dlg.returnValue || 'cancel';
+      dlg.remove();
+      resolve(val);
+    }, { once: true });
+    dlg.showModal();
+  });
+}
+
+async function nakliosAlert(message, opts = {}){
+  await _nakliosDialog({
+    title: opts.title || 'nakliOS',
+    body: message,
+    buttons: [{ value: 'ok', label: opts.okLabel || 'OK', primary: true }],
+    kind: opts.kind || null,
+    allowHtmlBody: !!opts.allowHtmlBody,
+  });
+}
+
+async function nakliosConfirm(message, opts = {}){
+  const v = await _nakliosDialog({
+    title: opts.title || 'Are you sure?',
+    body: message,
+    buttons: [
+      { value: 'cancel', label: opts.cancelLabel || 'Cancel' },
+      { value: 'ok',     label: opts.okLabel     || 'OK',
+        primary: !opts.danger, danger: !!opts.danger },
+    ],
+    allowHtmlBody: !!opts.allowHtmlBody,
+  });
+  return v === 'ok';
+}
+
+// nakliosPassphrase — dedicated dialog for passphrase entry.
+//
+// Built separately from nakliosAlert/nakliosConfirm because the password
+// input needs hygiene rules native HTML form elements don't apply by default:
+//   - autocomplete="current-password"  → tells the browser this is a sensitive
+//     password field (excluded from form-restore on back/forward, not snapshot
+//     by autofill heuristics, eligible for password-manager autofill)
+//   - autocapitalize/autocorrect/spellcheck off → mobile keyboards otherwise
+//     mangle the first character and can leak the value to spell-check services
+//   - input.value is zeroed BEFORE the dialog closes, so the browser's
+//     form-state cache doesn't snapshot a populated field
+//   - the validator runs INSIDE the dialog: on failure we stay open with an
+//     inline error, on success we close. No open-close-open jitter.
+//   - we never log the passphrase value, anywhere. Inline comments mark
+//     the temptation points.
+//
+// opts:
+//   bucketHint  — shown in the title ("Welcome back to <bucketHint>"). Required
+//                 in practice; falls back to a generic title if absent.
+//   title       — override the default title entirely.
+//   body        — optional explanatory text under the title.
+//   okLabel     — submit button label (default "Unlock").
+//   validate    — async (passphrase) => any. If it resolves, the dialog closes
+//                 and the Promise resolves with whatever validate returned
+//                 (often the unlocked instance). If it rejects with an Error,
+//                 the message is shown inline and the dialog stays open for
+//                 another attempt. If omitted, the dialog closes on first
+//                 submit and resolves with the typed value.
+//
+// Returns Promise<T | null>, where null = user dismissed via Escape.
+function nakliosPassphrase(opts = {}){
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg nw-dlg-passphrase';
+    const titleText = opts.title || (
+      opts.bucketHint
+        ? 'Welcome back to ' + opts.bucketHint
+        : 'Enter passphrase'
+    );
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form">
+        <h3 class="nw-dlg-title">${_dlgEscape(titleText)}</h3>
+        ${opts.body ? `<p class="nw-dlg-hint">${_dlgEscape(opts.body)}</p>` : ''}
+        <div class="nw-dlg-pass-row">
+          <input type="password"
+                 class="nw-dlg-pass-input"
+                 autocomplete="current-password"
+                 autocapitalize="off"
+                 autocorrect="off"
+                 spellcheck="false"
+                 required>
+          <button type="button" class="nw-dlg-pass-toggle"
+                  aria-label="Show passphrase" tabindex="-1">👁</button>
+        </div>
+        <p class="nw-dlg-inline-error" hidden></p>
+        <menu class="nw-dlg-actions">
+          <button value="unlock" type="submit" class="nw-dlg-btn primary">${_dlgEscape(opts.okLabel || 'Unlock')}</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+
+    const input  = dlg.querySelector('.nw-dlg-pass-input');
+    const toggle = dlg.querySelector('.nw-dlg-pass-toggle');
+    const err    = dlg.querySelector('.nw-dlg-inline-error');
+    const form   = dlg.querySelector('form');
+    const submit = form.querySelector('button[type="submit"]');
+
+    toggle.addEventListener('click', () => {
+      const isPwd = input.type === 'password';
+      input.type = isPwd ? 'text' : 'password';
+      toggle.setAttribute('aria-label', isPwd ? 'Hide passphrase' : 'Show passphrase');
+      input.focus();
+    });
+
+    let resolved = false;
+
+    // closeWith — the single path that resolves the outer Promise + closes the
+    // dialog. Always zeroes the input first.
+    const closeWith = (value) => {
+      if (resolved) return;
+      resolved = true;
+      // SECURITY: clear the input value before close() so the browser's
+      // form-restore cache doesn't snapshot a populated password field.
+      input.value = '';
+      resolve(value);
+      try { dlg.close(); } catch(_){}
+      // DOM removal happens in the 'close' listener below.
+    };
+
+    form.addEventListener('submit', async (e) => {
+      // method="dialog" would close on submit automatically; we override so
+      // we can keep the dialog open when the validator rejects.
+      e.preventDefault();
+      // SECURITY: do NOT log `pass`. It's held only as long as the validator
+      // needs it; nothing in this scope persists past the await.
+      const pass = input.value;
+      if (!opts.validate){
+        // No validator → just hand back the typed value.
+        closeWith(pass);
+        return;
+      }
+      submit.disabled = true;
+      err.hidden = true; err.textContent = '';
+      try {
+        const result = await opts.validate(pass);
+        // SECURITY: when a validator is supplied, the outer Promise must NOT
+        // surface the passphrase to the caller — the validator already had it.
+        // Pass back the validator's return value (e.g. an unlocked instance),
+        // or `true` as a generic "succeeded" signal. Never the passphrase.
+        closeWith(result === undefined ? true : result);
+      } catch (validateErr){
+        err.textContent = validateErr?.message
+          || 'Wrong passphrase, or the credentials file is corrupt.';
+        err.hidden = false;
+        // SECURITY: clear and re-focus so the next attempt starts clean and
+        // the failed value doesn't linger in the input.
+        input.value = '';
+        input.focus();
+        submit.disabled = false;
+      }
+    });
+
+    dlg.addEventListener('close', () => {
+      try { dlg.remove(); } catch(_){}
+      if (!resolved){
+        // Reached via Escape — caller chose to cancel.
+        resolved = true;
+        input.value = '';
+        resolve(null);
+      }
+    }, { once: true });
+
+    dlg.showModal();
+    // Focus after the dialog is fully open. setTimeout(0) is the standard tick.
+    setTimeout(() => input.focus(), 0);
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2478,25 +2799,37 @@ async function fsEnsurePermission(appId){
   if (avail.length === 1){
     const only = BACKENDS[avail[0]];
     const where = only.id === 'fsa'
-      ? `in your nakliOS folder (${only.displayName()})`
-      : `in your Crate (encrypted, multi-device — ${only.displayName()})`;
-    const ok = confirm(
-      `Let ${name} read and write its data ${where}?\n\n` +
-      `It will be limited to apps/${appId}/ — no other apps' data.\n\n` +
-      `You can revoke or switch backends later in Settings.`
+      ? `in your nakliOS folder (<code>${_dlgEscape(only.displayName())}</code>)`
+      : `in your Crate (encrypted, multi-device — <code>${_dlgEscape(only.displayName())}</code>)`;
+    const ok = await nakliosConfirm(
+      `Let <strong>${_dlgEscape(name)}</strong> read and write its data ${where}?\n\n` +
+      `It will be limited to <code>apps/${_dlgEscape(appId)}/</code> — no other apps' data.\n\n` +
+      `You can revoke or switch backends later in Settings.`,
+      {
+        title: `Allow ${name}?`,
+        okLabel: 'Allow',
+        cancelLabel: 'Deny',
+        allowHtmlBody: true,
+      }
     );
     if (ok) chosen = only.id;
   } else {
-    // Both backends connected — ask which.
-    const ans = prompt(
-      `Where should ${name} store its data?\n\n` +
-      `  folder — local folder: ${BACKENDS.fsa.displayName()}\n` +
-      `  crate  — encrypted multi-device: ${BACKENDS.crate.displayName()}\n\n` +
-      `Type 'folder' or 'crate' (Cancel = deny):`,
-      'crate'
-    );
-    if (ans && ans.toLowerCase().startsWith('f')) chosen = 'fsa';
-    else if (ans && ans.toLowerCase().startsWith('c')) chosen = 'crate';
+    // Both backends connected — present them as a three-button choice.
+    const ans = await _nakliosDialog({
+      title: `Where should ${name} store its data?`,
+      body:
+        `Pick a backend for <strong>${_dlgEscape(name)}</strong>. ` +
+        `It will be limited to <code>apps/${_dlgEscape(appId)}/</code>.\n\n` +
+        `<strong>Folder</strong> — local: <code>${_dlgEscape(BACKENDS.fsa.displayName())}</code>\n` +
+        `<strong>Crate</strong> — encrypted, multi-device: <code>${_dlgEscape(BACKENDS.crate.displayName())}</code>`,
+      buttons: [
+        { value: 'deny',   label: 'Deny' },
+        { value: 'fsa',    label: 'Folder' },
+        { value: 'crate',  label: 'Crate', primary: true },
+      ],
+      allowHtmlBody: true,
+    });
+    if (ans === 'fsa' || ans === 'crate') chosen = ans;
   }
 
   if (!chosen){
@@ -3005,42 +3338,65 @@ function openSettings(){
     if (ok){ await fsWriteState(); closeSettings(); openSettings(); }
   });
   wrap.querySelector('#fs-disconnect')?.addEventListener('click', async () => {
-    if (!confirm('Disconnect the folder? naklOS will keep working locally; your folder data stays where it is.')) return;
+    const ok = await nakliosConfirm(
+      'naklOS will keep working locally; your folder data stays where it is. Re-connecting is one click + folder pick away.',
+      { title: 'Disconnect folder?', okLabel: 'Disconnect', danger: true }
+    );
+    if (!ok) return;
     await fsDisconnect();
     closeSettings(); openSettings();
   });
 
   // --- Crate (cloud) panel handlers ---
+  // First-time connect — user picks a .crate-creds file, enters passphrase.
+  // The passphrase dialog handles wrong-passphrase retries inline; we only
+  // close Settings + re-open on success.
   wrap.querySelector('#crate-connect')?.addEventListener('click', async () => {
     const file = await pickFile('.crate-creds,application/json');
     if (!file) return;
-    const pass = prompt('Passphrase for ' + file.name + ':');
-    if (!pass) return;
-    try {
-      await crateConnect(file, pass);
-      closeSettings(); openSettings();
-    } catch (e){
-      alert('Unlock failed: ' + (e?.message || e));
-    }
+    const result = await nakliosPassphrase({
+      title: 'Connect Crate',
+      body: 'Enter the passphrase for ' + file.name + '.',
+      validate: async (pass) => {
+        // crateConnect throws CrateError on wrong passphrase — bubble it.
+        await crateConnect(file, pass);
+      },
+    });
+    // result is null on Escape (user dismissed) or undefined on successful
+    // validator return. Either way, refresh Settings if we now have a session.
+    if (state.crate){ closeSettings(); openSettings(); }
   });
+
+  // Re-unlock — encrypted blob already in IDB, just need the passphrase.
   wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
-    const pass = prompt('Passphrase for ' + (state.crateBucketName || 'Crate') + ':');
-    if (!pass) return;
-    try {
-      const blob = await crateLoadCredsBlob();
-      if (!blob) throw new Error('No stored credentials. Use Disconnect → Connect.');
-      await crateUnlock(blob, pass);
-      closeSettings(); openSettings();
-    } catch (e){
-      alert('Unlock failed: ' + (e?.message || e));
+    const blob = await crateLoadCredsBlob();
+    if (!blob){
+      await nakliosAlert(
+        'No stored credentials. Use Disconnect → Connect to add a new .crate-creds file.',
+        { title: 'Cannot unlock', kind: 'error' }
+      );
+      return;
     }
+    await nakliosPassphrase({
+      bucketHint: state.crateBucketName || 'Crate',
+      validate: async (pass) => {
+        await crateUnlock(blob, pass);
+      },
+    });
+    if (state.crate){ closeSettings(); openSettings(); }
   });
+
   wrap.querySelector('#crate-lock')?.addEventListener('click', () => {
     crateLock();
     closeSettings(); openSettings();
   });
+
   wrap.querySelector('#crate-disconnect')?.addEventListener('click', async () => {
-    if (!confirm('Disconnect Crate? The stored credentials file will be removed from this device. Your bucket data is untouched. Re-connecting requires the .crate-creds file again.')) return;
+    const ok = await nakliosConfirm(
+      'The stored credentials file will be removed from this device. Your bucket data is untouched. Re-connecting requires the .crate-creds file again.',
+      { title: 'Disconnect Crate?', okLabel: 'Disconnect', danger: true }
+    );
+    if (!ok) return;
     await crateDisconnect();
     closeSettings(); openSettings();
   });
@@ -3543,9 +3899,12 @@ Classics.notepad = (body, win) => {
     catch(_) { status.textContent = 'Copy failed'; }
     setTimeout(() => { status.textContent = 'Saved'; }, 1200);
   });
-  body.querySelector('#pad-clear').addEventListener('click', () => {
+  body.querySelector('#pad-clear').addEventListener('click', async () => {
     if (!ta.value) return;
-    if (!confirm('Clear the notepad?')) return;
+    const ok = await nakliosConfirm('This empties the notepad. Cannot be undone.', {
+      title: 'Clear the notepad?', okLabel: 'Clear', danger: true,
+    });
+    if (!ok) return;
     ta.value = '';
     localStorage.setItem(KEY, '');
     updateCount();
@@ -4315,6 +4674,8 @@ window.nakliOS = {
   moveAppToDesktop, isInFolder,
   addSticky, deleteSticky, openCheatSheet,
   minimizeWindow,
+  // Dialog primitives — used by the crate flow + reusable elsewhere.
+  alert: nakliosAlert, confirm: nakliosConfirm, passphrase: nakliosPassphrase,
   // Filesystem — system-app access (no namespace enforcement).
   fs: {
     read: fsRead, readBinary: fsReadBinary,
