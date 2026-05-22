@@ -88,6 +88,42 @@ input{font:inherit; color:inherit;}
   font-size:11px; color:var(--muted); border:1px solid var(--line);
 }
 
+/* ── BACKEND STATUS CHIPS (topbar, between Search and mode pill) ── */
+/* Two pills indicating connection status for each backend.
+   Click → small menu with state-appropriate actions. */
+.topbar-chip{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:5px 10px; border-radius:999px;
+  background:var(--row);
+  border:1px solid var(--line);
+  font-size:11px; color:var(--muted);
+  cursor:pointer; max-width:160px;
+}
+.topbar-chip:hover{ border-color:var(--line-strong); color:var(--ink); }
+.topbar-chip.active{
+  color:var(--ink); border-color:var(--line-strong);
+  background:color-mix(in srgb, var(--brand) 12%, var(--row));
+}
+.topbar-chip.locked{ color:var(--muted); }
+.topbar-chip.pending{
+  color:#d4a050; border-color:#d4a050;
+  background:color-mix(in srgb, #d4a050 8%, var(--row));
+}
+.topbar-chip-icon{ font-size:12px; line-height:1; }
+.topbar-chip-label{
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  max-width:110px;
+  font-variant-numeric:tabular-nums;
+}
+.topbar-chip-dot{
+  display:inline-block; width:6px; height:6px; border-radius:999px;
+  background:var(--faint);
+  flex:0 0 auto;
+}
+.topbar-chip.active .topbar-chip-dot{ background:var(--ok); }
+.topbar-chip.locked .topbar-chip-dot{ background:var(--brand); }
+.topbar-chip.pending .topbar-chip-dot{ background:#d4a050; }
+
 /* ── ICON GRID ── */
 #icon-grid{
   position:absolute;
@@ -983,7 +1019,9 @@ body.is-mobile .nw-dock{display:none;}
 @media (max-width: 720px), (pointer: coarse) {
   body.is-mobile #spotlight-btn .kbd,
   body.is-mobile #mode-pill,
-  body.is-mobile .brand-sub{display:none;}
+  body.is-mobile .brand-sub,
+  body.is-mobile .topbar-chip-label{display:none;}
+  body.is-mobile .topbar-chip{padding:5px 8px;}
   body.is-mobile #spotlight-btn{min-width:0; padding:6px 8px;}
   body.is-mobile #spotlight-btn span:first-child{font-size:0;}
   body.is-mobile #spotlight-btn::before{content:"🔍"; font-size:14px;}
@@ -1019,6 +1057,16 @@ body.is-mobile .nw-dock{display:none;}
     <button id="spotlight-btn" class="topbar-btn" title="Search apps (⌘K)">
       <span>Search apps…</span>
       <span class="kbd" id="kbd-hint">⌘K</span>
+    </button>
+    <button id="fsa-chip" class="topbar-chip" title="Local folder backend">
+      <span class="topbar-chip-dot"></span>
+      <span class="topbar-chip-icon">📁</span>
+      <span class="topbar-chip-label">Folder</span>
+    </button>
+    <button id="crate-chip" class="topbar-chip" title="Crate cloud backend">
+      <span class="topbar-chip-dot"></span>
+      <span class="topbar-chip-icon">☁️</span>
+      <span class="topbar-chip-label">Crate</span>
     </button>
     <span id="mode-pill" title="Click Settings to change mode">Basic</span>
     <span id="clock">—</span>
@@ -1878,6 +1926,83 @@ function setCrateStayUnlocked(on){
   if (!on){
     try { sessionStorage.removeItem(SESSION_CREDS_KEY); } catch (_){}
   }
+}
+
+// ── Interactive wrappers ─────────────────────────────────────────────
+// Bundle the user-facing dialogs around each state-change so the same
+// flow can be invoked from Settings or from the topbar status chips.
+
+// First-time Crate connect — file picker → passphrase dialog →
+// crateConnect (which throws on wrong passphrase). CORS errors get
+// the remediation dialog. Returns true if the unlock succeeded.
+async function crateInteractiveConnect(){
+  const file = await pickFile('.crate-creds,application/json');
+  if (!file) return false;
+  await nakliosPassphrase({
+    title: 'Connect Crate',
+    body: 'Enter the passphrase for ' + file.name + '.',
+    validate: async (pass) => {
+      try {
+        await crateConnect(file, pass);
+      } catch (e){
+        if (crateIsCorsError(e)){
+          await crateShowCorsRemediation();
+          throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
+        }
+        throw e;
+      }
+    },
+  });
+  return !!state.crate;
+}
+
+// Re-unlock — blob already in IDB, just need the passphrase.
+async function crateInteractiveUnlock(){
+  const blob = await crateLoadCredsBlob();
+  if (!blob){
+    await nakliosAlert(
+      'No stored credentials. Use Disconnect → Connect to add a new .crate-creds file.',
+      { title: 'Cannot unlock', kind: 'error' }
+    );
+    return false;
+  }
+  await nakliosPassphrase({
+    bucketHint: state.crateBucketName || 'Crate',
+    validate: async (pass) => {
+      try {
+        await crateUnlock(blob, pass);
+      } catch (e){
+        if (crateIsCorsError(e)){
+          await crateShowCorsRemediation();
+          throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
+        }
+        throw e;
+      }
+    },
+  });
+  return !!state.crate;
+}
+
+// Disconnect Crate with confirmation. Returns true if disconnected.
+async function crateInteractiveDisconnect(){
+  const ok = await nakliosConfirm(
+    'The stored credentials file will be removed from this device. Your bucket data is untouched. Re-connecting requires the .crate-creds file again.',
+    { title: 'Disconnect Crate?', okLabel: 'Disconnect', danger: true }
+  );
+  if (!ok) return false;
+  await crateDisconnect();
+  return true;
+}
+
+// Disconnect local folder with confirmation.
+async function fsInteractiveDisconnect(){
+  const ok = await nakliosConfirm(
+    'naklOS will keep working locally; your folder data stays where it is. Re-connecting is one click + folder pick away.',
+    { title: 'Disconnect folder?', okLabel: 'Disconnect', danger: true }
+  );
+  if (!ok) return false;
+  await fsDisconnect();
+  return true;
 }
 
 function isPinned(id){ return (state.layout.pinned || []).includes(id); }
@@ -3038,6 +3163,109 @@ function broadcastCapabilities(){
     const appId = iframe.closest('.nw-window')?.dataset.id;
     if (appId) postCapabilities(iframe, appId);
   });
+  // Re-paint the topbar chips on every backend state change. Defensive
+  // try — chips might not be in DOM yet during early boot.
+  try { renderTopbarChips(); } catch(_){}
+}
+
+// ── TOPBAR BACKEND CHIPS ──────────────────────────────────────────────
+// Two pill-buttons in the header showing the current state of each
+// backend (Folder / Crate). Clicking opens a contextMenu-style popover
+// with state-appropriate actions: Connect / Lock / Unlock / Disconnect.
+// State changes propagate via broadcastCapabilities() → renderTopbarChips().
+
+// Compute the visual state of each chip from current backend state.
+// Returns one of: 'disconnected' | 'pending' | 'locked' | 'active'.
+function fsaChipState(){
+  if (state.fsHandle) return 'active';
+  if (window._fsPendingHandle) return 'pending';
+  return 'disconnected';
+}
+function crateChipState(){
+  if (state.crate) return 'active';
+  if (state.crateLocked) return 'locked';
+  return 'disconnected';
+}
+
+function renderTopbarChips(){
+  const fsaChip   = document.getElementById('fsa-chip');
+  const crateChip = document.getElementById('crate-chip');
+  if (!fsaChip || !crateChip) return;
+
+  // FSA chip
+  const fsaState = fsaChipState();
+  fsaChip.className = 'topbar-chip' + (fsaState !== 'disconnected' ? ' ' + fsaState : '');
+  const fsaLabel = fsaState === 'active' ? (state.fsFolderName || 'Folder')
+                : fsaState === 'pending' ? (state.fsFolderName ? state.fsFolderName + ' (re-grant)' : 'Re-grant')
+                : 'Folder';
+  fsaChip.querySelector('.topbar-chip-label').textContent = fsaLabel;
+  fsaChip.title = fsaState === 'active'   ? `Local folder: ${state.fsFolderName || ''}`
+                : fsaState === 'pending'  ? 'Folder permission needs re-grant'
+                                          : 'No local folder connected';
+
+  // Crate chip
+  const crState = crateChipState();
+  crateChip.className = 'topbar-chip' + (crState !== 'disconnected' ? ' ' + crState : '');
+  const crLabel = crState === 'active' ? (state.crateBucketName || 'Crate')
+                : crState === 'locked' ? (state.crateBucketName ? state.crateBucketName + ' 🔒' : 'Locked')
+                : 'Crate';
+  crateChip.querySelector('.topbar-chip-label').textContent = crLabel;
+  crateChip.title = crState === 'active' ? `Crate (unlocked): ${state.crateBucketName || ''}`
+                  : crState === 'locked' ? `Crate locked: ${state.crateBucketName || ''}`
+                                         : 'No Crate connected';
+}
+
+// FSA chip click → state-appropriate menu via the existing
+// showContextMenu() helper. Positioned below the chip.
+function openFsaChipMenu(){
+  closeContextMenu(); // in case it's already open from a different anchor
+  const chip = document.getElementById('fsa-chip');
+  if (!chip) return;
+  const r = chip.getBoundingClientRect();
+  const items = [];
+  const s = fsaChipState();
+  if (s === 'active'){
+    items.push({ label: '📁 Open Settings…', onClick: () => openSettings() });
+    items.push({ separator: true });
+    items.push({ label: 'Disconnect folder…', onClick: () => fsInteractiveDisconnect(), danger: true });
+  } else if (s === 'pending'){
+    items.push({ label: 'Re-grant access…', onClick: async () => { await fsRegrantPending(); } });
+    items.push({ separator: true });
+    items.push({ label: 'Disconnect folder…', onClick: () => fsInteractiveDisconnect(), danger: true });
+  } else {
+    items.push({ label: 'Connect folder…', onClick: () => fsConnect() });
+  }
+  // Position below the chip, left-aligned.
+  showContextMenu(r.left, r.bottom + 6, items);
+}
+
+function openCrateChipMenu(){
+  closeContextMenu();
+  const chip = document.getElementById('crate-chip');
+  if (!chip) return;
+  const r = chip.getBoundingClientRect();
+  const items = [];
+  const s = crateChipState();
+  if (s === 'active'){
+    items.push({ label: '🔒 Lock now', onClick: () => crateLock() });
+    items.push({ label: '☁️ Open Settings…', onClick: () => openSettings() });
+    items.push({ separator: true });
+    items.push({ label: 'Disconnect Crate…', onClick: () => crateInteractiveDisconnect(), danger: true });
+  } else if (s === 'locked'){
+    items.push({ label: '🔓 Unlock…', onClick: () => crateInteractiveUnlock() });
+    items.push({ separator: true });
+    items.push({ label: 'Disconnect Crate…', onClick: () => crateInteractiveDisconnect(), danger: true });
+  } else {
+    items.push({ label: 'Connect Crate…', onClick: () => crateInteractiveConnect() });
+  }
+  showContextMenu(r.left, r.bottom + 6, items);
+}
+
+// Wire the chip click handlers. Done once on first DOM-ready; chips
+// themselves are persistent so we don't need to re-bind on re-render.
+function bindTopbarChips(){
+  document.getElementById('fsa-chip')?.addEventListener('click', openFsaChipMenu);
+  document.getElementById('crate-chip')?.addEventListener('click', openCrateChipMenu);
 }
 
 window.addEventListener('message', async e => {
@@ -3490,13 +3718,7 @@ function openSettings(){
     if (ok){ await fsWriteState(); closeSettings(); openSettings(); }
   });
   wrap.querySelector('#fs-disconnect')?.addEventListener('click', async () => {
-    const ok = await nakliosConfirm(
-      'naklOS will keep working locally; your folder data stays where it is. Re-connecting is one click + folder pick away.',
-      { title: 'Disconnect folder?', okLabel: 'Disconnect', danger: true }
-    );
-    if (!ok) return;
-    await fsDisconnect();
-    closeSettings(); openSettings();
+    if (await fsInteractiveDisconnect()){ closeSettings(); openSettings(); }
   });
 
   // --- Crate (cloud) panel handlers ---
@@ -3504,56 +3726,11 @@ function openSettings(){
   // The passphrase dialog handles wrong-passphrase retries inline; we only
   // close Settings + re-open on success.
   wrap.querySelector('#crate-connect')?.addEventListener('click', async () => {
-    const file = await pickFile('.crate-creds,application/json');
-    if (!file) return;
-    const result = await nakliosPassphrase({
-      title: 'Connect Crate',
-      body: 'Enter the passphrase for ' + file.name + '.',
-      validate: async (pass) => {
-        try {
-          await crateConnect(file, pass);
-        } catch (e){
-          // CORS failure → open the remediation modal on top (native <dialog>
-          // stacks), then surface a brief inline message in the passphrase
-          // dialog. The remediation modal has the JSON + Copy + Cloudflare link.
-          if (crateIsCorsError(e)){
-            await crateShowCorsRemediation();
-            throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
-          }
-          throw e;
-        }
-      },
-    });
-    // result is null on Escape (user dismissed) or undefined on successful
-    // validator return. Either way, refresh Settings if we now have a session.
-    if (state.crate){ closeSettings(); openSettings(); }
+    if (await crateInteractiveConnect()){ closeSettings(); openSettings(); }
   });
 
-  // Re-unlock — encrypted blob already in IDB, just need the passphrase.
   wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
-    const blob = await crateLoadCredsBlob();
-    if (!blob){
-      await nakliosAlert(
-        'No stored credentials. Use Disconnect → Connect to add a new .crate-creds file.',
-        { title: 'Cannot unlock', kind: 'error' }
-      );
-      return;
-    }
-    await nakliosPassphrase({
-      bucketHint: state.crateBucketName || 'Crate',
-      validate: async (pass) => {
-        try {
-          await crateUnlock(blob, pass);
-        } catch (e){
-          if (crateIsCorsError(e)){
-            await crateShowCorsRemediation();
-            throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
-          }
-          throw e;
-        }
-      },
-    });
-    if (state.crate){ closeSettings(); openSettings(); }
+    if (await crateInteractiveUnlock()){ closeSettings(); openSettings(); }
   });
 
   wrap.querySelector('#crate-lock')?.addEventListener('click', () => {
@@ -3562,13 +3739,7 @@ function openSettings(){
   });
 
   wrap.querySelector('#crate-disconnect')?.addEventListener('click', async () => {
-    const ok = await nakliosConfirm(
-      'The stored credentials file will be removed from this device. Your bucket data is untouched. Re-connecting requires the .crate-creds file again.',
-      { title: 'Disconnect Crate?', okLabel: 'Disconnect', danger: true }
-    );
-    if (!ok) return;
-    await crateDisconnect();
-    closeSettings(); openSettings();
+    if (await crateInteractiveDisconnect()){ closeSettings(); openSettings(); }
   });
   wrap.querySelector('#crate-stay')?.addEventListener('change', (e) => {
     setCrateStayUnlocked(e.target.checked);
@@ -4727,10 +4898,16 @@ async function init(){
   updateDock();
   document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
 
+  // Topbar backend chips — wire click handlers once, then paint based on
+  // whatever the boot reconnects below land at.
+  bindTopbarChips();
+  renderTopbarChips();
+
   // Try to reconnect to the previously-picked folder. If still granted, this
   // sets state.fsHandle; if 'prompt', it parks the handle for re-grant via Settings.
   // Either way, we don't block boot — fire-and-forget.
   fsReconnect().then(async (ok) => {
+    renderTopbarChips();
     if (!ok) return;
     // If the folder's state.json is newer than localStorage's last sync, hydrate.
     const hydrated = await fsHydrateIfNewer();
@@ -4749,6 +4926,7 @@ async function init(){
   // blob exists. Auto-unlock if "Stay unlocked in this tab" is on AND the
   // session has a stashed blob from earlier this tab session.
   crateReconnect().then(async (haveBlob) => {
+    renderTopbarChips();
     if (!haveBlob) return;
     if (!state.crateStayUnlocked) return;
     const stashed = sessionStorage.getItem(SESSION_CREDS_KEY);
