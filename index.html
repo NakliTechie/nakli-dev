@@ -710,6 +710,31 @@ body.is-mobile .nw-dock{display:none;}
   margin:0; color:var(--muted); font-size:12px;
 }
 
+/* JSON / pre block inside a dialog body, with a corner Copy button. */
+.nw-dlg-pre{
+  position:relative;
+  background:var(--row); color:var(--ink);
+  border:1px solid var(--line); border-radius:8px;
+  padding:10px 12px; margin:0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size:11px; line-height:1.5;
+  max-height:260px;
+  overflow:auto;
+  white-space:pre;
+}
+.nw-dlg-copy-btn{
+  position:absolute; top:6px; right:6px;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:6px;
+  padding:3px 8px;
+  font:inherit; font-size:11px;
+  cursor:pointer;
+}
+.nw-dlg-copy-btn:hover{
+  background:color-mix(in srgb, var(--ink) 10%, var(--panel));
+}
+.nw-dlg-copy-btn.copied{ color:var(--ok); border-color:var(--ok); }
+
 /* ── FOOTER ── */
 #footer-nav{
   position:absolute; bottom:0; left:0; right:0; height:var(--footer-h);
@@ -1634,6 +1659,105 @@ async function crateClearCredsBlob(){
 
 // crateUnlock — given a creds-file byte buffer + passphrase, instantiate
 // the live Crate. Updates state.crate / state.crateBucketName.
+// CORS JSON the user should paste into their R2 bucket's CORS Policy. Matches
+// the schema crate's onboarding wizard generates (see crate/lib/onboarding.js
+// corsJson()), with both crate.naklios.dev and naklios.dev as allowed origins
+// so the same bucket works from either surface.
+const CRATE_CORS_JSON = JSON.stringify(
+  [
+    {
+      AllowedOrigins: ['https://crate.naklios.dev', 'https://naklios.dev'],
+      AllowedMethods: ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
+      AllowedHeaders: ['*'],
+      ExposeHeaders: ['ETag'],
+      MaxAgeSeconds: 3600,
+    },
+  ],
+  null,
+  2,
+);
+
+// Detect Crate.open / bucket-fetch errors that look like the bucket's CORS
+// doesn't include this origin. The crate bucket layer surfaces these as
+// messages containing 'CORS_OR_NETWORK' (see crate/lib/bucket.js).
+function crateIsCorsError(error){
+  return /CORS_OR_NETWORK/.test(error?.message || '');
+}
+
+// crateShowCorsRemediation — themed dialog that walks the user through
+// fixing their bucket's CORS policy. Two buttons: a Copy-to-clipboard for
+// the JSON, and an Open-Cloudflare-R2 deep link. Resolves when dismissed.
+//
+// Safe to call while another modal is open (e.g. the passphrase dialog) —
+// native <dialog>.showModal() stacks, browser handles the focus/Escape
+// stack natively.
+function crateShowCorsRemediation(){
+  return new Promise(resolve => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg';
+    // Use innerHTML for layout; the JSON is HTML-escaped before injection.
+    const jsonHtml = _dlgEscape(CRATE_CORS_JSON);
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form" style="max-width:520px;">
+        <h3 class="nw-dlg-title">Allow naklios.dev to access your bucket</h3>
+        <p class="nw-dlg-body">
+          Your bucket's CORS policy doesn't include
+          <code>naklios.dev</code> yet — that's why unlock can't reach
+          <code>.crate/crate.json</code>.
+        </p>
+        <p class="nw-dlg-body">
+          Open <strong>Cloudflare → R2 → your bucket → Settings → CORS Policy</strong>
+          and paste this JSON (replace any existing rule if it only mentions
+          <code>crate.naklios.dev</code>):
+        </p>
+        <pre class="nw-dlg-pre"><button type="button" class="nw-dlg-copy-btn" id="cors-copy">Copy</button>${jsonHtml}</pre>
+        <p class="nw-dlg-hint">
+          The change usually applies within seconds. Browsers cache CORS
+          preflights for up to an hour (<code>MaxAgeSeconds</code>) — if
+          you've already updated CORS but still see the error, try an
+          incognito tab.
+        </p>
+        <menu class="nw-dlg-actions">
+          <button type="submit" value="open" class="nw-dlg-btn">Open Cloudflare R2 →</button>
+          <button type="submit" value="ok" class="nw-dlg-btn primary" autofocus>Got it</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+
+    // Copy button — does NOT close the dialog (type="button" not "submit").
+    const copyBtn = dlg.querySelector('#cors-copy');
+    copyBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try {
+        await navigator.clipboard.writeText(CRATE_CORS_JSON);
+        copyBtn.textContent = 'Copied';
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy';
+          copyBtn.classList.remove('copied');
+        }, 1400);
+      } catch (_){
+        copyBtn.textContent = 'Copy failed';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1400);
+      }
+    });
+
+    dlg.addEventListener('close', () => {
+      const v = dlg.returnValue;
+      dlg.remove();
+      if (v === 'open'){
+        // Generic Cloudflare R2 entry point — the user navigates from there
+        // to their specific bucket. We don't know the account ID here.
+        window.open('https://dash.cloudflare.com/?to=/:account/r2/overview', '_blank', 'noopener');
+      }
+      resolve();
+    }, { once: true });
+
+    dlg.showModal();
+  });
+}
+
 async function crateUnlock(bytes, passphrase){
   const { Crate, credsfile } = await loadCrateModule();
   // credsfile.unpack returns the creds object directly:
@@ -3386,8 +3510,18 @@ function openSettings(){
       title: 'Connect Crate',
       body: 'Enter the passphrase for ' + file.name + '.',
       validate: async (pass) => {
-        // crateConnect throws CrateError on wrong passphrase — bubble it.
-        await crateConnect(file, pass);
+        try {
+          await crateConnect(file, pass);
+        } catch (e){
+          // CORS failure → open the remediation modal on top (native <dialog>
+          // stacks), then surface a brief inline message in the passphrase
+          // dialog. The remediation modal has the JSON + Copy + Cloudflare link.
+          if (crateIsCorsError(e)){
+            await crateShowCorsRemediation();
+            throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
+          }
+          throw e;
+        }
       },
     });
     // result is null on Escape (user dismissed) or undefined on successful
@@ -3408,7 +3542,15 @@ function openSettings(){
     await nakliosPassphrase({
       bucketHint: state.crateBucketName || 'Crate',
       validate: async (pass) => {
-        await crateUnlock(blob, pass);
+        try {
+          await crateUnlock(blob, pass);
+        } catch (e){
+          if (crateIsCorsError(e)){
+            await crateShowCorsRemediation();
+            throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
+          }
+          throw e;
+        }
       },
     });
     if (state.crate){ closeSettings(); openSettings(); }
