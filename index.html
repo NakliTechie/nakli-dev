@@ -1636,13 +1636,41 @@ async function crateClearCredsBlob(){
 // the live Crate. Updates state.crate / state.crateBucketName.
 async function crateUnlock(bytes, passphrase){
   const { Crate, credsfile } = await loadCrateModule();
-  const { creds } = await credsfile.unpack(bytes, passphrase);
-  // creds shape: { provider, bucket: {name, accountId, region}, credentials: {accessKey, secretKey} }
-  const crate = await Crate.open({
-    bucketConfig: creds.bucket,
-    credentials: creds.credentials,
-    passphrase,
-  });
+  // credsfile.unpack returns the creds object directly:
+  //   { provider, bucket: {name, accountId, region}, credentials: {accessKey, secretKey} }
+  // Previous code destructured `const { creds } = ...` which left creds undefined
+  // and crashed on the next line with "Cannot read properties of undefined
+  // (reading 'bucket')". Pre-v2.22 bug — landed silently in v2.20.
+  let creds;
+  try {
+    creds = await credsfile.unpack(bytes, passphrase);
+  } catch (e){
+    // CredsFileError → already user-readable; bubble as-is.
+    // Other (rare) failures → wrap with context but don't leak internals.
+    if (e?.name === 'CredsFileError') throw e;
+    throw new Error('Could not read the credentials file. ' + (e?.message || ''));
+  }
+  let crate;
+  try {
+    crate = await Crate.open({
+      bucketConfig: creds.bucket,
+      credentials: creds.credentials,
+      passphrase,
+    });
+  } catch (e){
+    // Crate.open failures: wrong passphrase (caught by unpack already, but
+    // also possible if the bucket itself is in a bad state), bucket
+    // unreachable, CORS, missing .crate/crate.json, etc. CrateError messages
+    // are user-readable; bubble. Generic errors get a friendlier wrapper.
+    if (e?.name === 'CrateError') throw e;
+    console.warn('[crate] Crate.open failed:', e);
+    throw new Error(
+      'Could not open the bucket. ' +
+      'Check your network, that the bucket still exists, and that its CORS ' +
+      'config allows naklios.dev. ' +
+      (e?.message ? '(' + e.message + ')' : '')
+    );
+  }
   state.crate = crate;
   state.crateBucketName = creds.bucket?.name || credsfile.peekHint(bytes) || '(crate)';
   state.crateLocked = false;
