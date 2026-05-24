@@ -746,6 +746,27 @@ body.is-mobile .nw-dock{display:none;}
   margin:0; color:var(--muted); font-size:12px;
 }
 
+/* Manual-creds dialog — 6-field form for the "I lost the .crate-creds
+   file" recovery path. Reuses .nw-dlg shell + actions; adds field/label/
+   input styles that mirror .nw-dlg-pass-input. */
+.nw-dlg-manual .nw-dlg-form{ gap:10px; min-width:340px; max-width:420px; }
+.nw-dlg-field{ display:flex; flex-direction:column; gap:3px; }
+.nw-dlg-label{ font-size:11px; color:var(--muted); letter-spacing:0.02em; }
+.nw-dlg-input{
+  padding:7px 10px;
+  background:var(--row); color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:8px;
+  font:inherit; min-width:0;
+}
+.nw-dlg-input.mono{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing:0.02em;
+}
+.nw-dlg-input:focus{
+  outline:2px solid var(--brand); outline-offset:1px;
+  border-color:var(--brand);
+}
+
 /* JSON / pre block inside a dialog body, with a corner Copy button. */
 .nw-dlg-pre{
   position:relative;
@@ -1975,6 +1996,29 @@ async function crateConnect(file, passphrase){
   await crateSaveCredsBlob(buf);
 }
 
+// crateConnectManual — the "no .crate-creds file" recovery path. User
+// pastes the 5 bucket strings (from 1Password / Cloudflare dashboard /
+// wherever they keep API tokens) + the passphrase. We build the credsfile
+// blob from those inputs in-memory, then funnel through the exact same
+// crateUnlock + crateSaveCredsBlob path as the file flow. End state is
+// identical: stored blob in IDB, unlocked Crate in memory, app-permission
+// prompts work the same way.
+//
+// Critical: pack() requires a valid passphrase ≥ 1 char but doesn't
+// validate the creds against the bucket. The real "did this work" check
+// happens inside crateUnlock via Crate.open's GET .crate/crate.json call.
+// CORS / wrong-creds / wrong-passphrase all surface from there.
+async function crateConnectManual(bucketConfig, credentials, passphrase){
+  const { credsfile } = await loadCrateModule();
+  const blob = await credsfile.pack({
+    provider: 'r2',
+    bucket: bucketConfig,
+    credentials,
+  }, passphrase);
+  await crateUnlock(blob, passphrase);
+  await crateSaveCredsBlob(blob);
+}
+
 // crateReconnect — boot path. Checks for a persisted creds blob; if
 // "stay unlocked in this tab" is on AND sessionStorage has the same
 // blob, re-prompt for passphrase via banner. Otherwise the user has to
@@ -2084,6 +2128,43 @@ async function crateInteractiveConnect(){
           lastBucket = { ...creds.bucket, provider: creds.provider };
         } catch(_){ /* unpack failed → fall through to crateConnect which throws cleanly */ }
         await crateConnect(file, pass);
+      } catch (e){
+        await _crateHandleConnectError(e, () => lastBucket);
+      }
+    },
+  });
+  return !!state.crate;
+}
+
+// crateInteractiveManual — the "I lost the .crate-creds file" escape hatch.
+// Shows a themed 6-field dialog (5 bucket strings + passphrase), then
+// runs the same unlock + persist path as the file flow. On success the
+// stored blob is in IDB and a fresh .crate-creds is one click away
+// (Connect → Disconnect → Re-download from crate.naklios.dev, OR just
+// keep using the manual unlock for future sessions).
+//
+// The 5 strings live in 1Password / Cloudflare dashboard / wherever the
+// user already keeps API tokens — same place they'd be for any other
+// S3-compatible bucket. The file was only ever a convenience wrapper
+// around these 5 values + the passphrase.
+async function crateInteractiveManual(){
+  let lastBucket = null;
+  await nakliosManualCreds({
+    title: 'Connect Crate manually',
+    body: 'No .crate-creds file? Paste your bucket details below. These are the same 5 values you used to set up the Crate originally.',
+    validate: async (vals) => {
+      const bucketConfig = {
+        accountId: vals.accountId.trim().toLowerCase(),
+        name: vals.bucketName.trim(),
+        region: 'auto',
+      };
+      const credentials = {
+        accessKey: vals.accessKey.trim(),
+        secretKey: vals.secretKey.trim(),
+      };
+      lastBucket = { ...bucketConfig, provider: 'r2' };
+      try {
+        await crateConnectManual(bucketConfig, credentials, vals.passphrase);
       } catch (e){
         await _crateHandleConnectError(e, () => lastBucket);
       }
@@ -2430,6 +2511,122 @@ function nakliosPassphrase(opts = {}){
     dlg.showModal();
     // Focus after the dialog is fully open. setTimeout(0) is the standard tick.
     setTimeout(() => input.focus(), 0);
+  });
+}
+
+// nakliosManualCreds({ title, body, validate }) — 6-field dialog:
+// bucketName, accountId, accessKey, secretKey, passphrase. validate(vals)
+// is async; throw to keep the dialog open with an inline error, resolve
+// to close. Returns the validator's result or null on Escape.
+//
+// Used by the Crate-connect "I lost the file" fallback. Same dialog
+// shape + semantics as nakliosPassphrase but with multiple fields.
+function nakliosManualCreds(opts = {}){
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg nw-dlg-manual';
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form">
+        <h3 class="nw-dlg-title">${_dlgEscape(opts.title || 'Enter credentials')}</h3>
+        ${opts.body ? `<p class="nw-dlg-hint">${_dlgEscape(opts.body)}</p>` : ''}
+        <label class="nw-dlg-field">
+          <span class="nw-dlg-label">Bucket name</span>
+          <input name="bucketName" type="text" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 required class="nw-dlg-input">
+        </label>
+        <label class="nw-dlg-field">
+          <span class="nw-dlg-label">Cloudflare Account ID</span>
+          <input name="accountId" type="text" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 required class="nw-dlg-input mono">
+        </label>
+        <label class="nw-dlg-field">
+          <span class="nw-dlg-label">Access Key ID</span>
+          <input name="accessKey" type="text" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 required class="nw-dlg-input mono">
+        </label>
+        <label class="nw-dlg-field">
+          <span class="nw-dlg-label">Secret Access Key</span>
+          <input name="secretKey" type="password" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 required class="nw-dlg-input mono">
+        </label>
+        <label class="nw-dlg-field">
+          <span class="nw-dlg-label">Folder passphrase</span>
+          <input name="passphrase" type="password" autocomplete="current-password"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 required class="nw-dlg-input">
+        </label>
+        <p class="nw-dlg-inline-error" hidden></p>
+        <menu class="nw-dlg-actions">
+          <button value="cancel" type="button" class="nw-dlg-btn">Cancel</button>
+          <button value="ok" type="submit" class="nw-dlg-btn primary">${_dlgEscape(opts.okLabel || 'Unlock')}</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+
+    const form   = dlg.querySelector('form');
+    const submit = form.querySelector('button[type="submit"]');
+    const cancel = form.querySelector('button[value="cancel"]');
+    const err    = dlg.querySelector('.nw-dlg-inline-error');
+    const inputs = Array.from(form.querySelectorAll('input'));
+    const passInput = form.querySelector('input[name="passphrase"]');
+    const secretInput = form.querySelector('input[name="secretKey"]');
+
+    let resolved = false;
+    const clearSecrets = () => {
+      passInput.value = '';
+      secretInput.value = '';
+    };
+    const closeWith = (value) => {
+      if (resolved) return;
+      resolved = true;
+      clearSecrets();
+      resolve(value);
+      try { dlg.close(); } catch(_){}
+    };
+
+    cancel.addEventListener('click', (e) => {
+      e.preventDefault();
+      closeWith(null);
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const vals = {};
+      for (const i of inputs) vals[i.name] = i.value;
+      if (!opts.validate){ closeWith(vals); return; }
+      submit.disabled = true;
+      err.hidden = true; err.textContent = '';
+      try {
+        const result = await opts.validate(vals);
+        closeWith(result === undefined ? true : result);
+      } catch (validateErr){
+        err.textContent = validateErr?.message
+          || 'Unlock failed — check your inputs.';
+        err.hidden = false;
+        // Keep typed fields; only the passphrase + secret get cleared so
+        // the next attempt starts clean on the secret-bearing inputs.
+        clearSecrets();
+        passInput.focus();
+        submit.disabled = false;
+      }
+    });
+
+    dlg.addEventListener('close', () => {
+      try { dlg.remove(); } catch(_){}
+      if (!resolved){
+        resolved = true;
+        clearSecrets();
+        resolve(null);
+      }
+    }, { once: true });
+
+    dlg.showModal();
+    setTimeout(() => inputs[0].focus(), 0);
   });
 }
 
@@ -3808,6 +4005,9 @@ function openSettings(){
       </div>
     ` : `
       <button class="nw-fs-btn-primary" id="crate-connect">☁️ Connect Crate…</button>
+      <div class="nw-fs-blurb" style="margin-top:6px;">
+        No file? <button class="nw-foot-link" id="crate-connect-manual" style="background:none; border:0; padding:0; cursor:pointer; font:inherit;">Enter the 5 details manually →</button>
+      </div>
     `}
     <div class="nw-fs-blurb">${crateUnlocked || crateLocked
       ? `Encrypted multi-device folder. Apps see the same <code>apps/&lt;id&gt;/</code> layout — pick which backend (folder or crate) per app on first use. <a class="nw-foot-link" href="https://crate.naklios.dev/guide/" target="_blank">Guide →</a>`
@@ -3868,6 +4068,11 @@ function openSettings(){
   // close Settings + re-open on success.
   wrap.querySelector('#crate-connect')?.addEventListener('click', async () => {
     if (await crateInteractiveConnect()){ closeSettings(); openSettings(); }
+  });
+
+  wrap.querySelector('#crate-connect-manual')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (await crateInteractiveManual()){ closeSettings(); openSettings(); }
   });
 
   wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
