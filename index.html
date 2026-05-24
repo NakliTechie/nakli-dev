@@ -2205,6 +2205,47 @@ async function crateInteractiveUnlock(){
   return !!state.crate;
 }
 
+// crateDownloadCredsFile — pull the stored encrypted blob out of IDB
+// and trigger a browser download. Same filename convention the standalone
+// Crate app uses (`<bucket-name>.crate-creds`). The bytes are exactly
+// what was either picked from a file by the user OR re-packed from the
+// manual-mode dialog — round-trip-compatible with both paths.
+//
+// Use case: user unlocked manually because they'd lost their file, now
+// they want a fresh file saved somewhere findable. Closes the
+// "manual recovery" loop without a detour through crate.naklios.dev.
+async function crateDownloadCredsFile(){
+  if (!state.crate){
+    await nakliosAlert(
+      'Unlock the Crate first — there\'s no stored credentials blob to save.',
+      { title: 'Nothing to save', kind: 'error' }
+    );
+    return;
+  }
+  const blob = await crateLoadCredsBlob();
+  if (!blob){
+    await nakliosAlert(
+      'No stored credentials blob found in this device\'s IndexedDB. This shouldn\'t happen while you\'re unlocked — please file a bug.',
+      { title: 'Cannot save', kind: 'error' }
+    );
+    return;
+  }
+  const { credsfile } = await loadCrateModule();
+  const filename = credsfile.suggestedFilename(state.crateBucketName || 'crate');
+  const file = new Blob([blob], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke after a short delay so the browser has time to start the
+  // download. Bug-fixed pattern; not all browsers handle immediate revoke.
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 // Disconnect Crate with confirmation. Returns true if disconnected.
 async function crateInteractiveDisconnect(){
   const ok = await nakliosConfirm(
@@ -3996,6 +4037,10 @@ function openSettings(){
         <button class="nw-fs-link-btn" id="crate-lock">Lock</button>
         <button class="nw-fs-link-btn" id="crate-disconnect" style="margin-left:6px;">Disconnect</button>
       </div>
+      <div class="nw-fs-blurb" style="margin-top:6px;">
+        <button class="nw-foot-link" id="crate-download-creds" style="background:none; border:0; padding:0; cursor:pointer; font:inherit;">↓ Save <code>.crate-creds</code> file</button>
+        — back up your credentials somewhere you'll find it (next time you can unlock with one click).
+      </div>
     ` : crateLocked ? `
       <div class="nw-fs-connected">
         <span>🔐</span>
@@ -4082,6 +4127,19 @@ function openSettings(){
   wrap.querySelector('#crate-lock')?.addEventListener('click', () => {
     crateLock();
     closeSettings(); openSettings();
+  });
+
+  wrap.querySelector('#crate-download-creds')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      await crateDownloadCredsFile();
+    } catch (err){
+      console.warn('[crate] download creds failed:', err);
+      await nakliosAlert(
+        'Could not save the credentials file: ' + (err?.message || err),
+        { title: 'Save failed', kind: 'error' }
+      );
+    }
   });
 
   wrap.querySelector('#crate-disconnect')?.addEventListener('click', async () => {
