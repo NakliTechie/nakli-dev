@@ -1,5 +1,5 @@
 /*!
- * naklios.js — cooperative SDK for apps hosted inside nakliOS (Immersive mode)
+ * naklios.js — cooperative SDK for apps hosted inside NakliOS (Immersive mode)
  *
  * Drop this file into your app's <head> or copy its contents inline. The
  * surface is a no-op when the app loads standalone (window.parent === window),
@@ -12,22 +12,24 @@
  *     naklios.close();                          // self-close from a Done button
  *     naklios.theme.onChange(t => paint(t));    // restyle on host theme change
  *
- *     // Filesystem (when hosted with a connected folder):
+ *     // Filesystem (when hosted with a connected Folder or Crate):
  *     if (naklios.capabilities.fs){
  *       await naklios.fs.write('vault.json', JSON.stringify(vault));
  *       const data = await naklios.fs.read('vault.json');
  *     }
  *   </script>
  *
- * naklios.capabilities.hosted is true only when running inside nakliOS.
- * naklios.capabilities.fs is true only when the host has a folder connected
- *   AND the user has granted this app permission to read/write under it.
- *   Listen for changes via naklios.capabilities.onChange(cb).
+ * naklios.capabilities.hosted is true only when running inside NakliOS.
+ * naklios.capabilities.fs is true when hosted storage is available to the app.
+ * naklios.capabilities.fsBackends lists connected Folder/Crate choices, and
+ * naklios.capabilities.fsBackend is the app's current binding (or null).
+ * Apps may call naklios.fs.useBackend(id); NakliOS confirms the change.
+ * Listen for changes via naklios.onCapabilitiesChange(cb).
  *
- * Paths in fs methods are relative to apps/<your-app-id>/ in the host folder.
+ * Paths in fs methods are relative to apps/<your-app-id>/ on the selected backend.
  * Traversal (../) is blocked at the host.
  *
- * Single source of truth: /Users/chiragpatnaik/Code/Browser/nakliOS/sdk/naklios.js
+ * Single source of truth: /Users/chiragpatnaik/Code/naklios-universe/naklOS/sdk/naklios.js
  * Vendor it inline in each app to keep the no-network-dependency ethos.
  * License: MIT.
  */
@@ -39,7 +41,13 @@
   var themeListeners = new Set();
   var capListeners = new Set();
   var beforeCloseCb = null;
-  var capabilities = { hosted: inNakliOS, version: 1, fs: false };
+  var capabilities = {
+    hosted: inNakliOS,
+    version: 1,
+    fs: false,
+    fsBackends: [],
+    fsBackend: null,
+  };
 
   // Request/reply correlation for fs RPCs
   var pendingRpc = new Map();   // requestId → { resolve, reject }
@@ -81,6 +89,8 @@
       if (beforeCloseCb) { try { beforeCloseCb(); } catch (_) {} }
     } else if (msg.type === 'naklios:capabilities') {
       if (typeof msg.fs === 'boolean') capabilities.fs = msg.fs;
+      if (Array.isArray(msg.fsBackends)) capabilities.fsBackends = msg.fsBackends;
+      capabilities.fsBackend = typeof msg.fsBackend === 'string' ? msg.fsBackend : null;
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}
       });
@@ -128,6 +138,9 @@
       list:       function (prefix)     { return rpc('naklios:fs:list', { prefix: prefix || '' }); },
       delete:     function (path)       { return rpc('naklios:fs:delete', { path: path }); },
       exists:     function (path)       { return rpc('naklios:fs:exists', { path: path }); },
+      // Explicit backend changes are always confirmed by the NakliOS host.
+      // Switching changes the app-scoped view; it never copies or deletes data.
+      useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },
     },
   };
 })();

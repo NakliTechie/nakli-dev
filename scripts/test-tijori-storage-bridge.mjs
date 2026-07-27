@@ -12,9 +12,14 @@ const appScript = scripts.at(-1);
 new Function(sdk);
 new Function(appScript);
 
+assert.doesNotMatch(
+  app,
+  /\b(?:naklOS|nakliOS|Naklios)\b/,
+  'Tijori must use the NakliOS product spelling',
+);
 assert.match(app, /name="version" content="1\.3\.0"/);
 assert.match(app, /connect-src 'none'/, 'Tijori must keep direct network access disabled');
-assert.match(app, /frame-ancestors 'self'/, 'same-origin naklOS mirror must be iframeable');
+assert.match(app, /frame-ancestors 'self'/, 'same-origin NakliOS mirror must be iframeable');
 assert.match(appScript, /const NAKLIOS_DIR = Object\.freeze/);
 assert.match(appScript, /metaVersion\(meta\) === 2 && !metaPwWrapEnabled\(meta\)/,
   'hardware-key-only imports must be refused across origins');
@@ -24,9 +29,15 @@ assert.match(appScript, /window\.showDirectoryPicker/,
 for (const op of ['read', 'write', 'append', 'list', 'delete', 'exists']) {
   assert.match(sdk, new RegExp(`naklios:fs:${op}`), `SDK must expose fs.${op}`);
 }
+assert.match(sdk, /naklios:fs:selectBackend/);
 assert.match(host, /msg\.type\.startsWith\('naklios:fs:'\)/);
+assert.match(host, /op === 'selectBackend'\) reply\.result = await fsHostSelectBackend/);
 assert.match(host, /op === 'list'\) reply\.result = await fsHostList/);
 assert.match(host, /reply\.result = await fsHostHandle/);
+assert.match(host, /Nothing is copied or deleted when you switch\./,
+  'host confirmation must explain non-destructive backend switching');
+assert.match(host, /fsBackends,/);
+assert.match(host, /fsBackend,/);
 assert.match(host, /const safe = fsSafePath\(appId, msg\.path \|\| ''\)/,
   'host must scope file operations to the requesting app');
 
@@ -50,8 +61,26 @@ vm.runInNewContext(sdk, {
   clearTimeout: () => {},
 });
 
-messageListener({ data: { type: 'naklios:capabilities', fs: true } });
+messageListener({
+  data: {
+    type: 'naklios:capabilities',
+    fs: true,
+    fsBackends: [{ id: 'crate', label: 'Crate', name: 'vault-bucket' }],
+    fsBackend: 'crate',
+  },
+});
 assert.equal(childWindow.naklios.capabilities.fs, true);
+assert.equal(childWindow.naklios.capabilities.fsBackends[0].name, 'vault-bucket');
+assert.equal(childWindow.naklios.capabilities.fsBackend, 'crate');
+
+const selectPromise = childWindow.naklios.fs.useBackend('crate');
+const selectRequest = sent.at(-1);
+assert.equal(selectRequest.type, 'naklios:fs:selectBackend');
+assert.equal(selectRequest.backend, 'crate');
+messageListener({
+  data: { type: 'naklios:fs:reply', requestId: selectRequest.requestId, result: true },
+});
+assert.equal(await selectPromise, true);
 
 const requestPromise = childWindow.naklios.fs.exists('tijori-meta.json');
 const request = sent.at(-1);
@@ -62,4 +91,4 @@ messageListener({
 });
 assert.equal(await requestPromise, false);
 
-console.log('naklOS ↔ Tijori storage bridge contract: PASS');
+console.log('NakliOS ↔ Tijori storage bridge contract: PASS');

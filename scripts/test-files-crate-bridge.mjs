@@ -9,6 +9,12 @@ const filesSource = await readFile(
   "utf8",
 );
 
+assert.match(hostSource, /<title>NakliOS —/);
+assert.doesNotMatch(
+  filesSource,
+  /\b(?:naklOS|nakliOS|Naklios)\b/,
+  "Files must use the NakliOS product spelling",
+);
 assert.match(
   hostSource,
   /\{\s*id:'files',[\s\S]*?kind:'system',/,
@@ -17,7 +23,7 @@ assert.match(
 assert.match(
   hostSource,
   /if \(app\.kind === 'system'\) return spawnIframeWindow\(app\);/,
-  "system apps must stay inside naklOS in Basic mode",
+  "system apps must stay inside NakliOS in Basic mode",
 );
 assert.match(
   filesSource,

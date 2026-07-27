@@ -9,7 +9,7 @@
 #
 # Why same-origin mirroring: FSA picker and similar capability-gated APIs
 # are blocked in cross-origin iframes. Apps that need them are mirrored
-# under naklios.dev/apps/<id>/ so nakliOS can embed them same-origin.
+# under naklios.dev/apps/<id>/ so NakliOS can embed them same-origin.
 
 set -euo pipefail
 

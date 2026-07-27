@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>nakliOS — a private browser desktop</title>
+<title>NakliOS — a private browser desktop</title>
 <meta name="description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta name="author" content="Chirag Patnaik">
 <link rel="canonical" href="https://naklios.dev/">
-<meta property="og:title" content="nakliOS — a private browser desktop">
+<meta property="og:title" content="NakliOS — a private browser desktop">
 <meta property="og:description" content="A desktop full of single-file, privacy-first browser-native tools. All these tools, none of your data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
@@ -454,6 +454,18 @@ input{font:inherit; color:inherit;}
   transition:filter 0.12s;
 }
 .nw-fs-btn-primary:hover{filter:brightness(1.1);}
+.nw-fs-connect-actions{
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+}
+.nw-fs-btn-secondary{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:6px 12px; border-radius:8px;
+  background:var(--row); color:var(--ink);
+  font-size:12px; font-weight:600;
+  border:1px solid var(--line); cursor:pointer;
+  transition:border-color 0.12s, color 0.12s;
+}
+.nw-fs-btn-secondary:hover{border-color:var(--brand); color:var(--brand);}
 .nw-fs-connected{
   display:flex; align-items:center; gap:8px;
   padding:8px 10px; border-radius:8px;
@@ -746,8 +758,8 @@ body.is-mobile .nw-dock{display:none;}
   margin:0; color:var(--muted); font-size:12px;
 }
 
-/* Manual-creds dialog — 6-field form for the "I lost the .crate-creds
-   file" recovery path. Reuses .nw-dlg shell + actions; adds field/label/
+/* Manual-creds dialog — 5-field alternative to a .crate-creds file.
+   Reuses .nw-dlg shell + actions; adds field/label/
    input styles that mirror .nw-dlg-pass-input. */
 .nw-dlg-manual .nw-dlg-form{ gap:10px; min-width:340px; max-width:420px; }
 .nw-dlg-field{ display:flex; flex-direction:column; gap:3px; }
@@ -1071,7 +1083,7 @@ body.is-mobile .nw-dock{display:none;}
   <header id="topbar">
     <div class="brand">
       <span class="brand-mark">n</span>
-      <span>nakliOS</span>
+      <span>NakliOS</span>
       <span class="brand-sub">— private browser desktop</span>
     </div>
     <div class="topbar-spacer"></div>
@@ -1169,7 +1181,7 @@ const APPS = [
     url:'https://naklitechie.github.io/Books/',
     embedUrl:'https://naklitechie.github.io/Books/',
     glyph:'📖', bg:'act',
-    description:'Browser-native reader for ePub, PDF, MOBI, AZW3, FB2 and plain text. Reading position, bookmarks, and per-book notes persist in your nakliOS folder.',
+    description:'Browser-native reader for ePub, PDF, MOBI, AZW3, FB2 and plain text. Reading position, bookmarks, and per-book notes persist in your NakliOS folder.',
     tags:['tool','reading'], desktopAlign:'right', desktopOrder:6,
     svg:`<path d="M3 5c3-1 6-1 9 1c3-2 6-2 9-1v13c-3-1-6-1-9 1c-3-2-6-2-9-1z"/><line x1="12" y1="6" x2="12" y2="20"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
@@ -1427,8 +1439,8 @@ state.layout.stickies = state.layout.stickies || [];
 // ════════════════════════════════════════════════════════════════════
 // FILESYSTEM (File System Access)
 // ════════════════════════════════════════════════════════════════════
-// nakliOS owns one folder handle (picked once via showDirectoryPicker, stored
-// in IndexedDB). nakliOS shadow-writes its state.json there; cooperative apps
+// NakliOS owns one folder handle (picked once via showDirectoryPicker, stored
+// in IndexedDB). NakliOS shadow-writes its state.json there; cooperative apps
 // in Immersive mode read/write under apps/<id>/ via the naklios.fs.* SDK.
 
 const IDB_NAME = 'nakliOS';
@@ -1671,8 +1683,9 @@ async function fsHydrateIfNewer(){
 // CRATE BACKEND  (v2.19 — encrypted multi-device cloud folder)
 // ════════════════════════════════════════════════════════════════════
 // Crate is the BYOK encrypted cloud-folder counterpart to FSA. The user
-// supplies a .crate-creds file + passphrase; we unlock the bucket and
-// expose its 9-method ESM API (list/read/write/remove/move/mkdir/stat/
+// supplies a .crate-creds file or enters the R2 details + passphrase; we
+// unlock the bucket and expose its 9-method ESM API
+// (list/read/write/remove/move/mkdir/stat/
 // history/onChange) through the same `naklios.fs.*` SDK surface that
 // apps already use. From an app's perspective, FSA and Crate are
 // indistinguishable — the only difference is which backend each app's
@@ -1997,10 +2010,9 @@ async function crateConnect(file, passphrase){
   await crateSaveCredsBlob(buf);
 }
 
-// crateConnectManual — the "no .crate-creds file" recovery path. User
-// pastes the 5 bucket strings (from 1Password / Cloudflare dashboard /
-// wherever they keep API tokens) + the passphrase. We build the credsfile
-// blob from those inputs in-memory, then funnel through the exact same
+// crateConnectManual — direct-credentials path. The user enters the bucket
+// name, account ID, access key, secret key, and passphrase. We build the
+// credsfile blob from those inputs in-memory, then funnel through the exact same
 // crateUnlock + crateSaveCredsBlob path as the file flow. End state is
 // identical: stored blob in IDB, unlocked Crate in memory, app-permission
 // prompts work the same way.
@@ -2108,7 +2120,7 @@ async function _crateHandleConnectError(e, bucketGetter){
   throw new Error('CORS not configured for naklios.dev — see the dialog for the JSON to paste.');
 }
 
-async function crateInteractiveConnect(){
+async function crateInteractiveConnectFile(){
   const file = await pickFile('.crate-creds,application/json');
   if (!file) return false;
   // Stash the file's unpacked bucket config so the error handler can run
@@ -2137,22 +2149,21 @@ async function crateInteractiveConnect(){
   return !!state.crate;
 }
 
-// crateInteractiveManual — the "I lost the .crate-creds file" escape hatch.
-// Shows a themed 6-field dialog (5 bucket strings + passphrase), then
+// crateInteractiveManual — the direct-credentials alternative to a
+// .crate-creds file. Shows a themed 5-field dialog (bucket name, account ID,
+// access key, secret key, and folder passphrase), then
 // runs the same unlock + persist path as the file flow. On success the
 // stored blob is in IDB and a fresh .crate-creds is one click away
-// (Connect → Disconnect → Re-download from crate.naklios.dev, OR just
-// keep using the manual unlock for future sessions).
+// from Settings.
 //
-// The 5 strings live in 1Password / Cloudflare dashboard / wherever the
-// user already keeps API tokens — same place they'd be for any other
-// S3-compatible bucket. The file was only ever a convenience wrapper
-// around these 5 values + the passphrase.
+// The four R2 strings can come from a password manager or the Cloudflare
+// dashboard. The credentials file is a convenience wrapper around those
+// values plus the folder passphrase.
 async function crateInteractiveManual(){
   let lastBucket = null;
   await nakliosManualCreds({
-    title: 'Connect Crate manually',
-    body: 'No .crate-creds file? Paste your bucket details below. These are the same 5 values you used to set up the Crate originally.',
+    title: 'Connect with bucket details',
+    body: 'Enter the Cloudflare R2 bucket name, account ID, API keys, and the folder passphrase you used when creating this Crate.',
     validate: async (vals) => {
       const bucketConfig = {
         accountId: vals.accountId.trim().toLowerCase(),
@@ -2261,7 +2272,7 @@ async function crateInteractiveDisconnect(){
 // Disconnect local folder with confirmation.
 async function fsInteractiveDisconnect(){
   const ok = await nakliosConfirm(
-    'naklOS will keep working locally; your folder data stays where it is. Re-connecting is one click + folder pick away.',
+    'NakliOS will keep working locally; your folder data stays where it is. Re-connecting is one click + folder pick away.',
     { title: 'Disconnect folder?', okLabel: 'Disconnect', danger: true }
   );
   if (!ok) return false;
@@ -2339,13 +2350,13 @@ function closeContextMenu(){
 // Native dialogs (prompt/confirm/alert) are jarring — useful when you WANT
 // the user jolted, but they break the OS-shaped illusion. These helpers
 // use real <dialog> + showModal() so focus trap + Escape-to-close are
-// browser-native; styling matches the rest of nakliOS chrome.
+// browser-native; styling matches the rest of NakliOS chrome.
 //
 //   nakliosAlert(msg, opts?)     → Promise<void>
 //   nakliosConfirm(msg, opts?)   → Promise<boolean>
 //
 // opts:
-//   title       — header text (default: "nakliOS" / "Are you sure?")
+//   title       — header text (default: "NakliOS" / "Are you sure?")
 //   okLabel     — label for the primary button
 //   cancelLabel — label for the cancel button (confirm only)
 //   danger      — bool, styles the primary action as destructive (red)
@@ -2395,7 +2406,7 @@ function _nakliosDialog({ title, body, buttons, kind, allowHtmlBody }){
 
 async function nakliosAlert(message, opts = {}){
   await _nakliosDialog({
-    title: opts.title || 'nakliOS',
+    title: opts.title || 'NakliOS',
     body: message,
     buttons: [{ value: 'ok', label: opts.okLabel || 'OK', primary: true }],
     kind: opts.kind || null,
@@ -2556,7 +2567,7 @@ function nakliosPassphrase(opts = {}){
   });
 }
 
-// nakliosManualCreds({ title, body, validate }) — 6-field dialog:
+// nakliosManualCreds({ title, body, validate }) — 5-field dialog:
 // bucketName, accountId, accessKey, secretKey, passphrase. validate(vals)
 // is async; throw to keep the dialog open with an inline error, resolve
 // to close. Returns the validator's result or null on Escape.
@@ -3008,7 +3019,7 @@ function makeWindow(opts){
   win.style.top = py + 'px';
   win.innerHTML = `
     <div class="nw-titlebar">
-      ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. nakliOS can't read its data, and it can't reach back into nakliOS.">🔒 sandboxed</span>` : ''}
+      ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. NakliOS can't read its data, and it can't reach back into NakliOS.">🔒 sandboxed</span>` : ''}
       ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
       <span class="nw-title">${title}</span>
       <button class="nw-min-btn" title="Minimize (click dock to restore)" aria-label="Minimize">—</button>
@@ -3420,6 +3431,26 @@ function backendsAvailable(){
   return out;
 }
 
+function backendDescriptor(backendId){
+  const backend = BACKENDS[backendId];
+  if (!backend || !backend.isConnected()) return null;
+  return {
+    id: backend.id,
+    label: backend.label,
+    name: backend.displayName(),
+  };
+}
+
+function appBoundBackend(appId){
+  const v = state.appPermissions[appId];
+  // Report the legacy grant as its original FSA binding without mutating
+  // persisted state merely because an iframe requested capabilities.
+  if (v === 'granted' && BACKENDS.fsa.isConnected()) return 'fsa';
+  if (v && typeof v === 'object' && v.granted && v.backend &&
+      BACKENDS[v.backend]?.isConnected()) return v.backend;
+  return null;
+}
+
 // Migrate legacy 'granted'|'denied' strings to {backend, granted} shape.
 // Lazy — runs on first read of an appId after the v2.19 upgrade.
 function migrateAppPermission(appId){
@@ -3457,7 +3488,7 @@ async function fsEnsurePermission(appId){
   if (avail.length === 1){
     const only = BACKENDS[avail[0]];
     const where = only.id === 'fsa'
-      ? `in your nakliOS folder (<code>${_dlgEscape(only.displayName())}</code>)`
+      ? `in your NakliOS folder (<code>${_dlgEscape(only.displayName())}</code>)`
       : `in your Crate (encrypted, multi-device — <code>${_dlgEscape(only.displayName())}</code>)`;
     const ok = await nakliosConfirm(
       `Let <strong>${_dlgEscape(name)}</strong> read and write its data ${where}?\n\n` +
@@ -3500,6 +3531,45 @@ async function fsEnsurePermission(appId){
   return chosen;
 }
 
+// An app may surface an explicit backend choice in its own storage picker.
+// NakliOS still mediates the change: the host names the target, explains that
+// switching does not copy data, and requires a user confirmation.
+async function fsHostSelectBackend(appId, requestedBackendId){
+  const target = BACKENDS[requestedBackendId];
+  if (!target || !target.isConnected()) throw new Error('Requested backend is not connected');
+
+  migrateAppPermission(appId);
+  const currentId = appBoundBackend(appId);
+  if (currentId === requestedBackendId) return true;
+
+  const app = APPS.find(a => a.id === appId);
+  const appName = app?.name || appId;
+  const targetWhere = target.id === 'crate'
+    ? `Crate <code>${_dlgEscape(target.displayName() || 'Crate')}</code>`
+    : `NakliOS Folder <code>${_dlgEscape(target.displayName() || 'Folder')}</code>`;
+  const current = currentId ? BACKENDS[currentId] : null;
+  const intro = current
+    ? `Switch <strong>${_dlgEscape(appName)}</strong> from ${_dlgEscape(current.label)} to ${targetWhere}?`
+    : `Let <strong>${_dlgEscape(appName)}</strong> use ${targetWhere}?`;
+  const ok = await nakliosConfirm(
+    `${intro}\n\n` +
+    `It will see only <code>apps/${_dlgEscape(appId)}/</code> on that backend. ` +
+    `Nothing is copied or deleted when you switch.`,
+    {
+      title: `Use ${target.label} for ${appName}?`,
+      okLabel: `Use ${target.label}`,
+      cancelLabel: 'Cancel',
+      allowHtmlBody: true,
+    }
+  );
+  if (!ok) return false;
+
+  state.appPermissions[appId] = { backend: target.id, granted: true };
+  saveAppPermissions();
+  broadcastCapabilities();
+  return true;
+}
+
 // Resolve { dir, name } for fs reply ops. Throws if path unsafe or no handle.
 async function fsHostHandle(msg, type, appId){
   const backendId = await fsEnsurePermission(appId);
@@ -3536,8 +3606,18 @@ function postCapabilities(iframe, appId){
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
   const v = state.appPermissions[appId];
   const explicitlyDenied = v && typeof v === 'object' && v.granted === false;
-  const fsCap = backendsAvailable().length > 0 && !explicitlyDenied;
-  try { iframe.contentWindow.postMessage({ type:'naklios:capabilities', fs: fsCap }, '*'); } catch(_){}
+  const available = backendsAvailable();
+  const fsCap = available.length > 0 && !explicitlyDenied;
+  const fsBackends = available.map(backendDescriptor).filter(Boolean);
+  const fsBackend = appBoundBackend(appId);
+  try {
+    iframe.contentWindow.postMessage({
+      type:'naklios:capabilities',
+      fs: fsCap,
+      fsBackends,
+      fsBackend,
+    }, '*');
+  } catch(_){}
 }
 function broadcastCapabilities(){
   document.querySelectorAll('.nw-window iframe').forEach(iframe => {
@@ -3637,7 +3717,10 @@ function openCrateChipMenu(){
     items.push({ separator: true });
     items.push({ label: 'Disconnect Crate…', onClick: () => crateInteractiveDisconnect(), danger: true });
   } else {
-    items.push({ label: 'Connect Crate…', onClick: () => crateInteractiveConnect() });
+    items.push({ label: 'Use .crate-creds file…', onClick: () => crateInteractiveConnectFile() });
+    items.push({ label: 'Enter bucket details manually…', onClick: () => crateInteractiveManual() });
+    items.push({ separator: true });
+    items.push({ label: '☁️ Open Settings…', onClick: () => openSettings() });
   }
   showContextMenu(r.left, r.bottom + 6, items);
 }
@@ -3682,7 +3765,8 @@ window.addEventListener('message', async e => {
       const appId = getAppId();
       if (!appId) throw new Error('Unknown app');
       const op = msg.type.slice('naklios:fs:'.length);
-      if (op === 'list') reply.result = await fsHostList(msg, appId);
+      if (op === 'selectBackend') reply.result = await fsHostSelectBackend(appId, msg.backend);
+      else if (op === 'list') reply.result = await fsHostList(msg, appId);
       else reply.result = await fsHostHandle(msg, op, appId);
     } catch (err){
       reply.error = String(err?.message || err);
@@ -3704,7 +3788,7 @@ function recordRecent(appId){
 function openApp(app){
   recordRecent(app.id);
   if (openWindows[app.id]) { focusWindow(openWindows[app.id]); return; }
-  // System apps depend on the host bridge and must remain inside nakliOS
+  // System apps depend on the host bridge and must remain inside NakliOS
   // even when the desktop is in Basic mode.
   if (app.kind === 'system') return spawnIframeWindow(app);
   const m = effectiveMode(app);
@@ -4025,8 +4109,8 @@ function openSettings(){
       <button class="nw-fs-btn-primary" id="fs-connect">📁 Connect folder…</button>
     `}
     <div class="nw-fs-blurb">${connected
-      ? 'naklOS shadow-writes state to <code>state.json</code> in this folder. Cooperative apps in Immersive can read/write under <code>apps/&lt;id&gt;/</code>.'
-      : 'Connect a folder (iCloud Drive, Dropbox, or local) and naklOS will mirror its state there. Cooperative apps can use the same folder for multi-device sync.'}</div>
+      ? 'NakliOS shadow-writes state to <code>state.json</code> in this folder. Cooperative apps in Immersive can read/write under <code>apps/&lt;id&gt;/</code>.'
+      : 'Connect a folder (iCloud Drive, Dropbox, or local) and NakliOS will mirror its state there. Cooperative apps can use the same folder for multi-device sync.'}</div>
   `;
 
   // Crate (cloud) panel — encrypted, BYOK, multi-device. Parallel to Folder.
@@ -4054,14 +4138,14 @@ function openSettings(){
         <button class="nw-fs-link-btn" id="crate-disconnect" style="margin-left:6px;">Disconnect</button>
       </div>
     ` : `
-      <button class="nw-fs-btn-primary" id="crate-connect">☁️ Connect Crate…</button>
-      <div class="nw-fs-blurb" style="margin-top:6px;">
-        No file? <button class="nw-foot-link" id="crate-connect-manual" style="background:none; border:0; padding:0; cursor:pointer; font:inherit;">Enter the 5 details manually →</button>
+      <div class="nw-fs-connect-actions">
+        <button class="nw-fs-btn-primary" id="crate-connect-file">Use <code>.crate-creds</code> file…</button>
+        <button class="nw-fs-btn-secondary" id="crate-connect-manual">Enter bucket details…</button>
       </div>
     `}
     <div class="nw-fs-blurb">${crateUnlocked || crateLocked
       ? `Encrypted multi-device folder. Apps see the same <code>apps/&lt;id&gt;/</code> layout — pick which backend (folder or crate) per app on first use. <a class="nw-foot-link" href="https://crate.naklios.dev/guide/" target="_blank">Guide →</a>`
-      : `BYOK encrypted cloud folder via Cloudflare R2 (or any S3-compatible bucket). Apps that opt in get end-to-end-encrypted multi-device sync. Bring your own <code>.crate-creds</code> file from <a class="nw-foot-link" href="https://crate.naklios.dev/" target="_blank">crate.naklios.dev</a>.`}</div>
+      : `BYOK encrypted cloud folder via Cloudflare R2. Apps that opt in get end-to-end-encrypted multi-device sync. Connect with a <code>.crate-creds</code> file from <a class="nw-foot-link" href="https://crate.naklios.dev/" target="_blank">crate.naklios.dev</a>, or enter the same bucket details manually.`}</div>
     <label class="nw-fs-blurb" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
       <input type="checkbox" id="crate-stay" ${stayChecked} />
       <span>Stay unlocked in this tab (cleared on tab close)</span>
@@ -4113,11 +4197,11 @@ function openSettings(){
   });
 
   // --- Crate (cloud) panel handlers ---
-  // First-time connect — user picks a .crate-creds file, enters passphrase.
-  // The passphrase dialog handles wrong-passphrase retries inline; we only
-  // close Settings + re-open on success.
-  wrap.querySelector('#crate-connect')?.addEventListener('click', async () => {
-    if (await crateInteractiveConnect()){ closeSettings(); openSettings(); }
+  // First-time connect: credentials file and manual bucket details are
+  // equally visible. Both routes converge on crateUnlock + the same stored
+  // encrypted blob.
+  wrap.querySelector('#crate-connect-file')?.addEventListener('click', async () => {
+    if (await crateInteractiveConnectFile()){ closeSettings(); openSettings(); }
   });
 
   wrap.querySelector('#crate-connect-manual')?.addEventListener('click', async (e) => {

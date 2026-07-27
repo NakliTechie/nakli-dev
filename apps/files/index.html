@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Files — nakliOS</title>
-<meta name="description" content="Browse the folder nakliOS saves to.">
+<title>Files — NakliOS</title>
+<meta name="description" content="Browse the folder NakliOS saves to.">
 <style>
 :root{
   --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
@@ -140,7 +140,7 @@ footer .spacer{flex:1;}
 <footer>
   <span id="status">Loading…</span>
   <span class="spacer"></span>
-  <span>nakliOS · Files</span>
+  <span>NakliOS · Files</span>
 </footer>
 
 <script>
@@ -186,7 +186,7 @@ function notConnected(detail){
   $('list').innerHTML = `
     <div class="empty">
       <div>
-        Files needs to run inside nakliOS with a Folder or Crate connected.
+        Files needs to run inside NakliOS with a Folder or Crate connected.
         ${detail ? `<br><br>${escapeHtml(detail)}` : ''}
       </div>
     </div>
@@ -479,7 +479,7 @@ $('new-text').addEventListener('click', async () => {
   }
   const contents = prompt(
     'Text contents',
-    'nakliOS ↔ Crate live round-trip',
+    'NakliOS ↔ Crate live round-trip',
   );
   if (contents == null) return;
   try {

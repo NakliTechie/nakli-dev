@@ -1,10 +1,10 @@
-# nakliOS
+# NakliOS
 
-A private, browser-native desktop for single-file tools. Apps stay standalone; nakliOS gives them a home — a spotlight (⌘K), themed wallpapers, folders, a dock, sticky notes, and an Immersive mode where cooperative apps feel native inside the OS instead of foreign in iframes.
+A private, browser-native desktop for single-file tools. Apps stay standalone; NakliOS gives them a home — a spotlight (⌘K), themed wallpapers, folders, a dock, sticky notes, and an Immersive mode where cooperative apps feel native inside the OS instead of foreign in iframes.
 
 **Try it: [naklios.dev](https://naklios.dev/)**
 
-40-odd privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. The [NakliTechie collection](https://naklitechie.github.io/) is the first apps nakliOS hosts. No build step, no backend, no telemetry.
+40-odd privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. The [NakliTechie collection](https://naklitechie.github.io/) is the first apps NakliOS hosts. No build step, no backend, no telemetry.
 
 ## Modes
 
@@ -35,7 +35,7 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
 3. In the upstream source repo, add a small dispatcher workflow at `.github/workflows/notify-naklios.yml`:
 
    ```yaml
-   name: Notify nakliOS to re-mirror
+   name: Notify NakliOS to re-mirror
    on:
      push:
        branches: [main]
@@ -66,9 +66,9 @@ Manual trigger anytime: Actions tab → **Sync app mirrors** → **Run workflow*
 Cooperative apps that want persistent state use the `naklios.fs.*` SDK surface. The host fulfils those calls with one of two backends, configured in Settings:
 
 - **Folder (local)** — a directory you pick via File System Access. Lives on disk. Multi-device only via iCloud Drive / Dropbox / Google Drive of your choice.
-- **Crate (cloud, encrypted)** — BYOK end-to-end-encrypted folder on Cloudflare R2 (or any S3-compatible bucket). Multi-device sync is built in. Set up your bucket + download the `.crate-creds` file from [crate.naklios.dev](https://crate.naklios.dev/), then connect it here.
+- **Crate (cloud, encrypted)** — BYOK end-to-end-encrypted folder on Cloudflare R2. Multi-device sync is built in. Connect with the `.crate-creds` file from [crate.naklios.dev](https://crate.naklios.dev/), or enter the bucket name, account ID, API keys, and folder passphrase directly.
 
-Both can be connected at the same time. On first use, each app is asked which backend to store its data in — choice is remembered per-app and switchable later. Apps see the same `apps/<id>/` layout regardless of backend, so the same source code works against either.
+Both can be connected at the same time. On first use, each app is asked which backend to store its data in, and cooperative apps can surface that same choice in their own storage picker. NakliOS confirms every explicit rebind, remembers it per app, and does not copy or delete data when switching. Apps see the same `apps/<id>/` layout regardless of backend, so the same source code works against either.
 
 The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and loaded dynamically the first time the user clicks **Connect Crate** — zero cost for users who don't opt in.
 

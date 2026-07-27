@@ -24,5 +24,8 @@ jobs:
       - name: Verify Files uses the Crate-capable host bridge
         run: node scripts/test-files-crate-bridge.mjs
 
+      - name: Verify Crate offers file and manual connection paths
+        run: node scripts/test-crate-connect-flow.mjs
+
       - name: Verify Tijori uses the app-scoped storage bridge
         run: node scripts/test-tijori-storage-bridge.mjs
