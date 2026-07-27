@@ -5,11 +5,12 @@ name: Sync app mirrors
 #   - source repos pushing to their main branch (via `gh workflow run` in their
 #     own CI — see e.g. NakliTechie/Tijori .github/workflows/notify-naklios.yml)
 #   - manual: Actions tab → "Sync app mirrors" → "Run workflow"
-# No schedule — apps change infrequently and the push-trigger from source repos
-# keeps mirrors fresh within a minute of any upstream change.
+#   - six-hour fallback polling when a source repository has no dispatch token
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
 
 permissions:
   contents: write

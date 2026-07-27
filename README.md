@@ -43,19 +43,24 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
    jobs:
      trigger:
        runs-on: ubuntu-latest
+       env:
+         DISPATCH_TOKEN: ${{ secrets.NAKLIOS_DISPATCH_TOKEN }}
        steps:
-         - run: gh workflow run sync-mirrors.yml --repo NakliTechie/nakli-dev --ref main
+         - if: env.DISPATCH_TOKEN != ''
+           run: gh workflow run sync-mirrors.yml --repo NakliTechie/nakli-dev --ref main
            env:
-             GH_TOKEN: ${{ secrets.NAKLIOS_DISPATCH_TOKEN }}
+             GH_TOKEN: ${{ env.DISPATCH_TOKEN }}
+         - if: env.DISPATCH_TOKEN == ''
+           run: echo "Using nakli-dev's scheduled-sync fallback."
    ```
 
-4. In that same source repo, add the secret `NAKLIOS_DISPATCH_TOKEN` (Settings → Secrets and variables → Actions). It's a fine-grained PAT with **Actions: Read and write** on `NakliTechie/nakli-dev`. The same PAT can be reused across every source repo.
+4. For near-immediate updates, add the optional secret `NAKLIOS_DISPATCH_TOKEN` in that source repo (Settings → Secrets and variables → Actions). It's a fine-grained PAT with **Actions: Read and write** on `NakliTechie/nakli-dev`, and can be reused across source repos. Without it, the dispatcher exits successfully and NakliOS's six-hour scheduled sync discovers the update.
 
 5. Run `bash scripts/sync-mirrors.sh --app <id>` locally once to seed the initial mirror and [`apps/manifest.lock.json`](apps/manifest.lock.json), then commit both. `node scripts/validate-mirrors.mjs` verifies that every checked-in artifact matches its locked SHA-256.
 
 ### How updates flow
 
-When a source repo pushes to main with a distributable change, its dispatcher fires `gh workflow run` against nakli-dev. The `Sync app mirrors` workflow resolves the requested ref to a full Git commit, downloads from that immutable commit, updates the lockfile, validates every artifact hash, and opens a PR if anything drifted. You review + merge → Cloudflare redeploys naklios.dev with the fresh mirror.
+When a source repo pushes to main with a distributable change, its dispatcher fires `gh workflow run` against nakli-dev when the optional dispatch token is configured; a six-hour schedule is the fallback. The `Sync app mirrors` workflow resolves the requested ref to a full Git commit, downloads from that immutable commit, updates the lockfile, validates every artifact hash, and opens a PR if anything drifted. You review + merge → Cloudflare redeploys naklios.dev with the fresh mirror.
 
 This is vendoring of built artifacts, not a second source tree: implementation and releases happen in each standalone repository, while NakliOS records only the deployable snapshot it needs. The Immersive iframe drops its sandbox only for a declared same-origin mirror; standalone visits and new-tab opens continue to use the canonical `url`, and all other hosted apps keep the cross-origin sandbox boundary.
 
