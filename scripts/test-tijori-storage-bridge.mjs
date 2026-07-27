@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+
+const host = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const app = fs.readFileSync(new URL('../apps/tijori/index.html', import.meta.url), 'utf8');
+const scripts = [...app.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(match => match[1]);
+assert.equal(scripts.length, 4, 'expected Tijori’s four vendored inline scripts');
+
+const sdk = scripts[0];
+const appScript = scripts.at(-1);
+new Function(sdk);
+new Function(appScript);
+
+assert.match(app, /name="version" content="1\.3\.0"/);
+assert.match(app, /connect-src 'none'/, 'Tijori must keep direct network access disabled');
+assert.match(app, /frame-ancestors 'self'/, 'same-origin naklOS mirror must be iframeable');
+assert.match(appScript, /const NAKLIOS_DIR = Object\.freeze/);
+assert.match(appScript, /metaVersion\(meta\) === 2 && !metaPwWrapEnabled\(meta\)/,
+  'hardware-key-only imports must be refused across origins');
+assert.match(appScript, /window\.showDirectoryPicker/,
+  'standalone/local-folder storage must remain available');
+
+for (const op of ['read', 'write', 'append', 'list', 'delete', 'exists']) {
+  assert.match(sdk, new RegExp(`naklios:fs:${op}`), `SDK must expose fs.${op}`);
+}
+assert.match(host, /msg\.type\.startsWith\('naklios:fs:'\)/);
+assert.match(host, /op === 'list'\) reply\.result = await fsHostList/);
+assert.match(host, /reply\.result = await fsHostHandle/);
+assert.match(host, /const safe = fsSafePath\(appId, msg\.path \|\| ''\)/,
+  'host must scope file operations to the requesting app');
+
+let messageListener;
+const sent = [];
+const childWindow = {
+  parent: { postMessage(message) { sent.push(message); } },
+  addEventListener(type, callback) {
+    if (type === 'message') messageListener = callback;
+  },
+};
+vm.runInNewContext(sdk, {
+  window: childWindow,
+  Set,
+  Map,
+  Promise,
+  Object,
+  Error,
+  Date,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+});
+
+messageListener({ data: { type: 'naklios:capabilities', fs: true } });
+assert.equal(childWindow.naklios.capabilities.fs, true);
+
+const requestPromise = childWindow.naklios.fs.exists('tijori-meta.json');
+const request = sent.at(-1);
+assert.equal(request.type, 'naklios:fs:exists');
+assert.equal(request.path, 'tijori-meta.json');
+messageListener({
+  data: { type: 'naklios:fs:reply', requestId: request.requestId, result: false },
+});
+assert.equal(await requestPromise, false);
+
+console.log('naklOS ↔ Tijori storage bridge contract: PASS');

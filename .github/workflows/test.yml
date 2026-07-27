@@ -23,3 +23,6 @@ jobs:
 
       - name: Verify Files uses the Crate-capable host bridge
         run: node scripts/test-files-crate-bridge.mjs
+
+      - name: Verify Tijori uses the app-scoped storage bridge
+        run: node scripts/test-tijori-storage-bridge.mjs
