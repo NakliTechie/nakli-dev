@@ -8,7 +8,7 @@ A private, browser-native desktop for single-file tools. Apps stay standalone; N
 
 ## Modes
 
-- **Basic** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; everything else opens a new tab. Default.
+- **Basic** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; storage-dependent system apps such as Files, Tijori, and Books stay hosted; other apps open a new tab. Default.
 - **Immersive** *(experimental)* — light apps open as iframe windows inside the desktop.
 
 ## Adding a new app
@@ -71,6 +71,12 @@ Cooperative apps that want persistent state use the `naklios.fs.*` SDK surface. 
 Both can be connected at the same time. On first use, each app is asked which backend to store its data in, and cooperative apps can surface that same choice in their own storage picker. NakliOS confirms every explicit rebind, remembers it per app, and does not copy or delete data when switching. Apps see the same `apps/<id>/` layout regardless of backend, so the same source code works against either.
 
 The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and loaded dynamically the first time the user clicks **Connect Crate** — zero cost for users who don't opt in.
+
+## Base utilities
+
+**Notepad v2** is a practical multi-document editor with horizontal open-document tabs, autosave, search/replace (including case-sensitive and regular-expression modes), go-to-line, Markdown edit/split/preview modes, local file open/Save As, import/download, word wrap, font and tab-size controls, and keyboard shortcuts. Persistence follows a deliberate order: an app-scoped NakliOS Folder or Crate whenever one is connected, durable local file handles when working from this device, then an IndexedDB recovery/session journal (with the former localStorage registry retained only as a compatibility fallback). The journal restores open tabs and newer unsaved text after a crash, reload, or shutdown. Switching locations never migrates data implicitly, and the original v1 scratch value is preserved after one-time migration.
+
+**Books v1.1** remains hosted in both desktop modes. It uses the current storage SDK, keeps Folder and Crate libraries isolated, and adds filtering, sorting, duplicate protection, modal-confirmed removal, and reader appearance preferences. Local development loads the sibling `Books/` checkout; production keeps the cross-origin published app.
 
 ## License
 

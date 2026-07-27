@@ -964,35 +964,123 @@ body.is-mobile .nw-dock{display:none;}
   color:var(--ink); cursor:pointer;
 }
 
-.cl-pad{height:100%; display:flex; flex-direction:column;}
+.cl-pad{height:100%; display:flex; flex-direction:column; background:var(--panel);}
 .cl-pad-bar{
-  display:flex; align-items:center; gap:8px;
-  padding:6px 10px;
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  padding:6px 8px;
   border-bottom:1px solid var(--line);
   font-size:11px; color:var(--muted);
   flex:0 0 auto;
 }
 .cl-pad-bar .grow{flex:1;}
 .cl-pad-btn{
-  padding:3px 8px; border-radius:5px;
+  padding:4px 8px; border-radius:5px;
   background:var(--row); color:var(--ink);
   border:1px solid var(--line); cursor:pointer;
   font-size:11px;
 }
 .cl-pad-btn:hover{border-color:var(--line-strong);}
+.cl-pad-btn:disabled{opacity:.5; cursor:default;}
+.cl-pad-btn.active,.cl-pad-btn[aria-pressed="true"]{background:var(--brand); color:var(--panel); border-color:var(--brand);}
+.cl-pad-sep{width:1px; align-self:stretch; background:var(--line); margin:0 2px;}
+.cl-pad-storage{max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.cl-pad-find{
+  display:grid; grid-template-columns:minmax(110px,1fr) minmax(110px,1fr) auto auto auto auto;
+  align-items:center; gap:5px; padding:6px 8px;
+  border-bottom:1px solid var(--line); background:var(--row);
+}
+.cl-pad-find[hidden]{display:none;}
+.cl-pad-find input{
+  min-width:0; padding:5px 7px; border:1px solid var(--line); border-radius:5px;
+  background:var(--panel); color:var(--ink); font:11px -apple-system,system-ui,sans-serif;
+}
+.cl-pad-find .cl-pad-check{display:flex; align-items:center; gap:3px; color:var(--muted); font-size:10px;}
+.cl-pad-go{display:flex; align-items:center; gap:5px; padding:6px 8px; border-bottom:1px solid var(--line); background:var(--row);}
+.cl-pad-go[hidden]{display:none;}
+.cl-pad-go input{
+  width:90px; padding:5px 7px; border:1px solid var(--line); border-radius:5px;
+  background:var(--panel); color:var(--ink); font-size:11px;
+}
+.cl-pad-work{flex:1; min-height:0; display:flex;}
+.cl-pad-docs{
+  width:170px; min-width:130px; max-width:220px; display:flex; flex-direction:column;
+  border-right:1px solid var(--line); background:var(--row);
+}
+.cl-pad-docs-head{
+  display:flex; align-items:center; justify-content:space-between; gap:6px;
+  padding:7px 8px; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+  border-bottom:1px solid var(--line);
+}
+.cl-pad-doc-list{overflow:auto; padding:5px; display:flex; flex-direction:column; gap:3px;}
+.cl-pad-doc{
+  width:100%; text-align:left; border:1px solid transparent; border-radius:6px;
+  background:transparent; color:var(--ink); padding:7px 8px; cursor:pointer;
+}
+.cl-pad-doc:hover{background:var(--panel);}
+.cl-pad-doc.active{background:var(--panel); border-color:var(--line-strong);}
+.cl-pad-doc-title{display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:11px; font-weight:600;}
+.cl-pad-doc-meta{display:block; margin-top:2px; color:var(--faint); font-size:9px;}
+.cl-pad-editor{flex:1; min-width:0; min-height:0; display:flex; flex-direction:column;}
+.cl-pad-tabs{
+  display:flex; align-items:stretch; min-height:34px; overflow:hidden;
+  border-bottom:1px solid var(--line); background:var(--row);
+}
+.cl-pad-tab-list{display:flex; align-items:stretch; gap:1px; min-width:0; overflow-x:auto; scrollbar-width:thin;}
+.cl-pad-tab{
+  display:flex; align-items:center; flex:0 0 auto; min-width:108px; max-width:220px;
+  border-right:1px solid var(--line); background:transparent;
+}
+.cl-pad-tab.active{background:var(--panel); box-shadow:inset 0 -2px 0 var(--brand);}
+.cl-pad-tab-select{
+  flex:1; min-width:0; padding:8px 6px 7px 10px; text-align:left;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--muted); font-size:11px;
+}
+.cl-pad-tab.active .cl-pad-tab-select{color:var(--ink); font-weight:600;}
+.cl-pad-tab-close{
+  width:24px; align-self:stretch; color:var(--faint); font-size:13px;
+  display:grid; place-items:center;
+}
+.cl-pad-tab-close:hover{color:var(--brand); background:var(--row);}
+.cl-pad-tab-new{
+  flex:0 0 34px; border-left:1px solid var(--line); color:var(--muted);
+  font-size:17px;
+}
+.cl-pad-tab-new:hover{background:var(--panel); color:var(--brand);}
+.cl-pad-docbar{
+  display:flex; align-items:center; gap:6px; padding:5px 8px; border-bottom:1px solid var(--line);
+  background:color-mix(in srgb, var(--row) 72%, var(--panel));
+}
+.cl-pad-title{
+  min-width:100px; flex:1; border:0; outline:0; background:transparent; color:var(--ink);
+  font:600 12px -apple-system,system-ui,sans-serif; padding:3px 4px;
+}
+.cl-pad-format{
+  padding:3px 5px; border:1px solid var(--line); border-radius:5px;
+  background:var(--panel); color:var(--ink); font-size:10px;
+}
+.cl-pad-panes{flex:1; min-height:0; display:grid; grid-template-columns:1fr;}
+.cl-pad-panes.mode-split{grid-template-columns:1fr 1fr;}
 .cl-pad-area{
-  flex:1; min-height:0;
+  width:100%; height:100%; min-height:0;
   background:var(--panel); color:var(--ink);
   border:0; outline:0; resize:none;
   padding:12px 14px;
   font-family:-apple-system,'SF Mono',Consolas,Menlo,monospace;
   font-size:13px; line-height:1.5;
+  tab-size:2;
+}
+.cl-pad-panes.mode-preview .cl-pad-area{display:none;}
+.cl-pad-panes.mode-edit .cl-pad-preview{display:none;}
+.cl-pad-panes.mode-split .cl-pad-area{border-right:1px solid var(--line);}
+.cl-pad-empty{
+  flex:1; display:grid; place-items:center; color:var(--muted); font-size:12px;
 }
 .cl-pad-status{
   padding:4px 10px; font-size:10px;
   color:var(--faint); background:var(--row);
   border-top:1px solid var(--line);
-  display:flex; gap:12px;
+  display:flex; gap:12px; align-items:center;
 }
 .cl-pad-mode{
   display:inline-flex; gap:0;
@@ -1006,7 +1094,7 @@ body.is-mobile .nw-dock{display:none;}
   background:var(--brand); color:var(--panel);
 }
 .cl-pad-preview{
-  flex:1; padding:12px 16px; overflow:auto;
+  min-width:0; min-height:0; padding:12px 16px; overflow:auto;
   background:var(--panel); color:var(--ink);
   font-size:13px; line-height:1.55;
 }
@@ -1022,6 +1110,11 @@ body.is-mobile .nw-dock{display:none;}
 .cl-pad-preview hr{border:0; border-top:1px solid var(--line); margin:10px 0;}
 .cl-pad-preview p{margin:6px 0;}
 .cl-pad-preview p:first-child{margin-top:0;}
+@media (max-width:700px){
+  .cl-pad-docs{display:none;}
+  .cl-pad-find{grid-template-columns:1fr 1fr auto auto;}
+  .cl-pad-find .cl-pad-check{display:none;}
+}
 
 .cl-calc{padding:10px; width:240px;}
 .cl-calc-display{
@@ -1147,7 +1240,7 @@ const APPS = [
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'],
     svg:`<rect x="5" y="3" width="14" height="18" rx="2"/><line x1="7" y1="7" x2="17" y2="7"/><line x1="8" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="10" y2="16"/><line x1="14" y1="16" x2="16" y2="16"/>` },
   { id:'notepad', name:'Notepad', kind:'classic', glyph:'📝', bg:'ok',
-    description:'A scratch pad that remembers what you wrote. Just text, no formatting.', tags:['tool','classic'],
+    description:'Multi-document text and Markdown editor with autosave to Local, NakliOS Folder, or Crate.', tags:['tool','classic','productivity'],
     svg:`<rect x="5" y="3" width="14" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>` },
   { id:'spider', name:'Spider', kind:'classic', glyph:'🕷️', bg:'ok',
     description:'Spider solitaire (1-suit). 10 columns, 2 decks. Build K-to-A runs to clear.', tags:['game','classic'],
@@ -1164,7 +1257,7 @@ const APPS = [
     description:'Guitar fretboard note trainer. Pick a famous riff or drill any strings.', tags:['game','music'],
     svg:`<line x1="6" y1="3" x2="6" y2="21"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="18" y1="3" x2="18" y2="21"/><line x1="3" y1="7" x2="21" y2="7"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="17" x2="21" y2="17"/>` },
   { id:'slate', name:'Slate', url:'https://slate.naklitechie.com', glyph:'🖼️', bg:'ok',
-    description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'], maxMode:'basic',
+    description:'A complete image editor in a single HTML file. Crop, redact, blur, annotate, resize.', tags:['image','privacy','productivity'],
     svg:`<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8" cy="9" r="1.5"/><polyline points="21 14 14 9 4 16"/><path d="M16 19l-1 2 3-1z"/><path d="M16 19l4-4"/>` },
   { id:'tijori', name:'Tijori', url:'https://tijori.naklitechie.com/', embedUrl:'https://naklios.dev/apps/tijori/', glyph:'🔐', bg:'brand',
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
@@ -1177,11 +1270,13 @@ const APPS = [
     description:'Browse Files-owned data in your connected Folder or encrypted Crate.',
     tags:['tool','filesystem'], desktopAlign:'right', desktopOrder:5,
     svg:`<path d="M3 7c0-1 0.7-2 2-2h4l2 2h8c1 0 2 1 2 2v8c0 1-1 2-2 2H5c-1 0-2-1-2-2z"/>` },
-  { id:'books', name:'Books',
+  { id:'books', name:'Books', kind:'system',
     url:'https://naklitechie.github.io/Books/',
-    embedUrl:'https://naklitechie.github.io/Books/',
+    embedUrl:/^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+      ? '../Books/'
+      : 'https://naklitechie.github.io/Books/',
     glyph:'📖', bg:'act',
-    description:'Browser-native reader for ePub, PDF, MOBI, AZW3, FB2 and plain text. Reading position, bookmarks, and per-book notes persist in your NakliOS folder.',
+    description:'Browser-native reader for ePub, PDF, MOBI, AZW3, FB2 and plain text. Library, progress, bookmarks, and notes persist in your NakliOS Folder or Crate.',
     tags:['tool','reading'], desktopAlign:'right', desktopOrder:6,
     svg:`<path d="M3 5c3-1 6-1 9 1c3-2 6-2 9-1v13c-3-1-6-1-9 1c-3-2-6-2-9-1z"/><line x1="12" y1="6" x2="12" y2="20"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
@@ -1224,7 +1319,7 @@ const APPS = [
     description:'Full accounting suite for Indian SMBs — Tally alternative in a single HTML file. GST, CA mode.', tags:['tool','accounting','india'], maxMode:'basic',
     svg:`<path d="M5 4h13c0.5 0 1 0.5 1 1v15c0 0.5-0.5 1-1 1H5z"/><line x1="5" y1="4" x2="5" y2="21"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>` },
   { id:'bofh', name:'BOFH', url:'https://bofh.naklitechie.com', glyph:'🛠️', bg:'brand',
-    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], maxMode:'basic', desktopAlign:'right', desktopOrder:2,
+    description:'Dev toolkit with 20 modules — JSON, JWT, hashing, regex, diff. Stop pasting secrets into random sites.', tags:['tool','developer'], desktopAlign:'right', desktopOrder:2,
     svg:`<polyline points="8 6 2 12 8 18"/><polyline points="16 6 22 12 16 18"/><line x1="14" y1="4" x2="10" y2="20"/>` },
   { id:'nemawashi', name:'Nemawashi', url:'https://nemawashi.naklitechie.com', glyph:'🗳️', bg:'act',
     description:'Group decision tool — define options, everyone scores, the best combination surfaces.', tags:['tool','productivity'],
@@ -3217,6 +3312,7 @@ function minimizeWindow(win){
 function closeWindow(win){
   const id = win.dataset.id;
   if (fullscreenWin === win){ fullscreenWin = null; fullscreenSaved = null; }
+  try { win._beforeClose?.(); } catch(_){}
   delete openWindows[id];
   const iframe = win.querySelector('iframe');
   if (iframe){
@@ -3276,7 +3372,7 @@ function spawnInlineWindow(app){
     solitaire: {w:520, h:480},
     spider: {w:740, h:540},
     calculator: {w:260, h:360},
-    notepad: {w:520, h:440},
+    notepad: {w:820, h:580},
   };
   const sz = sizes[app.id] || {w:480, h:380};
   const win = makeWindow({ id:app.id, title:app.name, width:sz.w, height:sz.h });
@@ -4622,7 +4718,7 @@ function mdToHtml(src){
   let s = src.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   // Fenced code blocks (must run before other replacements)
   s = s.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (m, lang, code) =>
-    ` CB${btoa(unescape(encodeURIComponent(code)))}CB `);
+    `\uE000CB${btoa(unescape(encodeURIComponent(code)))}CB\uE000`);
   // Inline code (single backticks)
   s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
   // Headings
@@ -4656,100 +4752,1047 @@ function mdToHtml(src){
   s = s.split(/\n\n+/).map(p => {
     p = p.trim();
     if (!p) return '';
-    if (/^<(h[1-6]|ul|ol|pre|blockquote|hr| CB)/.test(p)) return p;
+    if (/^(?:<(?:h[1-6]|ul|ol|pre|blockquote|hr)|\uE000CB)/.test(p)) return p;
     return `<p>${p.replace(/\n/g, '<br>')}</p>`;
   }).join('\n');
   // Restore fenced code blocks
-  s = s.replace(/ CB([A-Za-z0-9+/=]+)CB /g, (m, b64) => {
-    const code = decodeURIComponent(escape(atob(b64)))
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s.replace(/\uE000CB([A-Za-z0-9+/=]+)CB\uE000/g, (m, b64) => {
+    // The whole source was escaped before the block was encoded.
+    const code = decodeURIComponent(escape(atob(b64)));
     return `<pre><code>${code}</code></pre>`;
   });
   return s;
 }
 
 Classics.notepad = (body, win) => {
-  const KEY = 'nakliOS.notepad.v1';
-  const MODE_KEY = 'nakliOS.notepad.mode';
-  const saved = localStorage.getItem(KEY) || '';
-  const mode = localStorage.getItem(MODE_KEY) || 'edit'; // 'edit' | 'preview'
+  const APP_ID = 'notepad';
+  const LEGACY_KEY = 'nakliOS.notepad.v1';
+  const LOCAL_KEY = 'nakliOS.notepad.documents.v2';
+  const STORAGE_KEY = 'nakliOS.notepad.storage';
+  const SETTINGS_KEY = 'nakliOS.notepad.settings.v2';
+  const ACTIVE_PREFIX = 'nakliOS.notepad.active.';
+  const WORKSPACE_PREFIX = 'notepad.workspace.v3.';
+  const HANDLE_PREFIX = 'notepad.fileHandle.';
+  const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+  let storageId = 'local';
+  let documents = [];
+  let openIds = [];
+  let activeId = null;
+  let saveTimer = null;
+  let recoveryTimer = null;
+  let savePromise = Promise.resolve();
+  let recoveryPromise = Promise.resolve();
+  let switching = false;
+  const dirtyIds = new Set();
+  const settings = Object.assign({
+    mode: localStorage.getItem('nakliOS.notepad.mode') || 'edit',
+    wrap: true,
+    fontSize: 13,
+    tabSize: 2,
+  }, (() => {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
+    catch (_) { return {}; }
+  })());
+
   body.innerHTML = `
     <div class="cl-pad">
       <div class="cl-pad-bar">
-        <span class="cl-pad-mode">
-          <button class="cl-pad-btn ${mode === 'edit' ? 'active' : ''}" data-mode="edit">Edit</button>
-          <button class="cl-pad-btn ${mode === 'preview' ? 'active' : ''}" data-mode="preview">Preview</button>
-        </span>
+        <button class="cl-pad-btn" id="pad-new" title="New tab (⌘/Ctrl+N)">New Tab</button>
+        <button class="cl-pad-btn" id="pad-import" title="Open text or Markdown files in tabs">Open…</button>
+        <input id="pad-import-input" type="file" accept=".txt,.md,.markdown,.log,.csv,.json,.html,.css,.js,.mjs,.ts,.py,.sh" multiple hidden>
+        <button class="cl-pad-btn" id="pad-save" title="Save now (⌘/Ctrl+S)">Save</button>
+        <button class="cl-pad-btn" id="pad-save-as" title="Save the current tab as a local file">Save As…</button>
+        <button class="cl-pad-btn" id="pad-download" title="Download current document">Download</button>
+        <span class="cl-pad-sep"></span>
+        <button class="cl-pad-btn" id="pad-find-toggle" title="Find (⌘/Ctrl+F)">Find</button>
+        <button class="cl-pad-btn" id="pad-go-toggle" title="Go to line (Ctrl+G)">Line…</button>
+        <button class="cl-pad-btn" id="pad-wrap" aria-pressed="${settings.wrap ? 'true' : 'false'}" title="Toggle word wrap">Wrap</button>
+        <button class="cl-pad-btn" id="pad-font-down" title="Smaller text">A−</button>
+        <button class="cl-pad-btn" id="pad-font-up" title="Larger text">A＋</button>
         <span class="grow"></span>
-        <button class="cl-pad-btn" id="pad-copy">Copy</button>
-        <button class="cl-pad-btn" id="pad-clear">Clear</button>
+        <button class="cl-pad-btn cl-pad-storage" id="pad-storage" title="Choose Local, NakliOS Folder, or Crate">Local</button>
       </div>
-      <textarea class="cl-pad-area" id="pad-area" spellcheck="false" placeholder="Plain text or Markdown — # headings, **bold**, - lists, [links](https://...), \`code\`. Autosaves.">${saved.replace(/</g,'&lt;')}</textarea>
-      <div class="cl-pad-preview" id="pad-preview" style="display:none"></div>
+      <div class="cl-pad-find" id="pad-find" hidden>
+        <input id="pad-find-query" type="text" placeholder="Find">
+        <input id="pad-replace-query" type="text" placeholder="Replace with">
+        <label class="cl-pad-check"><input id="pad-find-case" type="checkbox"> Case</label>
+        <label class="cl-pad-check"><input id="pad-find-regex" type="checkbox"> Regex</label>
+        <button class="cl-pad-btn" id="pad-find-prev">↑</button>
+        <button class="cl-pad-btn" id="pad-find-next">↓</button>
+        <span></span><span></span><span></span><span></span>
+        <button class="cl-pad-btn" id="pad-replace-one">Replace</button>
+        <button class="cl-pad-btn" id="pad-replace-all">All</button>
+      </div>
+      <div class="cl-pad-go" id="pad-go" hidden>
+        <input id="pad-go-line" type="number" min="1" step="1" placeholder="Line number">
+        <button class="cl-pad-btn" id="pad-go-submit">Go</button>
+        <button class="cl-pad-btn" id="pad-go-close">Close</button>
+      </div>
+      <div class="cl-pad-work">
+        <aside class="cl-pad-docs">
+          <div class="cl-pad-docs-head"><span>Documents</span><button class="cl-pad-btn" id="pad-new-side" title="New document">＋</button></div>
+          <div class="cl-pad-doc-list" id="pad-doc-list"></div>
+        </aside>
+        <section class="cl-pad-editor">
+          <div class="cl-pad-tabs">
+            <div class="cl-pad-tab-list" id="pad-tab-list" role="tablist" aria-label="Open documents"></div>
+            <button class="cl-pad-tab-new" id="pad-tab-new" title="New tab" aria-label="New tab">＋</button>
+          </div>
+          <div class="cl-pad-docbar">
+            <input class="cl-pad-title" id="pad-title" maxlength="100" aria-label="Document title">
+            <select class="cl-pad-format" id="pad-format" aria-label="Document format">
+              <option value="markdown">Markdown</option>
+              <option value="text">Plain text</option>
+            </select>
+            <span class="cl-pad-mode">
+              <button class="cl-pad-btn" data-mode="edit">Edit</button>
+              <button class="cl-pad-btn" data-mode="split">Split</button>
+              <button class="cl-pad-btn" data-mode="preview">Preview</button>
+            </span>
+            <button class="cl-pad-btn" id="pad-delete" title="Delete current document">Delete</button>
+          </div>
+          <div class="cl-pad-panes" id="pad-panes">
+            <textarea class="cl-pad-area" id="pad-area" spellcheck="true" placeholder="Start writing…"></textarea>
+            <div class="cl-pad-preview" id="pad-preview"></div>
+          </div>
+        </section>
+      </div>
       <div class="cl-pad-status">
-        <span id="pad-count">${saved.length} chars · ${saved.split(/\s+/).filter(Boolean).length} words</span>
+        <span id="pad-position">Ln 1, Col 1</span>
+        <span id="pad-count">0 chars · 0 words</span>
         <span class="grow" style="flex:1"></span>
-        <span id="pad-status">Saved</span>
+        <span id="pad-status">Loading…</span>
       </div>
     </div>
   `;
+
   const ta = body.querySelector('#pad-area');
   const pv = body.querySelector('#pad-preview');
+  const panes = body.querySelector('#pad-panes');
+  const titleInput = body.querySelector('#pad-title');
+  const formatSelect = body.querySelector('#pad-format');
+  const docList = body.querySelector('#pad-doc-list');
+  const tabList = body.querySelector('#pad-tab-list');
   const count = body.querySelector('#pad-count');
+  const position = body.querySelector('#pad-position');
   const status = body.querySelector('#pad-status');
-  let curMode = mode;
-  let saveT;
+  const storageBtn = body.querySelector('#pad-storage');
+  const findBar = body.querySelector('#pad-find');
+  const goBar = body.querySelector('#pad-go');
+  const findInput = body.querySelector('#pad-find-query');
+  const replaceInput = body.querySelector('#pad-replace-query');
+  const caseInput = body.querySelector('#pad-find-case');
+  const regexInput = body.querySelector('#pad-find-regex');
+  const wrapBtn = body.querySelector('#pad-wrap');
 
-  function updateCount(){
-    const t = ta.value;
-    count.textContent = `${t.length} chars · ${t.split(/\s+/).filter(Boolean).length} words`;
+  function freshId(){
+    return (crypto.randomUUID?.() || ('doc-' + Date.now() + '-' + Math.random().toString(16).slice(2)))
+      .replace(/[^a-zA-Z0-9_-]/g, '');
   }
-  function applyMode(m){
-    curMode = m;
-    localStorage.setItem(MODE_KEY, m);
-    body.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
-    if (m === 'preview'){
-      pv.innerHTML = mdToHtml(ta.value);
-      pv.style.display = 'block';
-      ta.style.display = 'none';
-    } else {
-      ta.style.display = '';
-      pv.style.display = 'none';
-      setTimeout(() => ta.focus(), 0);
+  function freshDocument(title = 'Untitled', content = '', format = 'markdown', file = {}){
+    return {
+      id: freshId(),
+      title: String(title || 'Untitled').slice(0, 100),
+      format: format === 'text' ? 'text' : 'markdown',
+      content: String(content || ''),
+      updatedAt: new Date().toISOString(),
+      fileName: typeof file.fileName === 'string' ? file.fileName : null,
+      localHandleKey: typeof file.localHandleKey === 'string' ? file.localHandleKey : null,
+    };
+  }
+  function cleanDocument(raw, fallbackId){
+    if (!raw || typeof raw !== 'object') return null;
+    const id = String(raw.id || fallbackId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!id) return null;
+    return {
+      id,
+      title: String(raw.title || 'Untitled').slice(0, 100),
+      format: raw.format === 'text' ? 'text' : 'markdown',
+      content: String(raw.content || ''),
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date(0).toISOString(),
+      fileName: typeof raw.fileName === 'string' ? raw.fileName : null,
+      localHandleKey: typeof raw.localHandleKey === 'string' ? raw.localHandleKey : null,
+    };
+  }
+  function activeDocument(){ return documents.find(d => d.id === activeId) || null; }
+  function activeKey(){ return ACTIVE_PREFIX + storageId; }
+  function storageLabel(id = storageId){
+    if (id === 'local') return 'This browser';
+    const backend = BACKENDS[id];
+    if (!backend) return 'Storage';
+    const prefix = id === 'crate' ? 'Crate' : 'NakliOS Folder';
+    const name = backend.displayName();
+    return name ? `${prefix} · ${name}` : prefix;
+  }
+  function persistSettings(){
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    localStorage.setItem('nakliOS.notepad.mode', settings.mode);
+  }
+  function readLocalRegistry(){
+    try {
+      const parsed = JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null');
+      if (!parsed || !Array.isArray(parsed.documents)) return null;
+      return {
+        documents: parsed.documents.map(d => cleanDocument(d)).filter(Boolean),
+        activeId: typeof parsed.activeId === 'string' ? parsed.activeId : null,
+      };
+    } catch (_) { return null; }
+  }
+  function writeLocalRegistry(){
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({
+      version: 2,
+      documents,
+      activeId,
+      savedAt: Date.now(),
+    }));
+  }
+  function workspaceKey(id = storageId){ return WORKSPACE_PREFIX + id; }
+  async function readWorkspace(id = storageId){
+    try {
+      const raw = await idbGet(workspaceKey(id));
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.documents)) return null;
+      return {
+        documents: raw.documents.map(d => cleanDocument(d)).filter(Boolean),
+        openIds: Array.isArray(raw.openIds) ? raw.openIds.filter(v => typeof v === 'string') : [],
+        activeId: typeof raw.activeId === 'string' ? raw.activeId : null,
+        dirtyIds: Array.isArray(raw.dirtyIds) ? raw.dirtyIds.filter(v => typeof v === 'string') : [],
+        savedAt: Number(raw.savedAt) || 0,
+      };
+    } catch (_) { return null; }
+  }
+  function workspaceSnapshot(id = storageId){
+    return {
+      version: 3,
+      storageId: id,
+      documents: documents.map(doc => ({ ...doc })),
+      openIds: openIds.slice(),
+      activeId,
+      dirtyIds: Array.from(dirtyIds),
+      savedAt: Date.now(),
+    };
+  }
+  function writeWorkspaceNow(id = storageId){
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    const key = workspaceKey(id);
+    const snapshot = workspaceSnapshot(id);
+    if (id === 'local'){
+      // Last-resort compatibility copy. IndexedDB is the primary recovery
+      // store, but this preserves existing v2 behavior if IDB is unavailable.
+      try { writeLocalRegistry(); } catch (_) {}
     }
+    recoveryPromise = recoveryPromise
+      .then(() => idbSet(key, snapshot))
+      .catch(err => { console.warn('Notepad recovery write failed', err); });
+    return recoveryPromise;
+  }
+  function scheduleRecovery(){
+    clearTimeout(recoveryTimer);
+    recoveryTimer = setTimeout(() => { void writeWorkspaceNow(); }, 40);
+  }
+  function migrateLegacyLocal(){
+    if (readLocalRegistry()) return false;
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    const doc = freshDocument(legacy ? 'Scratchpad' : 'Untitled', legacy || '', 'markdown');
+    documents = [doc];
+    activeId = doc.id;
+    writeLocalRegistry();
+    // The v1 key is deliberately preserved. Migration is a copy, not a move.
+    return !!legacy;
+  }
+  async function backendCall(op, path, data){
+    if (storageId === 'local') throw new Error('Local storage does not use the NakliOS bridge');
+    const msg = { path };
+    if (data !== undefined) msg.data = data;
+    return await fsHostHandle(msg, op, APP_ID);
+  }
+  async function listBackendDocuments(){
+    const names = await fsHostList({ prefix:'documents/' }, APP_ID);
+    const jsonFiles = names.filter(name =>
+      /^documents\/[a-zA-Z0-9_-]+\.json$/.test(name)
+    );
+    const loaded = [];
+    for (const name of jsonFiles){
+      try {
+        const text = await backendCall('read', name);
+        const idFromName = name.slice('documents/'.length, -'.json'.length);
+        const doc = cleanDocument(JSON.parse(text), idFromName);
+        if (doc) loaded.push(doc);
+      } catch (_) {}
+    }
+    return loaded;
+  }
+  async function localHandleFor(doc){
+    if (!doc?.localHandleKey) return null;
+    return await idbGet(doc.localHandleKey).catch(() => null);
+  }
+  async function localHandleWritable(handle, interactive = false){
+    if (!handle) return false;
+    const opts = { mode:'readwrite' };
+    let permission = 'prompt';
+    try { permission = await handle.queryPermission(opts); } catch (_) {}
+    if (permission === 'granted') return true;
+    if (interactive){
+      try { permission = await handle.requestPermission(opts); } catch (_) {}
+    }
+    return permission === 'granted';
+  }
+  async function writeLocalHandle(doc, interactive = false){
+    const handle = await localHandleFor(doc);
+    if (!handle) return false;
+    if (!(await localHandleWritable(handle, interactive))){
+      throw new Error('Local file access needs permission — press Save to reconnect');
+    }
+    const writable = await handle.createWritable();
+    try { await writable.write(doc.content); }
+    finally { await writable.close(); }
+    return true;
+  }
+  async function saveDocument(doc, { interactive = false } = {}){
+    if (!doc) return;
+    if (storageId === 'local'){
+      // Recovery is written before the real file so a crash during the file
+      // operation still leaves the newest text available on next launch.
+      await writeWorkspaceNow();
+      if (doc.localHandleKey) await writeLocalHandle(doc, interactive);
+    } else {
+      await backendCall('write', `documents/${doc.id}.json`, JSON.stringify(doc, null, 2));
+      localStorage.setItem(activeKey(), doc.id);
+    }
+    dirtyIds.delete(doc.id);
+    await writeWorkspaceNow();
+    renderDocumentList();
+    renderTabs();
+    status.textContent = storageId === 'local' && !doc.localHandleKey
+      ? 'Recovered · This browser'
+      : `Saved · ${storageLabel()}`;
+  }
+  function queueSave(){
+    const doc = activeDocument();
+    if (!doc || switching) return;
+    doc.updatedAt = new Date().toISOString();
+    dirtyIds.add(doc.id);
+    status.textContent = 'Saving…';
+    renderDocumentList();
+    renderTabs();
+    scheduleRecovery();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      savePromise = savePromise
+        .catch(() => {})
+        .then(() => saveDocument(doc))
+        .catch(err => {
+          dirtyIds.add(doc.id);
+          status.textContent = storageId === 'local'
+            ? 'Recovered · ' + String(err?.message || err)
+            : 'Save failed · ' + String(err?.message || err);
+        });
+    }, 350);
+  }
+  async function flushSave(){
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    const pending = documents.filter(doc => dirtyIds.has(doc.id));
+    for (const doc of pending){
+      savePromise = savePromise
+        .catch(() => {})
+        .then(() => saveDocument(doc))
+        .catch(err => {
+          dirtyIds.add(doc.id);
+          status.textContent = storageId === 'local'
+            ? 'Recovered · ' + String(err?.message || err)
+            : 'Save failed · ' + String(err?.message || err);
+        });
+    }
+    await savePromise;
+    await writeWorkspaceNow();
+  }
+  function setEditorEnabled(on){
+    [ta, titleInput, formatSelect, body.querySelector('#pad-delete'),
+      body.querySelector('#pad-save'), body.querySelector('#pad-save-as'), body.querySelector('#pad-download')]
+      .forEach(el => { if (el) el.disabled = !on; });
+  }
+  function updateCount(){
+    const text = ta.value;
+    count.textContent = `${text.length} chars · ${text.trim() ? text.trim().split(/\s+/).length : 0} words`;
+  }
+  function updatePosition(){
+    const before = ta.value.slice(0, ta.selectionStart);
+    const line = before.split('\n').length;
+    const lastBreak = before.lastIndexOf('\n');
+    position.textContent = `Ln ${line}, Col ${ta.selectionStart - lastBreak}`;
+  }
+  function escapeText(s){
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function renderPreview(){
+    const doc = activeDocument();
+    if (!doc){ pv.innerHTML = ''; return; }
+    pv.innerHTML = doc.format === 'markdown'
+      ? mdToHtml(doc.content)
+      : `<pre style="white-space:pre-wrap;margin:0;font:inherit">${escapeText(doc.content)}</pre>`;
+  }
+  function applyMode(mode){
+    settings.mode = ['edit','split','preview'].includes(mode) ? mode : 'edit';
+    persistSettings();
+    panes.className = `cl-pad-panes mode-${settings.mode}`;
+    body.querySelectorAll('[data-mode]').forEach(btn =>
+      btn.classList.toggle('active', btn.dataset.mode === settings.mode));
+    renderPreview();
+    if (settings.mode !== 'preview') setTimeout(() => ta.focus(), 0);
+  }
+  function applyEditorSettings(){
+    ta.style.whiteSpace = settings.wrap ? 'pre-wrap' : 'pre';
+    ta.style.overflowX = settings.wrap ? 'hidden' : 'auto';
+    ta.style.fontSize = `${settings.fontSize}px`;
+    ta.style.tabSize = String(settings.tabSize);
+    pv.style.fontSize = `${Math.max(11, settings.fontSize)}px`;
+    wrapBtn.setAttribute('aria-pressed', settings.wrap ? 'true' : 'false');
+    persistSettings();
+  }
+  function renderDocumentList(){
+    docList.innerHTML = '';
+    const sorted = documents.slice().sort((a,b) =>
+      (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    for (const doc of sorted){
+      const btn = document.createElement('button');
+      btn.className = 'cl-pad-doc' + (doc.id === activeId ? ' active' : '');
+      btn.dataset.id = doc.id;
+      const title = document.createElement('span');
+      title.className = 'cl-pad-doc-title';
+      title.textContent = (dirtyIds.has(doc.id) ? '● ' : '') + (doc.title || 'Untitled');
+      const meta = document.createElement('span');
+      meta.className = 'cl-pad-doc-meta';
+      meta.textContent = doc.format === 'markdown' ? 'MD' : 'TXT';
+      btn.append(title, meta);
+      btn.addEventListener('click', () => openDocument(doc.id));
+      docList.appendChild(btn);
+    }
+  }
+  function renderTabs(){
+    openIds = openIds.filter(id => documents.some(doc => doc.id === id));
+    tabList.innerHTML = '';
+    for (const id of openIds){
+      const doc = documents.find(item => item.id === id);
+      if (!doc) continue;
+      const tab = document.createElement('div');
+      tab.className = 'cl-pad-tab' + (id === activeId ? ' active' : '');
+      tab.setAttribute('role', 'presentation');
+      const select = document.createElement('button');
+      select.className = 'cl-pad-tab-select';
+      select.setAttribute('role', 'tab');
+      select.setAttribute('aria-selected', id === activeId ? 'true' : 'false');
+      select.title = doc.fileName || doc.title || 'Untitled';
+      select.textContent = (dirtyIds.has(id) ? '● ' : '') + (doc.title || 'Untitled');
+      select.addEventListener('click', () => openDocument(id));
+      const close = document.createElement('button');
+      close.className = 'cl-pad-tab-close';
+      close.title = `Close “${doc.title || 'Untitled'}”`;
+      close.setAttribute('aria-label', `Close “${doc.title || 'Untitled'}”`);
+      close.textContent = '×';
+      close.addEventListener('click', () => { void closeTab(id); });
+      tab.append(select, close);
+      tabList.appendChild(tab);
+      if (id === activeId) requestAnimationFrame(() => tab.scrollIntoView({ block:'nearest', inline:'nearest' }));
+    }
+  }
+  function showDocument(doc){
+    setEditorEnabled(!!doc);
+    if (!doc){
+      titleInput.value = '';
+      ta.value = '';
+      formatSelect.value = 'markdown';
+      renderTabs();
+      renderPreview(); updateCount(); updatePosition();
+      const titleEl = win.querySelector('.nw-title');
+      if (titleEl) titleEl.textContent = 'Notepad';
+      return;
+    }
+    titleInput.value = doc.title;
+    formatSelect.value = doc.format;
+    ta.value = doc.content;
+    localStorage.setItem(activeKey(), doc.id);
+    renderDocumentList();
+    renderTabs();
+    renderPreview();
+    updateCount();
+    updatePosition();
+    const titleEl = win.querySelector('.nw-title');
+    if (titleEl) titleEl.textContent = `Notepad — ${doc.title || 'Untitled'}`;
+  }
+  async function openDocument(id){
+    if (!documents.some(doc => doc.id === id)) return;
+    if (!openIds.includes(id)) openIds.push(id);
+    if (id === activeId){ renderTabs(); return; }
+    await flushSave();
+    activeId = id;
+    showDocument(activeDocument());
+    scheduleRecovery();
+  }
+  async function closeTab(id){
+    const index = openIds.indexOf(id);
+    if (index < 0) return;
+    const doc = documents.find(item => item.id === id);
+    if (doc && dirtyIds.has(id)) await flushSave();
+    openIds.splice(index, 1);
+    if (activeId === id){
+      activeId = openIds[index] || openIds[index - 1] || null;
+      showDocument(activeDocument());
+    } else {
+      renderTabs();
+    }
+    await writeWorkspaceNow();
+  }
+  async function createDocument({ title, content, format } = {}){
+    await flushSave();
+    const base = title || `Untitled ${documents.length + 1}`;
+    const doc = freshDocument(base, content || '', format || 'markdown');
+    documents.push(doc);
+    openIds.push(doc.id);
+    activeId = doc.id;
+    dirtyIds.add(doc.id);
+    showDocument(doc);
+    await flushSave();
+    ta.focus();
+  }
+  async function deleteActiveDocument(){
+    const doc = activeDocument();
+    if (!doc) return;
+    const ok = await nakliosConfirm(
+      `Delete <strong>${_dlgEscape(doc.title || 'Untitled')}</strong> from ${_dlgEscape(storageLabel())}? ` +
+      `This removes only this document. Other locations are untouched.`,
+      {
+        title:'Delete document?',
+        okLabel:'Delete',
+        danger:true,
+        allowHtmlBody:true,
+      }
+    );
+    if (!ok) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    dirtyIds.delete(doc.id);
+    if (storageId !== 'local'){
+      try { await backendCall('delete', `documents/${doc.id}.json`); }
+      catch (err) { status.textContent = 'Delete failed · ' + String(err?.message || err); return; }
+    } else if (doc.localHandleKey){
+      // Forget the browser's reference only. Never delete the user's disk file.
+      await idbDel(doc.localHandleKey).catch(() => {});
+    }
+    documents = documents.filter(item => item.id !== doc.id);
+    openIds = openIds.filter(id => id !== doc.id);
+    if (!documents.length){
+      const fresh = freshDocument('Untitled', '', 'markdown');
+      documents.push(fresh);
+      openIds.push(fresh.id);
+      activeId = fresh.id;
+      dirtyIds.add(fresh.id);
+    } else {
+      activeId = openIds[0] || documents[0].id;
+      if (!openIds.includes(activeId)) openIds.push(activeId);
+    }
+    showDocument(activeDocument());
+    await flushSave();
+  }
+  async function loadStorage(){
+    switching = true;
+    setEditorEnabled(false);
+    status.textContent = `Loading · ${storageLabel()}`;
+    let migrated = false;
+    let recoveredCount = 0;
+    try {
+      dirtyIds.clear();
+      const workspace = await readWorkspace(storageId);
+      if (storageId === 'local'){
+        migrated = migrateLegacyLocal();
+        const legacyRegistry = readLocalRegistry();
+        documents = workspace?.documents || legacyRegistry?.documents || [];
+        openIds = workspace?.openIds || [];
+        activeId = workspace?.activeId || legacyRegistry?.activeId || null;
+        for (const id of workspace?.dirtyIds || []){
+          const doc = documents.find(item => item.id === id);
+          // An IndexedDB-only draft is already durable. A linked local file
+          // stays dirty until its handle can be written again.
+          if (doc?.localHandleKey) dirtyIds.add(id);
+        }
+        for (const doc of documents){
+          if (!doc.localHandleKey || dirtyIds.has(doc.id)) continue;
+          try {
+            const handle = await localHandleFor(doc);
+            if (!handle) continue;
+            const file = await handle.getFile();
+            doc.content = await file.text();
+            doc.fileName = file.name;
+            doc.title = titleForFilename(file.name);
+            doc.format = formatForFilename(file.name);
+            doc.updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+          } catch (_) {
+            // The recovery copy stays usable until the user grants the handle again.
+          }
+        }
+      } else {
+        documents = await listBackendDocuments();
+        const byId = new Map(documents.map(doc => [doc.id, doc]));
+        for (const id of workspace?.dirtyIds || []){
+          const recovered = workspace?.documents.find(doc => doc.id === id);
+          if (!recovered) continue;
+          const canonical = byId.get(id);
+          const recoveryDiffers = !canonical ||
+            recovered.content !== canonical.content ||
+            recovered.title !== canonical.title ||
+            recovered.format !== canonical.format;
+          if (!canonical ||
+              recovered.updatedAt > canonical.updatedAt ||
+              (recovered.updatedAt === canonical.updatedAt && recoveryDiffers)){
+            byId.set(id, recovered);
+            dirtyIds.add(id);
+            recoveredCount++;
+          }
+        }
+        documents = Array.from(byId.values());
+        openIds = workspace?.openIds || [];
+        activeId = workspace?.activeId || localStorage.getItem(activeKey());
+      }
+      if (!documents.length){
+        const doc = freshDocument('Untitled', '', 'markdown');
+        documents = [doc];
+        openIds = [doc.id];
+        activeId = doc.id;
+        dirtyIds.add(doc.id);
+      }
+      if (!documents.some(doc => doc.id === activeId)) activeId = documents[0].id;
+      openIds = openIds.filter(id => documents.some(doc => doc.id === id));
+      if (!openIds.includes(activeId)) openIds.push(activeId);
+      storageBtn.textContent = storageLabel();
+      storageBtn.title = `Documents in ${storageLabel()}`;
+      renderDocumentList();
+      renderTabs();
+      showDocument(activeDocument());
+      status.textContent = migrated
+        ? 'Legacy scratchpad copied · original preserved'
+        : recoveredCount
+          ? `Recovered ${recoveredCount} newer tab${recoveredCount === 1 ? '' : 's'} · saving`
+          : storageId === 'local'
+            ? activeDocument()?.fileName
+              ? `Ready · ${activeDocument().fileName}`
+              : 'Recovered · This browser'
+            : `Saved · ${storageLabel()}`;
+    } catch (err){
+      documents = [];
+      openIds = [];
+      activeId = null;
+      renderDocumentList();
+      renderTabs();
+      showDocument(null);
+      status.textContent = 'Load failed · ' + String(err?.message || err);
+    } finally {
+      switching = false;
+      setEditorEnabled(!!activeDocument());
+    }
+    await writeWorkspaceNow();
+    if (dirtyIds.size) await flushSave();
+  }
+  async function chooseStorage(){
+    await flushSave();
+    const buttons = [{ value:'cancel', label:'Cancel' }, { value:'local', label:'This browser' }];
+    for (const id of backendsAvailable()){
+      const backend = BACKENDS[id];
+      buttons.push({
+        value:id,
+        label:id === 'crate' ? 'Crate' : 'Folder',
+        primary:id === 'crate',
+      });
+    }
+    const choice = await _nakliosDialog({
+      title:'Where should Notepad open documents?',
+      body:
+        `Current location: <strong>${_dlgEscape(storageLabel())}</strong>.\n\n` +
+        `NakliOS Folder or Crate is preferred whenever connected. ` +
+        `This browser uses local file handles when available and IndexedDB for recovery.\n\n` +
+        `Switching loads the selected location. Nothing is copied or deleted.`,
+      buttons,
+      allowHtmlBody:true,
+    });
+    if (choice === 'cancel' || choice === storageId) return;
+    if (choice === 'local'){
+      storageId = 'local';
+      localStorage.setItem(STORAGE_KEY, 'local');
+      await loadStorage();
+      return;
+    }
+    if (!BACKENDS[choice]?.isConnected()){
+      status.textContent = 'That backend is not connected';
+      return;
+    }
+    const selected = await fsHostSelectBackend(APP_ID, choice);
+    if (!selected) return;
+    storageId = choice;
+    localStorage.setItem(STORAGE_KEY, choice);
+    await loadStorage();
+  }
+  function makeSearchRegex(global = true, wholeSelection = false){
+    const query = findInput.value;
+    if (!query) return null;
+    const source = regexInput.checked
+      ? query
+      : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wrapped = wholeSelection ? `^(?:${source})$` : source;
+    return new RegExp(wrapped, (global ? 'g' : '') + (caseInput.checked ? '' : 'i'));
+  }
+  function allMatches(){
+    let re;
+    try { re = makeSearchRegex(true); }
+    catch (err) { status.textContent = 'Invalid regex · ' + err.message; return []; }
+    if (!re) return [];
+    const matches = [];
+    let match;
+    while ((match = re.exec(ta.value))){
+      matches.push({ index:match.index, length:match[0].length || 1 });
+      if (match[0].length === 0) re.lastIndex++;
+    }
+    return matches;
+  }
+  function findMatch(direction = 1){
+    const matches = allMatches();
+    if (!matches.length){ status.textContent = 'No matches'; return false; }
+    const anchor = direction > 0 ? ta.selectionEnd : ta.selectionStart;
+    let match = direction > 0
+      ? matches.find(item => item.index >= anchor)
+      : matches.slice().reverse().find(item => item.index < anchor);
+    if (!match) match = direction > 0 ? matches[0] : matches[matches.length - 1];
+    ta.focus();
+    ta.setSelectionRange(match.index, match.index + match.length);
+    updatePosition();
+    status.textContent = `${matches.length} match${matches.length === 1 ? '' : 'es'}`;
+    return true;
+  }
+  function replaceOne(){
+    let re;
+    try { re = makeSearchRegex(false, true); }
+    catch (err) { status.textContent = 'Invalid regex · ' + err.message; return; }
+    if (!re) return;
+    let selected = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    if (!selected || !re.test(selected)){
+      if (!findMatch(1)) return;
+      selected = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+      re.lastIndex = 0;
+    }
+    const replacement = regexInput.checked
+      ? selected.replace(re, replaceInput.value)
+      : replaceInput.value;
+    ta.setRangeText(replacement, ta.selectionStart, ta.selectionEnd, 'select');
+    ta.dispatchEvent(new Event('input'));
+  }
+  function replaceAll(){
+    let re;
+    try { re = makeSearchRegex(true); }
+    catch (err) { status.textContent = 'Invalid regex · ' + err.message; return; }
+    if (!re) return;
+    const before = ta.value;
+    ta.value = before.replace(re, replaceInput.value);
+    const changed = before !== ta.value;
+    if (changed) ta.dispatchEvent(new Event('input'));
+    status.textContent = changed ? 'Replaced all matches' : 'No matches';
+  }
+  function goToLine(){
+    const wanted = Math.max(1, Number(body.querySelector('#pad-go-line').value) || 1);
+    const lines = ta.value.split('\n');
+    const line = Math.min(wanted, lines.length);
+    let index = 0;
+    for (let i = 1; i < line; i++) index += lines[i - 1].length + 1;
+    ta.focus();
+    ta.setSelectionRange(index, index);
+    updatePosition();
+    status.textContent = `Line ${line} of ${lines.length}`;
+  }
+  function toggleFind(showReplace = false){
+    findBar.hidden = !findBar.hidden;
+    if (!findBar.hidden){
+      if (showReplace) replaceInput.focus(); else findInput.focus();
+      findInput.select();
+    }
+  }
+  function toggleGo(){
+    goBar.hidden = !goBar.hidden;
+    if (!goBar.hidden){
+      const input = body.querySelector('#pad-go-line');
+      input.value = '';
+      input.focus();
+    }
+  }
+  function formatForFilename(name){
+    return /\.(?:md|markdown)$/i.test(name) ? 'markdown' : 'text';
+  }
+  function titleForFilename(name){
+    return String(name || 'Untitled').replace(/\.[^.]+$/, '') || String(name || 'Untitled');
+  }
+  async function openLocalFiles(){
+    if (typeof window.showOpenFilePicker !== 'function'){
+      body.querySelector('#pad-import-input').click();
+      return;
+    }
+    let handles;
+    try {
+      handles = await window.showOpenFilePicker({
+        multiple:true,
+        types:[{
+          description:'Text and Markdown',
+          accept:{
+            'text/plain':['.txt','.md','.markdown','.log','.csv','.json','.html','.css','.js','.mjs','.ts','.py','.sh'],
+          },
+        }],
+      });
+    } catch (err){
+      if (err?.name !== 'AbortError') status.textContent = 'Open failed · ' + String(err?.message || err);
+      return;
+    }
+    await flushSave();
+    for (const handle of handles){
+      try {
+        const file = await handle.getFile();
+        if (file.size > MAX_IMPORT_BYTES){
+          status.textContent = `${file.name} is over 5 MB`;
+          continue;
+        }
+        const doc = freshDocument(
+          titleForFilename(file.name),
+          await file.text(),
+          formatForFilename(file.name),
+          { fileName:file.name },
+        );
+        doc.updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+        doc.localHandleKey = HANDLE_PREFIX + doc.id;
+        await idbSet(doc.localHandleKey, handle);
+        documents.push(doc);
+        openIds.push(doc.id);
+        activeId = doc.id;
+      } catch (err){
+        status.textContent = 'Open failed · ' + String(err?.message || err);
+      }
+    }
+    showDocument(activeDocument());
+    await writeWorkspaceNow();
+    status.textContent = activeDocument()?.fileName
+      ? `Opened · ${activeDocument().fileName}`
+      : 'No files opened';
+  }
+  async function saveAsLocalFile({ link = storageId === 'local' } = {}){
+    const doc = activeDocument();
+    if (!doc) return false;
+    if (typeof window.showSaveFilePicker !== 'function'){
+      downloadActive();
+      status.textContent = 'Downloaded · local file handles unavailable';
+      return false;
+    }
+    const ext = doc.format === 'markdown' ? '.md' : '.txt';
+    const suggestedName = doc.fileName ||
+      (((doc.title || 'Untitled').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Untitled') + ext);
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName,
+        types:[{
+          description:doc.format === 'markdown' ? 'Markdown' : 'Plain text',
+          accept:{ 'text/plain':[ext] },
+        }],
+      });
+    } catch (err){
+      if (err?.name !== 'AbortError') status.textContent = 'Save As failed · ' + String(err?.message || err);
+      return false;
+    }
+    const writable = await handle.createWritable();
+    try { await writable.write(doc.content); }
+    finally { await writable.close(); }
+    if (link){
+      doc.localHandleKey = HANDLE_PREFIX + doc.id;
+      doc.fileName = handle.name || suggestedName;
+      doc.title = titleForFilename(doc.fileName);
+      titleInput.value = doc.title;
+      await idbSet(doc.localHandleKey, handle);
+      dirtyIds.delete(doc.id);
+      renderDocumentList();
+      renderTabs();
+      await writeWorkspaceNow();
+    }
+    status.textContent = `Saved · ${handle.name || suggestedName}`;
+    return true;
+  }
+  async function saveActiveInteractive(){
+    const doc = activeDocument();
+    if (!doc) return;
+    if (storageId === 'local' && !doc.localHandleKey){
+      await saveAsLocalFile({ link:true });
+      return;
+    }
+    dirtyIds.add(doc.id);
+    try { await saveDocument(doc, { interactive:true }); }
+    catch (err){
+      status.textContent = 'Save failed · ' + String(err?.message || err);
+      scheduleRecovery();
+    }
+  }
+  async function importFiles(files){
+    if (!files?.length) return;
+    for (const file of Array.from(files)){
+      if (file.size > MAX_IMPORT_BYTES){
+        status.textContent = `${file.name} is over 5 MB`;
+        continue;
+      }
+      const text = await file.text();
+      await createDocument({
+        title:titleForFilename(file.name),
+        content:text,
+        format:formatForFilename(file.name),
+      });
+    }
+  }
+  function downloadActive(){
+    const doc = activeDocument();
+    if (!doc) return;
+    const ext = doc.format === 'markdown' ? '.md' : '.txt';
+    const safe = (doc.title || 'Untitled').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Untitled';
+    const url = URL.createObjectURL(new Blob([doc.content], { type:'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = safe + ext; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent = 'Downloaded';
+  }
+  async function initialiseStorage(){
+    migrateLegacyLocal();
+    const bound = appBoundBackend(APP_ID);
+    // TextMate-like priority: a connected, app-scoped NakliOS filesystem is
+    // canonical. Local file handles and IndexedDB recovery are fallbacks.
+    if (bound && BACKENDS[bound]?.isConnected()){
+      storageId = bound;
+    } else if (backendsAvailable().length){
+      const selected = await fsEnsurePermission(APP_ID);
+      storageId = selected || 'local';
+    } else {
+      storageId = 'local';
+    }
+    localStorage.setItem(STORAGE_KEY, storageId);
+    await loadStorage();
   }
 
   ta.addEventListener('input', () => {
-    status.textContent = 'Saving…';
+    const doc = activeDocument();
+    if (!doc) return;
+    doc.content = ta.value;
+    renderPreview();
     updateCount();
-    clearTimeout(saveT);
-    saveT = setTimeout(() => {
-      localStorage.setItem(KEY, ta.value);
-      status.textContent = 'Saved';
-    }, 250);
+    updatePosition();
+    queueSave();
   });
-  body.querySelector('#pad-copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(ta.value); status.textContent = 'Copied'; }
-    catch(_) { status.textContent = 'Copy failed'; }
-    setTimeout(() => { status.textContent = 'Saved'; }, 1200);
+  ['click','keyup','select'].forEach(type => ta.addEventListener(type, updatePosition));
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Tab'){
+      e.preventDefault();
+      const spaces = ' '.repeat(settings.tabSize);
+      ta.setRangeText(spaces, ta.selectionStart, ta.selectionEnd, 'end');
+      ta.dispatchEvent(new Event('input'));
+    }
   });
-  body.querySelector('#pad-clear').addEventListener('click', async () => {
-    if (!ta.value) return;
-    const ok = await nakliosConfirm('This empties the notepad. Cannot be undone.', {
-      title: 'Clear the notepad?', okLabel: 'Clear', danger: true,
-    });
-    if (!ok) return;
-    ta.value = '';
-    localStorage.setItem(KEY, '');
-    updateCount();
-    if (curMode === 'preview') pv.innerHTML = '';
-    status.textContent = 'Cleared';
+  titleInput.addEventListener('input', () => {
+    const doc = activeDocument();
+    if (!doc) return;
+    doc.title = titleInput.value || 'Untitled';
+    const titleEl = win.querySelector('.nw-title');
+    if (titleEl) titleEl.textContent = `Notepad — ${doc.title}`;
+    renderDocumentList();
+    queueSave();
+  });
+  formatSelect.addEventListener('change', () => {
+    const doc = activeDocument();
+    if (!doc) return;
+    doc.format = formatSelect.value === 'text' ? 'text' : 'markdown';
+    renderPreview(); renderDocumentList(); queueSave();
   });
   body.querySelectorAll('[data-mode]').forEach(b => {
     b.addEventListener('click', () => applyMode(b.dataset.mode));
   });
+  body.querySelector('#pad-new').addEventListener('click', () => createDocument());
+  body.querySelector('#pad-new-side').addEventListener('click', () => createDocument());
+  body.querySelector('#pad-tab-new').addEventListener('click', () => createDocument());
+  body.querySelector('#pad-save').addEventListener('click', saveActiveInteractive);
+  body.querySelector('#pad-save-as').addEventListener('click', () => saveAsLocalFile());
+  body.querySelector('#pad-download').addEventListener('click', downloadActive);
+  body.querySelector('#pad-delete').addEventListener('click', deleteActiveDocument);
+  body.querySelector('#pad-storage').addEventListener('click', chooseStorage);
+  body.querySelector('#pad-import').addEventListener('click', () => {
+    if (storageId === 'local') void openLocalFiles();
+    else body.querySelector('#pad-import-input').click();
+  });
+  body.querySelector('#pad-import-input').addEventListener('change', async e => {
+    await importFiles(e.target.files);
+    e.target.value = '';
+  });
+  body.querySelector('#pad-find-toggle').addEventListener('click', () => toggleFind(false));
+  body.querySelector('#pad-find-next').addEventListener('click', () => findMatch(1));
+  body.querySelector('#pad-find-prev').addEventListener('click', () => findMatch(-1));
+  body.querySelector('#pad-replace-one').addEventListener('click', replaceOne);
+  body.querySelector('#pad-replace-all').addEventListener('click', replaceAll);
+  findInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter'){ e.preventDefault(); findMatch(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Escape') findBar.hidden = true;
+  });
+  body.querySelector('#pad-go-toggle').addEventListener('click', toggleGo);
+  body.querySelector('#pad-go-submit').addEventListener('click', goToLine);
+  body.querySelector('#pad-go-close').addEventListener('click', () => { goBar.hidden = true; });
+  body.querySelector('#pad-go-line').addEventListener('keydown', e => {
+    if (e.key === 'Enter') goToLine();
+    else if (e.key === 'Escape') goBar.hidden = true;
+  });
+  wrapBtn.addEventListener('click', () => {
+    settings.wrap = !settings.wrap;
+    applyEditorSettings();
+  });
+  body.querySelector('#pad-font-down').addEventListener('click', () => {
+    settings.fontSize = Math.max(10, settings.fontSize - 1);
+    applyEditorSettings();
+  });
+  body.querySelector('#pad-font-up').addEventListener('click', () => {
+    settings.fontSize = Math.min(24, settings.fontSize + 1);
+    applyEditorSettings();
+  });
+  body.addEventListener('keydown', e => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    const key = e.key.toLowerCase();
+    if (key === 'n'){ e.preventDefault(); createDocument(); }
+    else if (key === 's' && e.shiftKey){ e.preventDefault(); void saveAsLocalFile(); }
+    else if (key === 's'){ e.preventDefault(); void saveActiveInteractive(); }
+    else if (key === 'w'){ e.preventDefault(); if (activeId) void closeTab(activeId); }
+    else if (key === 'f'){ e.preventDefault(); if (findBar.hidden) toggleFind(false); else findInput.focus(); }
+    else if (key === 'h'){ e.preventDefault(); if (findBar.hidden) toggleFind(true); else replaceInput.focus(); }
+    else if (key === 'g'){ e.preventDefault(); if (goBar.hidden) toggleGo(); }
+  });
 
-  applyMode(curMode);
+  const persistSession = () => {
+    void writeWorkspaceNow();
+    void flushSave();
+  };
+  const persistWhenHidden = () => {
+    if (document.visibilityState === 'hidden') persistSession();
+  };
+  window.addEventListener('blur', persistSession);
+  window.addEventListener('pagehide', persistSession);
+  document.addEventListener('visibilitychange', persistWhenHidden);
+
+  applyMode(settings.mode);
+  applyEditorSettings();
+  setEditorEnabled(false);
+  win._beforeClose = () => {
+    window.removeEventListener('blur', persistSession);
+    window.removeEventListener('pagehide', persistSession);
+    document.removeEventListener('visibilitychange', persistWhenHidden);
+    persistSession();
+  };
+  initialiseStorage().catch(err => {
+    status.textContent = 'Could not initialise · ' + String(err?.message || err);
+    storageId = 'local';
+    loadStorage();
+  });
 };
 
 // ── Calculator ──

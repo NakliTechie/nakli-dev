@@ -29,3 +29,12 @@ jobs:
 
       - name: Verify Tijori uses the app-scoped storage bridge
         run: node scripts/test-tijori-storage-bridge.mjs
+
+      - name: Verify Notepad v2 uses isolated Local, Folder, and Crate storage
+        run: node scripts/test-notepad-storage.mjs
+
+      - name: Verify Books stays hosted and uses explicit Folder or Crate storage
+        run: node scripts/test-books-storage-bridge.mjs
+
+      - name: Verify Slate and BOFH open in Immersive NakliOS windows
+        run: node scripts/test-immersive-apps.mjs
