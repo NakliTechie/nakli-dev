@@ -213,9 +213,14 @@ export class Manifest {
       throw new ManifestError(`manifest: decrypt failed: ${e.message || e}`);
     }
     const m = Manifest.fromJSONL(new TextDecoder().decode(plain));
-    // Verify each event's HMAC. fromJSONL already checks the prev_sig
-    // continuity string, but not the actual MAC bytes.
-    await m.verify(masterKeyBytes);
+    // Verify each event's HMAC and fail closed on any mismatch. fromJSONL
+    // already checks the prev_sig continuity string, but not the actual MAC
+    // bytes. verify() reports failures as {ok:false,...}, so awaiting it
+    // without inspecting the result would silently accept invalid events.
+    const v = await m.verify(masterKeyBytes);
+    if (!v.ok) {
+      throw new ManifestError(`manifest: signature verification failed at event ${v.at} (${v.reason})`);
+    }
     return m;
   }
 
