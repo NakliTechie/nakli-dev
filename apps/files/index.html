@@ -124,6 +124,7 @@ footer .spacer{flex:1;}
   <h1>📁 Files</h1>
   <span class="folder" id="folder-name">—</span>
   <span class="spacer"></span>
+  <button id="new-text">New text file</button>
   <button id="refresh">Refresh</button>
 </header>
 <div class="main">
@@ -460,6 +461,27 @@ function closeContextMenuOnOutside(e){
 }
 
 // Wire toolbar
+$('new-text').addEventListener('click', async () => {
+  const rawName = prompt('File name', 'naklios-roundtrip.txt');
+  if (rawName == null) return;
+  const name = rawName.trim();
+  if (!name || name === '.' || name === '..' || /[\/\\]/.test(name)){
+    alert('Use a plain file name without folders or slashes.');
+    return;
+  }
+  const contents = prompt(
+    'Text contents',
+    'nakliOS ↔ Crate live round-trip',
+  );
+  if (contents == null) return;
+  try {
+    await fs.write(name, contents);
+    await refresh();
+    setStatus(`Created ${name}`);
+  } catch (e){
+    alert('Create failed: ' + e.message);
+  }
+});
 $('refresh').addEventListener('click', () => refresh());
 
 // Boot

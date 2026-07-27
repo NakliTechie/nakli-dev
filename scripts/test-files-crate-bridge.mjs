@@ -25,7 +25,7 @@ assert.match(
   "Files must load the full naklios.fs SDK",
 );
 assert.match(filesSource, /const fs = window\.naklios\?\.fs;/);
-for (const method of ["list", "readBinary", "delete"]) {
+for (const method of ["list", "readBinary", "write", "delete"]) {
   assert.match(
     filesSource,
     new RegExp(`\\bfs\\.${method}\\(`),
