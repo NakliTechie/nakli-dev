@@ -283,6 +283,9 @@ async function openPath(path){
   const list = $('list');
   list.innerHTML = '';
   if (!listing.length){
+    selectedFile = null;
+    $('preview').hidden = true;
+    $('preview').innerHTML = '';
     list.innerHTML = '<div class="empty"><div>This folder is empty.</div></div>';
     setStatus(`${dirs.length} folders · 0 files`);
     return;
@@ -445,6 +448,11 @@ function showContextMenu(x, y, path, isDir){
     if (!confirm(`Delete ${fmtPath(path)}?\n\nThis cannot be undone.`)) return;
     try {
       await fs.delete(path);
+      if (selectedFile === path){
+        selectedFile = null;
+        $('preview').hidden = true;
+        $('preview').innerHTML = '';
+      }
       await refresh();
     } catch (e){ alert('Delete failed: ' + e.message); }
   });
