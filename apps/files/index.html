@@ -118,23 +118,7 @@ footer .spacer{flex:1;}
 </style>
 </head>
 <body>
-<!-- naklios.js SDK — vendored inline. Defined before the main script so
-     naklios.title() / naklios.ready() are available when refresh() runs. -->
-<script>
-(function(){
-  var inNakliOS = false;
-  try { inNakliOS = !!(window.parent && window.parent !== window); } catch(_){}
-  function send(type, data){
-    if (!inNakliOS) return;
-    try { window.parent.postMessage(Object.assign({ type: type }, data || {}), '*'); } catch(_){}
-  }
-  window.naklios = {
-    ready: function(){ send('naklios:ready'); },
-    title: function(s){ send('naklios:title', { title: String(s) }); },
-    close: function(){ send('naklios:close'); },
-  };
-})();
-</script>
+<script src="../../sdk/naklios.js"></script>
 
 <header>
   <h1>📁 Files</h1>
@@ -162,11 +146,10 @@ footer .spacer{flex:1;}
 (function(){
 'use strict';
 
-// Privileged system app: same-origin with nakliOS, so it reaches into the
-// host's exposed nakliOS.fs.* directly (no SDK postMessage round-trip).
-// Third-party apps use sdk/naklios.js — namespace-enforced.
-
-const host = window.parent && window.parent !== window ? window.parent : null;
+// Files is a system window, but it deliberately uses the same namespaced SDK
+// as every other cooperative app. The host therefore limits it to
+// apps/files/ and lets the user bind it to either Folder or Crate.
+const fs = window.naklios?.fs;
 const $ = id => document.getElementById(id);
 
 let currentPath = '';     // selected folder, '' = root
@@ -189,10 +172,6 @@ function fmtDate(ts){
 }
 function fmtPath(p){ return '/' + p; }
 
-async function isDir(path){
-  const list = await host.nakliOS.fs.list(path).catch(() => null);
-  return Array.isArray(list);
-}
 // Use a simpler heuristic: trailing slash from fsList means directory.
 function isDirEntry(name){ return name.endsWith('/'); }
 function basename(p){ return p.split('/').filter(Boolean).pop() || ''; }
@@ -202,33 +181,34 @@ function parent(p){
   return segs.join('/');
 }
 
-function notConnected(){
-  $('list').innerHTML = '';
-  $('preview').hidden = true;
-  $('tree').innerHTML = '';
-  document.querySelector('.body').innerHTML = `
+function notConnected(detail){
+  $('list').innerHTML = `
     <div class="empty">
       <div>
-        No folder is connected to nakliOS yet.<br>
-        Open Settings (⚙ in the topbar) → Folder sync → Connect folder.
-        <br><br>
-        This file explorer browses whatever folder you pick. Without it, there's nothing to see.
+        Files needs to run inside nakliOS with a Folder or Crate connected.
+        ${detail ? `<br><br>${escapeHtml(detail)}` : ''}
       </div>
     </div>
   `;
+  $('preview').hidden = true;
+  $('tree').innerHTML = '';
   $('status').textContent = 'Not connected';
 }
 
 async function refresh(){
-  if (!host || !host.nakliOS){
+  if (!naklios.capabilities.hosted || !fs){
     notConnected();
     return;
   }
-  if (!host.nakliOS.state.fsHandle){
-    notConnected();
+  try {
+    // The first SDK operation asks the host to bind Files to an available
+    // backend and show the normal per-app permission prompt.
+    await fs.list('');
+  } catch (e){
+    notConnected(e.message);
     return;
   }
-  const name = host.nakliOS.state.fsFolderName || '(folder)';
+  const name = 'Files';
   $('folder-name').textContent = name;
   naklios.title('Files — ' + name);
   await renderTree();
@@ -243,7 +223,7 @@ async function renderTree(){
 
 async function renderTreeNode(parentEl, path, label, icon){
   let entries = [];
-  try { entries = await host.nakliOS.fs.list(path); } catch(_){}
+  try { entries = await fs.list(path); } catch(_){}
   const dirs = entries.filter(isDirEntry).map(d => d.replace(/\/$/, ''));
 
   const node = document.createElement('div');
@@ -254,7 +234,7 @@ async function renderTreeNode(parentEl, path, label, icon){
 
   const hasChildren = dirs.length > 0;
   const chev = hasChildren ? '▸' : ' ';
-  const displayLabel = label === 'root' ? (host.nakliOS.state.fsFolderName || 'root') : label;
+  const displayLabel = label === 'root' ? 'Files' : label;
   node.innerHTML = `
     <span class="chev">${chev}</span>
     <span class="icon">${icon}</span>
@@ -291,7 +271,7 @@ async function openPath(path){
     : '<span>/</span>';
 
   let entries = [];
-  try { entries = await host.nakliOS.fs.list(path); }
+  try { entries = await fs.list(path); }
   catch (e){ setStatus('Error: ' + e.message); return; }
 
   // Sort: directories first, alphabetical within each
@@ -361,21 +341,26 @@ function iconFor(name){
 }
 
 async function readFileSize(path){
-  // Use fsHandle directly to get a FileHandle + Blob.size without reading content
   try {
-    const handle = await walkToFile(path);
-    const file = await handle.getFile();
-    return file.size;
+    return asBytes(await fs.readBinary(path)).byteLength;
   } catch(_){ return null; }
 }
 
-async function walkToFile(path){
-  const segs = path.split('/').filter(Boolean);
-  let dir = host.nakliOS.state.fsHandle;
-  for (let i = 0; i < segs.length - 1; i++){
-    dir = await dir.getDirectoryHandle(segs[i]);
+function asBytes(value){
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)){
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
-  return await dir.getFileHandle(segs[segs.length - 1]);
+  return new Uint8Array(value);
+}
+
+function previewMime(path){
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return {
+    png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg',
+    gif:'image/gif', webp:'image/webp', svg:'image/svg+xml',
+  }[ext] || 'application/octet-stream';
 }
 
 function selectRow(row){
@@ -392,25 +377,23 @@ async function previewFile(path){
   pv.hidden = false;
   pv.innerHTML = `<h3>Preview · ${basename(path)}</h3><div class="meta">Loading…</div>`;
   try {
-    const fh = await walkToFile(path);
-    const file = await fh.getFile();
+    const bytes = asBytes(await fs.readBinary(path));
     const meta = `<div class="meta">
-      <span>${fmtSize(file.size)}</span>
-      <span>${fmtDate(file.lastModified)}</span>
+      <span>${fmtSize(bytes.byteLength)}</span>
       <span>${fmtPath(path)}</span>
     </div>`;
 
     // Choose preview by extension/type
-    if (file.size > 1024 * 1024) {
+    if (bytes.byteLength > 1024 * 1024) {
       pv.innerHTML = `<h3>Preview · ${basename(path)}</h3>${meta}<div class="meta" style="margin-top:8px;">File is over 1 MB — preview skipped.</div>`;
       return;
     }
     if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) {
-      const url = URL.createObjectURL(file);
+      const url = URL.createObjectURL(new Blob([bytes], { type: previewMime(path) }));
       pv.innerHTML = `<h3>Preview · ${basename(path)}</h3>${meta}<img src="${url}" alt="">`;
       return;
     }
-    const text = await file.text();
+    const text = new TextDecoder().decode(bytes);
     let formatted = text;
     if (path.endsWith('.json')) {
       try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch(_){}
@@ -449,9 +432,8 @@ function showContextMenu(x, y, path, isDir){
   menu.querySelector('#ctx-download')?.addEventListener('click', async () => {
     closeContextMenu();
     try {
-      const fh = await walkToFile(path);
-      const file = await fh.getFile();
-      const url = URL.createObjectURL(file);
+      const bytes = asBytes(await fs.readBinary(path));
+      const url = URL.createObjectURL(new Blob([bytes]));
       const a = document.createElement('a');
       a.href = url; a.download = basename(path); document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -461,7 +443,7 @@ function showContextMenu(x, y, path, isDir){
     closeContextMenu();
     if (!confirm(`Delete ${fmtPath(path)}?\n\nThis cannot be undone.`)) return;
     try {
-      await host.nakliOS.fs.delete(path);
+      await fs.delete(path);
       await refresh();
     } catch (e){ alert('Delete failed: ' + e.message); }
   });
@@ -481,6 +463,7 @@ function closeContextMenuOnOutside(e){
 $('refresh').addEventListener('click', () => refresh());
 
 // Boot
+naklios.requestCapabilities();
 refresh().catch(e => setStatus('Error: ' + e.message)).then(() => naklios.ready());
 
 })();
