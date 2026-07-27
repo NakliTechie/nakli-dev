@@ -26,7 +26,25 @@
   --icon-cell:104px;
 }
 
-*{box-sizing:border-box;}
+*{
+  box-sizing:border-box;
+  scrollbar-width:thin;
+  scrollbar-color:color-mix(in srgb, var(--brand) 65%, var(--line-strong)) transparent;
+}
+*::-webkit-scrollbar{width:10px; height:10px;}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner{background:transparent;}
+*::-webkit-scrollbar-thumb{
+  background:color-mix(in srgb, var(--brand) 65%, var(--line-strong));
+  border:2px solid transparent;
+  border-radius:999px;
+  background-clip:padding-box;
+}
+*::-webkit-scrollbar-thumb:hover{
+  background:var(--brand);
+  border:2px solid transparent;
+  background-clip:padding-box;
+}
 html,body{margin:0;padding:0;height:100%;}
 body{
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
@@ -331,6 +349,7 @@ input{font:inherit; color:inherit;}
   background:var(--panel);
   position:relative;
 }
+.nw-body.has-iframe{overflow:hidden;}
 .nw-body iframe{
   width:100%; height:100%; border:0; display:block;
   background:#fff;
@@ -3312,6 +3331,7 @@ function minimizeWindow(win){
 function closeWindow(win){
   const id = win.dataset.id;
   if (fullscreenWin === win){ fullscreenWin = null; fullscreenSaved = null; }
+  clearTimeout(win._skeletonTimeout);
   try { win._beforeClose?.(); } catch(_){}
   delete openWindows[id];
   const iframe = win.querySelector('iframe');
@@ -3390,6 +3410,20 @@ function themedAppUrl(app){
   return `${base}${sep}naklios-theme=${encodeURIComponent(state.theme)}`;
 }
 
+function markIframeLaunchPhase(win, phase){
+  if (!win) return;
+  const timing = win._launchTiming;
+  if (timing && timing[phase] == null){
+    timing[phase] = performance.now() - timing.started;
+    console.debug(`NakliOS: ${win.dataset.id} ${phase} in ${Math.round(timing[phase])}ms`);
+  }
+  // Either a cooperative ready signal or the browser's definitive document
+  // load is enough to reveal the app. The timeout remains only as a safety net
+  // for browsers that fail to deliver either event.
+  clearTimeout(win._skeletonTimeout);
+  win.querySelector('.nw-skeleton')?.remove();
+}
+
 function spawnIframeWindow(app){
   const embedSrc = themedAppUrl(app);
   // Same-origin mirrors (naklios.dev/apps/<id>/) drop the sandbox so FSA/OPFS
@@ -3404,8 +3438,10 @@ function spawnIframeWindow(app){
     sandboxed: !isSameOrigin,
   });
   const body = win.querySelector('.nw-body');
+  body.classList.add('has-iframe');
 
-  // Loading skeleton — removed on naklios:ready or after a 5s fallback.
+  // Loading skeleton — removed on naklios:ready, iframe load, or a last-resort
+  // timeout. Cooperative apps can reveal themselves before the load event.
   const skel = document.createElement('div');
   skel.className = 'nw-skeleton';
   const iconHTML = app.svg
@@ -3413,7 +3449,8 @@ function spawnIframeWindow(app){
     : `<div class="nw-skeleton-glyph">${app.glyph || app.name.charAt(0)}</div>`;
   skel.innerHTML = `${iconHTML}<div class="nw-skeleton-name">${app.name}</div><div class="nw-skeleton-bar"></div>`;
   body.appendChild(skel);
-  win._skeletonTimeout = setTimeout(() => skel.remove(), 5000);
+  win._launchTiming = { started: performance.now(), loaded: null, ready: null, timeout: null };
+  win._skeletonTimeout = setTimeout(() => markIframeLaunchPhase(win, 'timeout'), 15000);
 
   const iframe = document.createElement('iframe');
   if (!isSameOrigin) {
@@ -3429,6 +3466,7 @@ function spawnIframeWindow(app){
   // have already postMessaged.
   try { knownIframes.add(iframe.contentWindow); } catch(_){}
   iframe.addEventListener('load', () => {
+    markIframeLaunchPhase(win, 'loaded');
     try {
       // Belt-and-suspenders: re-add in case the contentWindow identity changed.
       knownIframes.add(iframe.contentWindow);
@@ -3837,11 +3875,7 @@ window.addEventListener('message', async e => {
   const findWin = () => { const f = findIframe(); return f ? f.closest('.nw-window') : null; };
   const getAppId = () => findWin()?.dataset.id || null;
   if (msg.type === 'naklios:ready'){
-    const win = findWin();
-    if (win){
-      clearTimeout(win._skeletonTimeout);
-      win.querySelector('.nw-skeleton')?.remove();
-    }
+    markIframeLaunchPhase(findWin(), 'ready');
   } else if (msg.type === 'naklios:close'){
     const win = findWin();
     if (win) closeWindow(win);

@@ -30,7 +30,7 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
 
 ### One-time per app
 
-1. Add an entry to [`apps/manifest.json`](apps/manifest.json) pointing at the upstream repo/branch/file.
+1. Add an entry to [`apps/manifest.json`](apps/manifest.json) pointing at the upstream repository, release ref, and distributable files. Prefer a release tag; `main` is supported and is resolved to an exact commit during sync.
 2. Set `embedUrl: 'https://naklios.dev/apps/<id>/'` on the app's `APPS` entry in `index.html`.
 3. In the upstream source repo, add a small dispatcher workflow at `.github/workflows/notify-naklios.yml`:
 
@@ -51,13 +51,13 @@ Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-Syste
 
 4. In that same source repo, add the secret `NAKLIOS_DISPATCH_TOKEN` (Settings → Secrets and variables → Actions). It's a fine-grained PAT with **Actions: Read and write** on `NakliTechie/nakli-dev`. The same PAT can be reused across every source repo.
 
-5. Run `bash scripts/sync-mirrors.sh` locally once to seed the initial mirror, then commit.
+5. Run `bash scripts/sync-mirrors.sh --app <id>` locally once to seed the initial mirror and [`apps/manifest.lock.json`](apps/manifest.lock.json), then commit both. `node scripts/validate-mirrors.mjs` verifies that every checked-in artifact matches its locked SHA-256.
 
 ### How updates flow
 
-When a source repo pushes to main with a change to `index.html`, its dispatcher fires `gh workflow run` against nakli-dev. The `Sync app mirrors` workflow pulls every mirrored app's latest `index.html`, opens a PR if anything drifted. You review + merge → Cloudflare redeploys naklios.dev with the fresh mirror.
+When a source repo pushes to main with a distributable change, its dispatcher fires `gh workflow run` against nakli-dev. The `Sync app mirrors` workflow resolves the requested ref to a full Git commit, downloads from that immutable commit, updates the lockfile, validates every artifact hash, and opens a PR if anything drifted. You review + merge → Cloudflare redeploys naklios.dev with the fresh mirror.
 
-The Immersive iframe drops its sandbox and uses the mirror; standalone visits and new-tab opens continue to use the canonical `url`.
+This is vendoring of built artifacts, not a second source tree: implementation and releases happen in each standalone repository, while NakliOS records only the deployable snapshot it needs. The Immersive iframe drops its sandbox only for a declared same-origin mirror; standalone visits and new-tab opens continue to use the canonical `url`, and all other hosted apps keep the cross-origin sandbox boundary.
 
 Manual trigger anytime: Actions tab → **Sync app mirrors** → **Run workflow**.
 

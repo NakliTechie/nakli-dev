@@ -1,11 +1,17 @@
 {
-  "_comment": "Each entry mirrors an app's index.html into apps/<id>/index.html. The sync workflow (scripts/sync-mirrors.sh, .github/workflows/sync-mirrors.yml) pulls from <repo>/<branch>/<file> on a schedule and opens a PR if anything changed. Only add apps that need same-origin embedding (FSA picker, navigator.storage.getDirectory, etc.). Cross-origin embedding via app.url is still preferred for everything else.",
+  "version": 1,
+  "_comment": "Standalone repositories are authoritative. The sync workflow resolves each ref to an immutable commit, copies the declared release artifacts into apps/<id>/, and records commit + SHA-256 data in manifest.lock.json. Only mirror apps that need same-origin capabilities; keep other apps cross-origin and sandboxed.",
   "apps": [
     {
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
-      "branch": "main",
-      "file": "index.html"
+      "ref": "main",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html"
+        }
+      ]
     }
   ]
 }

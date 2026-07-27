@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "tijori",
+      "repo": "NakliTechie/Tijori",
+      "requestedRef": "main",
+      "resolvedCommit": "0bd48d875f3f1db0f2d00748604d2adebb70d31d",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html",
+          "sha256": "71a5602fd9bd19797a4b49bd8036036a98f6e9b7c097f43851c6097cb712aeb5",
+          "bytes": 455023
+        }
+      ]
+    }
+  ]
+}

@@ -20,5 +20,35 @@ assert.match(
   /if \(m === 'immersive'\)[\s\S]*?return spawnIframeWindow\(app\);/,
   'Immersive apps must launch in NakliOS iframe windows',
 );
+assert.match(
+  html,
+  /\.nw-body\.has-iframe\s*\{\s*overflow:\s*hidden/,
+  'iframe windows must not add a redundant host scrollbar',
+);
+assert.match(
+  html,
+  /body\.classList\.add\('has-iframe'\)/,
+  'iframe windows mark their host body for overflow control',
+);
+assert.match(
+  html,
+  /iframe\.addEventListener\('load',\s*\(\)\s*=>\s*\{\s*markIframeLaunchPhase\(win,\s*'loaded'\)/,
+  'iframe load reveals apps without waiting for a cooperative ready signal',
+);
+assert.match(
+  html,
+  /msg\.type\s*===\s*'naklios:ready'[\s\S]*markIframeLaunchPhase\(findWin\(\),\s*'ready'\)/,
+  'cooperative ready signals still reveal apps before iframe load',
+);
+assert.doesNotMatch(
+  html,
+  /setTimeout\(\(\)\s*=>\s*skel\.remove\(\),\s*5000\)/,
+  'iframe apps do not remain hidden behind the old fixed five-second cover',
+);
+assert.match(
+  html,
+  /scrollbar-color:[^;]*var\(--brand\)/,
+  'NakliOS-owned scroll areas use the active theme',
+);
 
 console.log('NakliOS Immersive Slate/BOFH launch contract: PASS');

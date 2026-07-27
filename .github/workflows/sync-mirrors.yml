@@ -23,6 +23,11 @@ jobs:
 
       - name: Sync mirrors
         run: bash scripts/sync-mirrors.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Verify mirror lock and artifact hashes
+        run: node scripts/validate-mirrors.mjs
 
       - name: Create pull request if anything changed
         uses: peter-evans/create-pull-request@v6
@@ -31,10 +36,12 @@ jobs:
           branch: sync/mirrors
           commit-message: 'chore: sync app mirrors from upstream repos'
           body: |
-            Automated mirror of upstream app `index.html` files into `apps/`.
+            Automated mirror of upstream release artifacts into `apps/`.
 
             Review the diff, then merge. Cloudflare Pages redeploys `naklios.dev`
             on push to `main` so the mirrored versions go live within minutes.
 
-            Source of truth: `apps/manifest.json`.
+            Standalone repositories remain the source of truth. This PR records
+            each resolved upstream commit and artifact SHA-256 in
+            `apps/manifest.lock.json` for deterministic review and rollback.
           delete-branch: true
