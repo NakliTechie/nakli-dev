@@ -77,6 +77,13 @@
     });
   }
 
+  // Bind each operation to the backend visible when it was issued. The host
+  // rejects it if the app is rebound before the message is processed, which
+  // prevents a delayed save from crossing Folder/Crate boundaries.
+  function fsPayload(data) {
+    return Object.assign({ backend: capabilities.fsBackend }, data || {});
+  }
+
   window.addEventListener('message', function (e) {
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
@@ -131,13 +138,13 @@
       // All paths are app-relative (under apps/<your-id>/ in the host folder).
       // Returns Promises. Reject if no folder connected, permission denied,
       // or path tries to traverse.
-      read:       function (path)       { return rpc('naklios:fs:read', { path: path }); },
-      readBinary: function (path)       { return rpc('naklios:fs:readBinary', { path: path }); },
-      write:      function (path, data) { return rpc('naklios:fs:write', { path: path, data: data }); },
-      append:     function (path, line) { return rpc('naklios:fs:append', { path: path, line: line }); },
-      list:       function (prefix)     { return rpc('naklios:fs:list', { prefix: prefix || '' }); },
-      delete:     function (path)       { return rpc('naklios:fs:delete', { path: path }); },
-      exists:     function (path)       { return rpc('naklios:fs:exists', { path: path }); },
+      read:       function (path)       { return rpc('naklios:fs:read', fsPayload({ path: path })); },
+      readBinary: function (path)       { return rpc('naklios:fs:readBinary', fsPayload({ path: path })); },
+      write:      function (path, data) { return rpc('naklios:fs:write', fsPayload({ path: path, data: data })); },
+      append:     function (path, line) { return rpc('naklios:fs:append', fsPayload({ path: path, line: line })); },
+      list:       function (prefix)     { return rpc('naklios:fs:list', fsPayload({ prefix: prefix || '' })); },
+      delete:     function (path)       { return rpc('naklios:fs:delete', fsPayload({ path: path })); },
+      exists:     function (path)       { return rpc('naklios:fs:exists', fsPayload({ path: path })); },
       // Explicit backend changes are always confirmed by the NakliOS host.
       // Switching changes the app-scoped view; it never copies or deletes data.
       useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },

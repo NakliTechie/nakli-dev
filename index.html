@@ -3708,6 +3708,9 @@ async function fsHostSelectBackend(appId, requestedBackendId){
 async function fsHostHandle(msg, type, appId){
   const backendId = await fsEnsurePermission(appId);
   if (!backendId) throw new Error('Permission denied');
+  if (msg.backend && msg.backend !== backendId) {
+    throw new Error('Storage backend changed before the operation completed; retry on the active backend');
+  }
   const backend = BACKENDS[backendId];
   if (!backend.isConnected()) throw new Error('Backend disconnected');
   const safe = fsSafePath(appId, msg.path || '');
@@ -3725,6 +3728,9 @@ async function fsHostHandle(msg, type, appId){
 async function fsHostList(msg, appId){
   const backendId = await fsEnsurePermission(appId);
   if (!backendId) throw new Error('Permission denied');
+  if (msg.backend && msg.backend !== backendId) {
+    throw new Error('Storage backend changed before the operation completed; retry on the active backend');
+  }
   const backend = BACKENDS[backendId];
   if (!backend.isConnected()) throw new Error('Backend disconnected');
   const subPath = (msg.prefix || '').split('/').filter(s => s && s !== '.' && s !== '..').join('/');
