@@ -598,13 +598,13 @@ body.is-mobile .nw-dock{display:none;}
 }
 
 /* ── FULLSCREEN / MINIMIZE ── */
-.nw-fs-btn, .nw-min-btn{
+.nw-info-btn, .nw-fs-btn, .nw-min-btn{
   width:22px; height:22px; border-radius:6px;
   display:flex; align-items:center; justify-content:center;
   color:var(--muted); font-size:11px;
 }
 .nw-min-btn{font-size:14px; line-height:1; padding-bottom:4px;}
-.nw-fs-btn:hover, .nw-min-btn:hover{background:color-mix(in srgb, var(--ink) 12%, transparent); color:var(--ink);}
+.nw-info-btn:hover, .nw-fs-btn:hover, .nw-min-btn:hover{background:color-mix(in srgb, var(--ink) 12%, transparent); color:var(--ink);}
 .nw-window.is-fullscreen{
   border-radius:0; border:none;
   box-shadow:none;
@@ -822,6 +822,44 @@ body.is-mobile .nw-dock{display:none;}
   background:color-mix(in srgb, var(--ink) 10%, var(--panel));
 }
 .nw-dlg-copy-btn.copied{ color:var(--ok); border-color:var(--ok); }
+
+/* Per-window App Info diagnostics. */
+.nw-app-info{ width:min(620px, 94vw); }
+.nw-app-info .nw-dlg-form{ gap:12px; }
+.nw-app-info-intro{
+  margin:0; color:var(--muted); font-size:12px; line-height:1.5;
+}
+.nw-app-info-grid{
+  display:grid; grid-template-columns:minmax(118px, 0.32fr) minmax(0, 1fr);
+  gap:0; margin:0;
+  border:1px solid var(--line); border-radius:9px; overflow:hidden;
+}
+.nw-app-info-grid dt,
+.nw-app-info-grid dd{
+  margin:0; padding:7px 10px; min-width:0;
+  border-bottom:1px solid var(--line);
+  font-size:12px; line-height:1.45;
+}
+.nw-app-info-grid dt{
+  color:var(--muted); background:color-mix(in srgb, var(--row) 78%, var(--panel));
+  font-weight:600;
+}
+.nw-app-info-grid dd{
+  color:var(--ink); background:var(--panel);
+  overflow-wrap:anywhere;
+}
+.nw-app-info-grid dt:last-of-type,
+.nw-app-info-grid dd:last-of-type{ border-bottom:0; }
+.nw-app-info-grid code{
+  font:11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.nw-app-info-status{ min-height:18px; margin:0; color:var(--muted); font-size:11px; }
+
+@media (max-width:560px){
+  .nw-app-info-grid{ grid-template-columns:1fr; }
+  .nw-app-info-grid dt{ border-bottom:0; padding-bottom:2px; }
+  .nw-app-info-grid dd{ padding-top:2px; }
+}
 
 /* ── FOOTER ── */
 #footer-nav{
@@ -1259,6 +1297,7 @@ const APPS = [
     description:'A simple calculator. Keyboard works too.', tags:['tool','classic'],
     svg:`<rect x="5" y="3" width="14" height="18" rx="2"/><line x1="7" y1="7" x2="17" y2="7"/><line x1="8" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="10" y2="16"/><line x1="14" y1="16" x2="16" y2="16"/>` },
   { id:'notepad', name:'Notepad', kind:'classic', glyph:'📝', bg:'ok',
+    hostStorage:true,
     description:'Multi-document text and Markdown editor with autosave to Local, NakliOS Folder, or Crate.', tags:['tool','classic','productivity'],
     svg:`<rect x="5" y="3" width="14" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>` },
   { id:'spider', name:'Spider', kind:'classic', glyph:'🕷️', bg:'ok',
@@ -1282,8 +1321,8 @@ const APPS = [
     description:'A password vault that lives entirely in your browser. Encrypted event-log, multi-device via folder sync.', tags:['security','privacy','productivity'], desktopAlign:'right', desktopOrder:4,
     svg:`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="9" x2="12" y2="11"/>` },
   { id:'files', name:'Files',
-    url:'https://naklios.dev/apps/files/',
-    embedUrl:'/apps/files/',
+    url:'./apps/files/',
+    embedUrl:'./apps/files/',
     kind:'system',
     glyph:'📁', bg:'ok',
     description:'Browse Files-owned data in your connected Folder or encrypted Crate.',
@@ -3104,14 +3143,228 @@ function makeIconDraggable(el, app){
 let topZ = 100;
 const openWindows = Object.create(null);
 const knownIframes = new Set();
+let appInfoWindow = null;
+let appInfoRenderToken = 0;
+let mirrorManifestPromise = null;
+
+function loadMirrorManifest(){
+  if (!mirrorManifestPromise){
+    const manifestUrl = new URL('apps/manifest.lock.json', location.href);
+    mirrorManifestPromise = fetch(manifestUrl)
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(manifest => ({ manifest, error:null }))
+      .catch(error => ({ manifest:null, error:String(error?.message || error) }));
+  }
+  return mirrorManifestPromise;
+}
+
+function formatLaunchTiming(value, emptyLabel){
+  return typeof value === 'number' ? `${Math.round(value)} ms` : emptyLabel;
+}
+
+function appProvenanceRows(win, mirrorManifest, mirrorError){
+  const app = win._app || APPS.find(item => item.id === win.dataset.id);
+  if (!app) return [{ label:'Provenance', value:'Unknown app registry entry' }];
+  if (app.kind === 'classic'){
+    return [
+      { label:'Provenance', value:'Built into this NakliOS release' },
+      { label:'Source', value:'NakliOS index.html', mono:true },
+    ];
+  }
+
+  const iframe = win.querySelector('iframe');
+  const loadedUrl = iframe?.src || app.embedUrl || app.url || '';
+  let loaded = null;
+  try { loaded = new URL(loadedUrl, location.href); } catch(_){}
+  const mirror = mirrorManifest?.apps?.find(entry => entry.id === app.id);
+  if (mirror && app.embedUrl){
+    const artifact = mirror.files?.[0] || null;
+    const rows = [
+      { label:'Provenance', value:'Vendored standalone-app mirror' },
+      { label:'Source repository', value:mirror.repo || 'Unknown', mono:true },
+      { label:'Mirror commit', value:mirror.resolvedCommit || 'Unknown', mono:true },
+    ];
+    if (artifact?.destination){
+      rows.push({ label:'Mirror artifact', value:`apps/${app.id}/${artifact.destination}`, mono:true });
+    }
+    if (artifact?.sha256){
+      rows.push({ label:'Artifact SHA-256', value:artifact.sha256, mono:true });
+    }
+    return rows;
+  }
+
+  const hostedSystemPath = loaded &&
+    loaded.origin === location.origin &&
+    loaded.pathname.includes(`/apps/${app.id}/`);
+  if (hostedSystemPath){
+    return [
+      { label:'Provenance', value:'Bundled NakliOS system app' },
+      { label:'Source', value:`apps/${app.id}/`, mono:true },
+    ];
+  }
+  const rows = [
+    { label:'Provenance', value:'Canonical standalone app (not a vendored mirror)' },
+    { label:'Canonical URL', value:app.url || loadedUrl || 'Unknown', mono:true },
+  ];
+  if (mirrorError && app.embedUrl){
+    rows.push({ label:'Mirror manifest', value:`Unavailable: ${mirrorError}` });
+  }
+  return rows;
+}
+
+function appDiagnosticRows(win, mirrorManifest, mirrorError){
+  const app = win._app || APPS.find(item => item.id === win.dataset.id) || {};
+  const iframe = win.querySelector('iframe');
+  const actualUrl = iframe?.src || app.url || location.href;
+  let actualOrigin = location.origin;
+  try { actualOrigin = new URL(actualUrl, location.href).origin; } catch(_){}
+  const timing = win._launchTiming || {};
+  const caps = win._capabilities || (app.id ? capabilitySnapshot(app.id) : null);
+  const sandboxAttr = iframe?.getAttribute('sandbox');
+  const sandboxState = !iframe
+    ? 'Host-native window; no iframe sandbox'
+    : sandboxAttr !== null
+      ? 'Enabled on a cross-origin iframe'
+      : actualOrigin === location.origin
+        ? 'None; same-origin integration'
+        : 'None; cross-origin boundary only';
+  const sdkState = !iframe
+    ? 'Host-native API'
+    : timing.ready != null
+      ? 'Cooperative ready signal received'
+      : 'No ready signal received yet';
+  const backendLabels = (caps?.fsBackends || [])
+    .map(item => typeof item === 'string' ? item : item?.label || item?.id)
+    .filter(Boolean);
+  const bound = caps?.fsBackend === 'crate'
+    ? 'Crate'
+    : caps?.fsBackend === 'fsa'
+      ? 'Folder'
+      : 'Unbound (chosen on first file operation)';
+  const rows = [
+    { label:'App', value:`${app.name || win.dataset.id} (${win.dataset.id})` },
+    { label:'Loaded URL', value:actualUrl, mono:true },
+    { label:'Origin', value:actualOrigin, mono:true },
+    { label:'Sandbox', value:sandboxState },
+  ];
+  if (iframe){
+    rows.push({
+      label:'Sandbox tokens',
+      value:sandboxAttr !== null && sandboxAttr ? sandboxAttr : 'None',
+      mono:true,
+    });
+    rows.push(
+      { label:'Load event', value:formatLaunchTiming(timing.loaded, 'Pending') },
+      { label:'Ready signal', value:formatLaunchTiming(timing.ready, 'Not signaled') },
+      { label:'Fallback reveal', value:formatLaunchTiming(timing.timeout, 'Not used') },
+    );
+  } else {
+    rows.push(
+      { label:'Load event', value:'Immediate (built in)' },
+      { label:'Ready signal', value:'Not applicable' },
+    );
+  }
+  rows.push(
+    { label:'SDK bridge', value:sdkState },
+    { label:'Storage capability', value:caps?.fs ? 'Available to this app' : 'Unavailable or denied' },
+    { label:'Connected locations', value:backendLabels.length ? backendLabels.join(', ') : 'None' },
+    { label:'App storage binding', value:bound },
+    ...appProvenanceRows(win, mirrorManifest, mirrorError),
+  );
+  return rows;
+}
+
+function renderAppInfoRows(dlg, rows){
+  const grid = dlg.querySelector('.nw-app-info-grid');
+  grid.replaceChildren();
+  for (const row of rows){
+    const dt = document.createElement('dt');
+    const dd = document.createElement('dd');
+    dt.textContent = row.label;
+    if (row.mono){
+      const code = document.createElement('code');
+      code.textContent = row.value;
+      dd.appendChild(code);
+    } else {
+      dd.textContent = row.value;
+    }
+    grid.append(dt, dd);
+  }
+  dlg._diagnosticText = rows.map(row => `${row.label}: ${row.value}`).join('\n');
+}
+
+async function renderAppInfo(win){
+  const dlg = document.getElementById('nw-app-info-dialog');
+  if (!dlg || appInfoWindow !== win) return;
+  const token = ++appInfoRenderToken;
+  dlg.querySelector('.nw-dlg-title').textContent =
+    `App Info — ${win._app?.name || win.dataset.id}`;
+  dlg.querySelector('.nw-app-info-status').textContent = 'Loading mirror provenance…';
+  renderAppInfoRows(dlg, appDiagnosticRows(win, null, null));
+  const { manifest, error } = await loadMirrorManifest();
+  if (token !== appInfoRenderToken || appInfoWindow !== win) return;
+  renderAppInfoRows(dlg, appDiagnosticRows(win, manifest, error));
+  dlg.querySelector('.nw-app-info-status').textContent =
+    error ? `Mirror manifest could not be read: ${error}` : 'Live host diagnostics';
+}
+
+function refreshOpenAppInfo(win){
+  const dlg = document.getElementById('nw-app-info-dialog');
+  if (dlg?.open && appInfoWindow === win) void renderAppInfo(win);
+}
+
+function showAppInfo(win){
+  let dlg = document.getElementById('nw-app-info-dialog');
+  if (!dlg){
+    dlg = document.createElement('dialog');
+    dlg.id = 'nw-app-info-dialog';
+    dlg.className = 'nw-dlg nw-app-info';
+    dlg.setAttribute('aria-labelledby', 'nw-app-info-title');
+    dlg.setAttribute('aria-describedby', 'nw-app-info-intro');
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form">
+        <h2 class="nw-dlg-title" id="nw-app-info-title">App Info</h2>
+        <p class="nw-app-info-intro" id="nw-app-info-intro">
+          Runtime details for this window. Storage names and file contents are not included.
+        </p>
+        <dl class="nw-app-info-grid" aria-live="polite"></dl>
+        <p class="nw-app-info-status" role="status"></p>
+        <menu class="nw-dlg-actions">
+          <button class="nw-dlg-btn" id="nw-app-info-copy" type="button">Copy diagnostics</button>
+          <button class="nw-dlg-btn primary" value="close" autofocus>Close</button>
+        </menu>
+      </form>`;
+    document.body.appendChild(dlg);
+    dlg.querySelector('#nw-app-info-copy').addEventListener('click', async () => {
+      const status = dlg.querySelector('.nw-app-info-status');
+      try {
+        await navigator.clipboard.writeText(dlg._diagnosticText || '');
+        status.textContent = 'Diagnostics copied';
+      } catch(_){
+        status.textContent = 'Copy unavailable in this browser';
+      }
+    });
+    dlg.addEventListener('close', () => {
+      appInfoWindow = null;
+      appInfoRenderToken++;
+    });
+  }
+  appInfoWindow = win;
+  if (!dlg.open) dlg.showModal();
+  void renderAppInfo(win);
+}
 
 function makeWindow(opts){
-  const { id, title, width=520, height=420, badge, sandboxed } = opts;
+  const { id, title, width=520, height=420, badge, sandboxed, app } = opts;
   if (openWindows[id]) { focusWindow(openWindows[id]); return openWindows[id]; }
   const root = document.getElementById('overlay-root');
   const win = document.createElement('div');
   win.className = 'nw-window';
   win.dataset.id = id;
+  win._app = app || APPS.find(item => item.id === id) || null;
   win.style.width = width + 'px';
   win.style.height = height + 'px';
   // Restore saved position if it exists and is at least partially in-viewport;
@@ -3136,6 +3389,7 @@ function makeWindow(opts){
       ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. NakliOS can't read its data, and it can't reach back into NakliOS.">🔒 sandboxed</span>` : ''}
       ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
       <span class="nw-title">${title}</span>
+      <button class="nw-info-btn" title="App Info" aria-label="App Info">ⓘ</button>
       <button class="nw-min-btn" title="Minimize (click dock to restore)" aria-label="Minimize">—</button>
       <button class="nw-fs-btn" title="Maximize / restore (Esc to exit)" aria-label="Maximize">⛶</button>
       <button class="nw-close" aria-label="Close">✕</button>
@@ -3147,6 +3401,9 @@ function makeWindow(opts){
   win.addEventListener('pointerdown', () => focusWindow(win));
   win.querySelector('.nw-close').addEventListener('click', e => {
     e.stopPropagation(); closeWindow(win);
+  });
+  win.querySelector('.nw-info-btn').addEventListener('click', e => {
+    e.stopPropagation(); showAppInfo(win);
   });
   win.querySelector('.nw-fs-btn').addEventListener('click', e => {
     e.stopPropagation(); toggleFullscreen(win);
@@ -3331,6 +3588,9 @@ function minimizeWindow(win){
 function closeWindow(win){
   const id = win.dataset.id;
   if (fullscreenWin === win){ fullscreenWin = null; fullscreenSaved = null; }
+  if (appInfoWindow === win){
+    document.getElementById('nw-app-info-dialog')?.close();
+  }
   clearTimeout(win._skeletonTimeout);
   try { win._beforeClose?.(); } catch(_){}
   delete openWindows[id];
@@ -3395,7 +3655,11 @@ function spawnInlineWindow(app){
     notepad: {w:820, h:580},
   };
   const sz = sizes[app.id] || {w:480, h:380};
-  const win = makeWindow({ id:app.id, title:app.name, width:sz.w, height:sz.h });
+  const win = makeWindow({ id:app.id, title:app.name, width:sz.w, height:sz.h, app });
+  win._launchTiming = { started:performance.now(), loaded:0, ready:0, timeout:null };
+  win._capabilities = app.hostStorage
+    ? capabilitySnapshot(app.id)
+    : { fs:false, fsBackends:[], fsBackend:null };
   const body = win.querySelector('.nw-body');
   builder(body, win);
 }
@@ -3422,6 +3686,7 @@ function markIframeLaunchPhase(win, phase){
   // for browsers that fail to deliver either event.
   clearTimeout(win._skeletonTimeout);
   win.querySelector('.nw-skeleton')?.remove();
+  refreshOpenAppInfo(win);
 }
 
 function spawnIframeWindow(app){
@@ -3436,6 +3701,7 @@ function spawnIframeWindow(app){
     id:app.id, title:app.name, width:980, height:640,
     badge: app.kind === 'system' ? undefined : 'EXPERIMENTAL',
     sandboxed: !isSameOrigin,
+    app,
   });
   const body = win.querySelector('.nw-body');
   body.classList.add('has-iframe');
@@ -3459,6 +3725,8 @@ function spawnIframeWindow(app){
   iframe.setAttribute('referrerpolicy', 'no-referrer');
   iframe.title = app.name;
   iframe.src = embedSrc;
+  win._embedSrc = embedSrc;
+  win._isSameOrigin = isSameOrigin;
   body.appendChild(iframe);
   // Register synchronously so messages posted by the iframe's first scripts
   // (typically naklios.title / naklios.ready) aren't dropped by the host's
@@ -3658,10 +3926,12 @@ async function fsEnsurePermission(appId){
   if (!chosen){
     state.appPermissions[appId] = { granted: false };
     saveAppPermissions();
+    broadcastCapabilities();
     return null;
   }
   state.appPermissions[appId] = { backend: chosen, granted: true };
   saveAppPermissions();
+  broadcastCapabilities();
   return chosen;
 }
 
@@ -3740,22 +4010,35 @@ async function fsHostList(msg, appId){
   return all.map(p => p.startsWith(stripPrefix) ? p.slice(stripPrefix.length) : p);
 }
 
-// Tell an iframe its current capabilities. Called on load and on changes.
-function postCapabilities(iframe, appId){
+function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
   const v = state.appPermissions[appId];
-  const explicitlyDenied = v && typeof v === 'object' && v.granted === false;
+  const explicitlyDenied = v === 'denied' ||
+    (v && typeof v === 'object' && v.granted === false);
   const available = backendsAvailable();
   const fsCap = available.length > 0 && !explicitlyDenied;
   const fsBackends = available.map(backendDescriptor).filter(Boolean);
   const fsBackend = appBoundBackend(appId);
+  return {
+    fs: fsCap,
+    fsBackends,
+    fsBackend,
+  };
+}
+
+// Tell an iframe its current capabilities. Called on load and on changes.
+function postCapabilities(iframe, appId){
+  const snapshot = capabilitySnapshot(appId);
+  const win = iframe.closest('.nw-window');
+  if (win){
+    win._capabilities = snapshot;
+    refreshOpenAppInfo(win);
+  }
   try {
     iframe.contentWindow.postMessage({
       type:'naklios:capabilities',
-      fs: fsCap,
-      fsBackends,
-      fsBackend,
+      ...snapshot,
     }, '*');
   } catch(_){}
 }
@@ -3763,6 +4046,11 @@ function broadcastCapabilities(){
   document.querySelectorAll('.nw-window iframe').forEach(iframe => {
     const appId = iframe.closest('.nw-window')?.dataset.id;
     if (appId) postCapabilities(iframe, appId);
+  });
+  Object.values(openWindows).forEach(win => {
+    if (!win._app?.hostStorage) return;
+    win._capabilities = capabilitySnapshot(win._app.id);
+    refreshOpenAppInfo(win);
   });
   // Re-paint the topbar chips on every backend state change. Defensive
   // try — chips might not be in DOM yet during early boot.

@@ -11,6 +11,12 @@ A private, browser-native desktop for single-file tools. Apps stay standalone; N
 - **Basic** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; storage-dependent system apps such as Files, Tijori, and Books stay hosted; other apps open a new tab. Default.
 - **Immersive** *(experimental)* — light apps open as iframe windows inside the desktop.
 
+Every NakliOS window has an **App Info** button in its titlebar. It shows the
+actual loaded URL and origin, iframe sandbox tokens, load/SDK-ready timings,
+the storage capabilities currently offered to that app, and whether the
+artifact is built in, canonical, or a mirror locked to a source commit and
+SHA-256.
+
 ## Adding a new app
 
 One line in the `APPS` array at the top of `index.html`:
