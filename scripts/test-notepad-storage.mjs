@@ -39,6 +39,7 @@ for (const id of [
   'pad-doc-list',
   'pad-tab-list',
   'pad-tab-new',
+  'pad-reopen-closed',
   'pad-find-query',
   'pad-replace-query',
   'pad-go-line',
@@ -69,6 +70,37 @@ assert.match(notepad, /window\.showSaveFilePicker/,
   'local fallback must support Save As to a real file');
 assert.match(notepad, /await idbSet\(doc\.localHandleKey, handle\)/,
   'local file handles must persist in IndexedDB');
+assert.match(notepad, /fileLastModified: Number\(raw\.fileLastModified\) \|\| null/,
+  'linked files must persist their observed disk revision');
+assert.match(notepad, /async function resolveExternalFileChange\(doc, handle, file = null\)/,
+  'linked files must check external freshness');
+assert.match(notepad, /title:'File changed outside Notepad'/,
+  'external conflicts must use the styled NakliOS dialog');
+assert.match(notepad, /\{ value:'reload', label:'Reload from disk' \}/,
+  'conflict dialog must offer disk reload');
+assert.match(notepad, /\{ value:'keep', label:'Keep mine', primary:true \}/,
+  'conflict dialog must offer an explicit overwrite decision');
+assert.match(notepad, /window\.addEventListener\('focus', checkWhenFocused\)/,
+  'returning to Notepad must check linked files for external edits');
+assert.match(notepad, /unknownDirtyBaseline = dirtyIds\.has\(doc\.id\) && !doc\.fileLastModified/,
+  'upgraded dirty handle records without a baseline must prompt instead of overwrite');
+assert.match(notepad, /function queueExternalFileCheck\(\)[\s\S]*savePromise = savePromise/,
+  'focus freshness checks must share the autosave serializer');
+assert.match(notepad, /const latest = await handle\.getFile\(\)[\s\S]*latest\.lastModified/,
+  'linked-file writes must recheck the disk revision after the dialog');
+assert.match(notepad, /if \(!doc\.fileLastModified\)\{[\s\S]*if \(dirtyIds\.has\(doc\.id\)\)\{[\s\S]*resolveExternalFileChange/,
+  'focus checks must route dirty legacy records through the conflict dialog');
+assert.doesNotMatch(
+  notepad.slice(notepad.indexOf("if (doc.localHandleKey && !(await writeLocalHandle"), notepad.indexOf("} else {", notepad.indexOf("if (doc.localHandleKey && !(await writeLocalHandle"))),
+  /dirtyIds\.add\(doc\.id\)/,
+  'Reload must not be marked dirty again when the file writer returns false',
+);
+assert.match(notepad, /recentlyClosed: recentlyClosed\.slice\(0, 10\)/,
+  'recently closed tabs must persist in the recovery journal');
+assert.match(notepad, /async function reopenClosedTab\(\)/,
+  'recently closed tabs must be recoverable');
+assert.match(notepad, /key === 't' && e\.shiftKey/,
+  'Cmd\/Ctrl+Shift+T must reopen the most recent tab');
 assert.match(
   notepad,
   /if \(bound && BACKENDS\[bound\]\?\.isConnected\(\)\)[\s\S]*?else if \(backendsAvailable\(\)\.length\)[\s\S]*?storageId = selected \|\| 'local'/,
@@ -81,4 +113,4 @@ assert.match(notepad, /window\.addEventListener\('pagehide', persistSession\)/,
 assert.match(notepad, /win\._beforeClose = \(\) => \{[\s\S]*?persistSession\(\);[\s\S]*?\}/,
   'closing the classic window must flush canonical autosave and recovery');
 
-console.log('NakliOS Notepad v2 storage contract: PASS');
+console.log('NakliOS Notepad v2.1 storage contract: PASS');

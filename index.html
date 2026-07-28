@@ -4817,12 +4817,14 @@ Classics.notepad = (body, win) => {
   let storageId = 'local';
   let documents = [];
   let openIds = [];
+  let recentlyClosed = [];
   let activeId = null;
   let saveTimer = null;
   let recoveryTimer = null;
   let savePromise = Promise.resolve();
   let recoveryPromise = Promise.resolve();
   let switching = false;
+  let checkingExternalFiles = false;
   const dirtyIds = new Set();
   const settings = Object.assign({
     mode: localStorage.getItem('nakliOS.notepad.mode') || 'edit',
@@ -4876,6 +4878,7 @@ Classics.notepad = (body, win) => {
         <section class="cl-pad-editor">
           <div class="cl-pad-tabs">
             <div class="cl-pad-tab-list" id="pad-tab-list" role="tablist" aria-label="Open documents"></div>
+            <button class="cl-pad-tab-new" id="pad-reopen-closed" title="Reopen closed tab (⌘/Ctrl+Shift+T)" aria-label="Reopen closed tab">↶</button>
             <button class="cl-pad-tab-new" id="pad-tab-new" title="New tab" aria-label="New tab">＋</button>
           </div>
           <div class="cl-pad-docbar">
@@ -4938,6 +4941,7 @@ Classics.notepad = (body, win) => {
       updatedAt: new Date().toISOString(),
       fileName: typeof file.fileName === 'string' ? file.fileName : null,
       localHandleKey: typeof file.localHandleKey === 'string' ? file.localHandleKey : null,
+      fileLastModified: Number(file.fileLastModified) || null,
     };
   }
   function cleanDocument(raw, fallbackId){
@@ -4952,6 +4956,7 @@ Classics.notepad = (body, win) => {
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date(0).toISOString(),
       fileName: typeof raw.fileName === 'string' ? raw.fileName : null,
       localHandleKey: typeof raw.localHandleKey === 'string' ? raw.localHandleKey : null,
+      fileLastModified: Number(raw.fileLastModified) || null,
     };
   }
   function activeDocument(){ return documents.find(d => d.id === activeId) || null; }
@@ -4994,6 +4999,10 @@ Classics.notepad = (body, win) => {
       return {
         documents: raw.documents.map(d => cleanDocument(d)).filter(Boolean),
         openIds: Array.isArray(raw.openIds) ? raw.openIds.filter(v => typeof v === 'string') : [],
+        recentlyClosed: Array.isArray(raw.recentlyClosed)
+          ? raw.recentlyClosed.filter(item =>
+              item && typeof item.id === 'string' && Number.isFinite(Number(item.closedAt)))
+          : [],
         activeId: typeof raw.activeId === 'string' ? raw.activeId : null,
         dirtyIds: Array.isArray(raw.dirtyIds) ? raw.dirtyIds.filter(v => typeof v === 'string') : [],
         savedAt: Number(raw.savedAt) || 0,
@@ -5006,6 +5015,7 @@ Classics.notepad = (body, win) => {
       storageId: id,
       documents: documents.map(doc => ({ ...doc })),
       openIds: openIds.slice(),
+      recentlyClosed: recentlyClosed.slice(0, 10),
       activeId,
       dirtyIds: Array.from(dirtyIds),
       savedAt: Date.now(),
@@ -5077,16 +5087,138 @@ Classics.notepad = (body, win) => {
     }
     return permission === 'granted';
   }
+  function applyLocalFile(doc, file, content){
+    doc.content = content;
+    doc.fileName = file.name;
+    doc.title = titleForFilename(file.name);
+    doc.format = formatForFilename(file.name);
+    doc.updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+    doc.fileLastModified = Number(file.lastModified) || null;
+  }
+  async function resolveExternalFileChange(doc, handle, file = null){
+    file = file || await handle.getFile();
+    // A dirty recovery record created before v2.1 has no comparison
+    // baseline. Treat that as a conflict, never as permission to overwrite.
+    const unknownDirtyBaseline = dirtyIds.has(doc.id) && !doc.fileLastModified;
+    const changed = unknownDirtyBaseline || (doc.fileLastModified &&
+      Number(file.lastModified) !== Number(doc.fileLastModified));
+    if (!changed){
+      doc.fileLastModified = Number(file.lastModified) || doc.fileLastModified;
+      return true;
+    }
+    const diskText = await file.text();
+    if (!dirtyIds.has(doc.id)){
+      applyLocalFile(doc, file, diskText);
+      if (doc.id === activeId) showDocument(doc);
+      status.textContent = `Reloaded · ${file.name} changed on disk`;
+      return false;
+    }
+    const choice = await _nakliosDialog({
+      title:'File changed outside Notepad',
+      body:
+        `<strong>${_dlgEscape(file.name)}</strong> was modified by another app. ` +
+        `Reload the disk version, or keep your unsaved Notepad text and overwrite the file on the next save?`,
+      buttons:[
+        { value:'later', label:'Decide later' },
+        { value:'reload', label:'Reload from disk' },
+        { value:'keep', label:'Keep mine', primary:true },
+      ],
+      allowHtmlBody:true,
+    });
+    if (choice === 'reload'){
+      applyLocalFile(doc, file, diskText);
+      dirtyIds.delete(doc.id);
+      if (doc.id === activeId) showDocument(doc);
+      status.textContent = `Reloaded · ${file.name}`;
+      await writeWorkspaceNow();
+      return false;
+    }
+    if (choice === 'keep'){
+      // Adopt the observed disk revision as the comparison baseline. The
+      // caller may now deliberately overwrite it with the in-memory text.
+      doc.fileLastModified = Number(file.lastModified) || doc.fileLastModified;
+      status.textContent = `Keeping Notepad version · ${file.name}`;
+      return true;
+    }
+    status.textContent = `Conflict pending · ${file.name}`;
+    return false;
+  }
   async function writeLocalHandle(doc, interactive = false){
     const handle = await localHandleFor(doc);
     if (!handle) return false;
     if (!(await localHandleWritable(handle, interactive))){
       throw new Error('Local file access needs permission — press Save to reconnect');
     }
+    let readyToWrite = false;
+    for (let attempt = 0; attempt < 3; attempt++){
+      const observed = await handle.getFile();
+      if (!(await resolveExternalFileChange(doc, handle, observed))) return false;
+      // Recheck immediately before createWritable. FSA has no conditional
+      // write primitive, but this closes changes that land while the decision
+      // dialog is open instead of silently overwriting them.
+      const latest = await handle.getFile();
+      if (Number(latest.lastModified) === Number(doc.fileLastModified)){
+        readyToWrite = true;
+        break;
+      }
+    }
+    if (!readyToWrite){
+      status.textContent = `Conflict pending · ${doc.fileName || doc.title}`;
+      return false;
+    }
     const writable = await handle.createWritable();
     try { await writable.write(doc.content); }
     finally { await writable.close(); }
+    try {
+      const saved = await handle.getFile();
+      doc.fileLastModified = Number(saved.lastModified) || doc.fileLastModified;
+      doc.fileName = saved.name || doc.fileName;
+    } catch (_) {}
     return true;
+  }
+  async function checkExternalFiles(){
+    if (checkingExternalFiles || switching || storageId !== 'local') return;
+    checkingExternalFiles = true;
+    let changed = false;
+    try {
+      for (const doc of documents){
+        const handle = await localHandleFor(doc);
+        if (!handle) continue;
+        let file;
+        try { file = await handle.getFile(); } catch (_) { continue; }
+        if (!doc.fileLastModified){
+          if (dirtyIds.has(doc.id)){
+            const mayOverwrite = await resolveExternalFileChange(doc, handle, file);
+            if (mayOverwrite) await saveDocument(doc);
+          } else {
+            doc.fileLastModified = Number(file.lastModified) || null;
+          }
+          changed = true;
+          continue;
+        }
+        if (Number(file.lastModified) === Number(doc.fileLastModified)) continue;
+        const mayOverwrite = await resolveExternalFileChange(doc, handle, file);
+        changed = true;
+        if (mayOverwrite && dirtyIds.has(doc.id)) await saveDocument(doc);
+      }
+      if (changed){
+        renderDocumentList();
+        renderTabs();
+        await writeWorkspaceNow();
+      }
+    } finally {
+      checkingExternalFiles = false;
+    }
+  }
+  function queueExternalFileCheck(){
+    savePromise = savePromise
+      .catch(() => {})
+      .then(() => checkExternalFiles())
+      .catch(err => {
+        console.warn('Notepad external file check failed', err);
+        status.textContent = 'File check failed · ' + String(err?.message || err);
+      });
+    return savePromise;
   }
   async function saveDocument(doc, { interactive = false } = {}){
     if (!doc) return;
@@ -5094,7 +5226,14 @@ Classics.notepad = (body, win) => {
       // Recovery is written before the real file so a crash during the file
       // operation still leaves the newest text available on next launch.
       await writeWorkspaceNow();
-      if (doc.localHandleKey) await writeLocalHandle(doc, interactive);
+      if (doc.localHandleKey && !(await writeLocalHandle(doc, interactive))){
+        // Reload clears dirtyIds inside the resolver. Decide-later leaves it
+        // set. Preserve that decision instead of blindly marking Reload dirty.
+        await writeWorkspaceNow();
+        renderDocumentList();
+        renderTabs();
+        return false;
+      }
     } else {
       await backendCall('write', `documents/${doc.id}.json`, JSON.stringify(doc, null, 2));
       localStorage.setItem(activeKey(), doc.id);
@@ -5106,6 +5245,7 @@ Classics.notepad = (body, win) => {
     status.textContent = storageId === 'local' && !doc.localHandleKey
       ? 'Recovered · This browser'
       : `Saved · ${storageLabel()}`;
+    return true;
   }
   function queueSave(){
     const doc = activeDocument();
@@ -5212,6 +5352,8 @@ Classics.notepad = (body, win) => {
   }
   function renderTabs(){
     openIds = openIds.filter(id => documents.some(doc => doc.id === id));
+    recentlyClosed = recentlyClosed.filter(item =>
+      documents.some(doc => doc.id === item.id) && !openIds.includes(item.id));
     tabList.innerHTML = '';
     for (const id of openIds){
       const doc = documents.find(item => item.id === id);
@@ -5236,6 +5378,11 @@ Classics.notepad = (body, win) => {
       tabList.appendChild(tab);
       if (id === activeId) requestAnimationFrame(() => tab.scrollIntoView({ block:'nearest', inline:'nearest' }));
     }
+    const reopen = body.querySelector('#pad-reopen-closed');
+    reopen.disabled = !recentlyClosed.length;
+    reopen.title = recentlyClosed.length
+      ? `Reopen “${documents.find(doc => doc.id === recentlyClosed[0].id)?.title || 'closed tab'}” (⌘/Ctrl+Shift+T)`
+      : 'No recently closed tabs';
   }
   function showDocument(doc){
     setEditorEnabled(!!doc);
@@ -5275,6 +5422,10 @@ Classics.notepad = (body, win) => {
     if (index < 0) return;
     const doc = documents.find(item => item.id === id);
     if (doc && dirtyIds.has(id)) await flushSave();
+    recentlyClosed = [
+      { id, closedAt:Date.now() },
+      ...recentlyClosed.filter(item => item.id !== id),
+    ].slice(0, 10);
     openIds.splice(index, 1);
     if (activeId === id){
       activeId = openIds[index] || openIds[index - 1] || null;
@@ -5283,6 +5434,19 @@ Classics.notepad = (body, win) => {
       renderTabs();
     }
     await writeWorkspaceNow();
+  }
+  async function reopenClosedTab(){
+    while (recentlyClosed.length){
+      const item = recentlyClosed.shift();
+      if (!documents.some(doc => doc.id === item.id) || openIds.includes(item.id)) continue;
+      openIds.push(item.id);
+      activeId = item.id;
+      showDocument(activeDocument());
+      await writeWorkspaceNow();
+      ta.focus();
+      return;
+    }
+    renderTabs();
   }
   async function createDocument({ title, content, format } = {}){
     await flushSave();
@@ -5322,6 +5486,7 @@ Classics.notepad = (body, win) => {
     }
     documents = documents.filter(item => item.id !== doc.id);
     openIds = openIds.filter(id => id !== doc.id);
+    recentlyClosed = recentlyClosed.filter(item => item.id !== doc.id);
     if (!documents.length){
       const fresh = freshDocument('Untitled', '', 'markdown');
       documents.push(fresh);
@@ -5349,6 +5514,7 @@ Classics.notepad = (body, win) => {
         const legacyRegistry = readLocalRegistry();
         documents = workspace?.documents || legacyRegistry?.documents || [];
         openIds = workspace?.openIds || [];
+        recentlyClosed = workspace?.recentlyClosed || [];
         activeId = workspace?.activeId || legacyRegistry?.activeId || null;
         for (const id of workspace?.dirtyIds || []){
           const doc = documents.find(item => item.id === id);
@@ -5367,6 +5533,7 @@ Classics.notepad = (body, win) => {
             doc.title = titleForFilename(file.name);
             doc.format = formatForFilename(file.name);
             doc.updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+            doc.fileLastModified = Number(file.lastModified) || null;
           } catch (_) {
             // The recovery copy stays usable until the user grants the handle again.
           }
@@ -5392,6 +5559,7 @@ Classics.notepad = (body, win) => {
         }
         documents = Array.from(byId.values());
         openIds = workspace?.openIds || [];
+        recentlyClosed = workspace?.recentlyClosed || [];
         activeId = workspace?.activeId || localStorage.getItem(activeKey());
       }
       if (!documents.length){
@@ -5602,6 +5770,7 @@ Classics.notepad = (body, win) => {
           { fileName:file.name },
         );
         doc.updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+        doc.fileLastModified = Number(file.lastModified) || null;
         doc.localHandleKey = HANDLE_PREFIX + doc.id;
         await idbSet(doc.localHandleKey, handle);
         documents.push(doc);
@@ -5648,6 +5817,10 @@ Classics.notepad = (body, win) => {
       doc.localHandleKey = HANDLE_PREFIX + doc.id;
       doc.fileName = handle.name || suggestedName;
       doc.title = titleForFilename(doc.fileName);
+      try {
+        const saved = await handle.getFile();
+        doc.fileLastModified = Number(saved.lastModified) || null;
+      } catch (_) {}
       titleInput.value = doc.title;
       await idbSet(doc.localHandleKey, handle);
       dirtyIds.delete(doc.id);
@@ -5754,6 +5927,7 @@ Classics.notepad = (body, win) => {
   body.querySelector('#pad-new').addEventListener('click', () => createDocument());
   body.querySelector('#pad-new-side').addEventListener('click', () => createDocument());
   body.querySelector('#pad-tab-new').addEventListener('click', () => createDocument());
+  body.querySelector('#pad-reopen-closed').addEventListener('click', () => { void reopenClosedTab(); });
   body.querySelector('#pad-save').addEventListener('click', saveActiveInteractive);
   body.querySelector('#pad-save-as').addEventListener('click', () => saveAsLocalFile());
   body.querySelector('#pad-download').addEventListener('click', downloadActive);
@@ -5800,6 +5974,7 @@ Classics.notepad = (body, win) => {
     if (!mod) return;
     const key = e.key.toLowerCase();
     if (key === 'n'){ e.preventDefault(); createDocument(); }
+    else if (key === 't' && e.shiftKey){ e.preventDefault(); void reopenClosedTab(); }
     else if (key === 's' && e.shiftKey){ e.preventDefault(); void saveAsLocalFile(); }
     else if (key === 's'){ e.preventDefault(); void saveActiveInteractive(); }
     else if (key === 'w'){ e.preventDefault(); if (activeId) void closeTab(activeId); }
@@ -5814,8 +5989,11 @@ Classics.notepad = (body, win) => {
   };
   const persistWhenHidden = () => {
     if (document.visibilityState === 'hidden') persistSession();
+    else void queueExternalFileCheck();
   };
+  const checkWhenFocused = () => { void queueExternalFileCheck(); };
   window.addEventListener('blur', persistSession);
+  window.addEventListener('focus', checkWhenFocused);
   window.addEventListener('pagehide', persistSession);
   document.addEventListener('visibilitychange', persistWhenHidden);
 
@@ -5824,6 +6002,7 @@ Classics.notepad = (body, win) => {
   setEditorEnabled(false);
   win._beforeClose = () => {
     window.removeEventListener('blur', persistSession);
+    window.removeEventListener('focus', checkWhenFocused);
     window.removeEventListener('pagehide', persistSession);
     document.removeEventListener('visibilitychange', persistWhenHidden);
     persistSession();
