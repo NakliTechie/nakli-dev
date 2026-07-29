@@ -1,0 +1,16 @@
+{
+  "schema": "https://naklios.dev/app-manifest/v1",
+  "id": "com.example.my-app",
+  "name": "My App",
+  "version": "1.0.0",
+  "url": "https://example.com/app/",
+  "description": "A small web app installed by its user.",
+  "icon": "◇",
+  "tags": [
+    "tool"
+  ],
+  "permissions": [
+    "storage"
+  ],
+  "display": "window"
+}

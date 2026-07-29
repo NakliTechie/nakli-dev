@@ -502,6 +502,34 @@ input{font:inherit; color:inherit;}
   font-size:11px; color:var(--muted);
 }
 .nw-foot-link:hover{color:var(--brand);}
+.nw-installed-apps{display:grid; gap:7px; margin-bottom:8px;}
+.nw-installed-app{
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 10px;
+  padding:8px; border:1px solid var(--line); border-radius:8px;
+  background:var(--row);
+}
+.nw-installed-app-name{font-size:12px; font-weight:650; overflow:hidden; text-overflow:ellipsis;}
+.nw-installed-app-meta{font-size:10px; color:var(--muted); overflow:hidden; text-overflow:ellipsis;}
+.nw-installed-app-actions{display:flex; align-items:center; gap:7px; grid-row:1 / span 2; grid-column:2;}
+.nw-installed-app-actions button{
+  font-size:10px; color:var(--muted); text-decoration:underline;
+  text-underline-offset:2px;
+}
+.nw-installed-app-actions button:hover{color:var(--brand);}
+.nw-app-manifest-form{width:min(620px, 88vw);}
+.nw-app-manifest-form label{display:block; margin:0 0 6px; font-size:11px; color:var(--muted);}
+.nw-app-manifest-url-row{display:flex; gap:8px; margin-bottom:12px;}
+.nw-app-manifest-url-row input,
+.nw-app-manifest-form textarea{
+  width:100%; color:var(--ink); background:var(--row);
+  border:1px solid var(--line-strong); border-radius:7px;
+  padding:8px; font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+.nw-app-manifest-url-row input:focus,
+.nw-app-manifest-form textarea:focus{outline:2px solid var(--brand); outline-offset:1px;}
+.nw-app-manifest-form textarea{min-height:250px; resize:vertical;}
+.nw-app-manifest-help{font-size:11px; line-height:1.45; color:var(--muted); margin:0 0 10px;}
+.nw-app-manifest-error{min-height:18px; margin:7px 0 0; color:var(--brand); font-size:11px;}
 
 /* ── FOLDER SYNC ── */
 .nw-fs-btn-primary{
@@ -862,6 +890,24 @@ body.is-mobile .nw-dock{display:none;}
   background:color-mix(in srgb, var(--ink) 10%, var(--panel));
 }
 .nw-dlg-copy-btn.copied{ color:var(--ok); border-color:var(--ok); }
+
+.nw-crate-handoff{
+  width:min(900px,calc(100vw - 28px));height:min(720px,calc(100vh - 28px));
+  padding:0;border:1px solid var(--line);border-radius:14px;
+  background:var(--panel);color:var(--ink);box-shadow:0 24px 80px rgba(0,0,0,.42);
+}
+.nw-crate-handoff::backdrop{background:rgba(8,12,14,.62);backdrop-filter:blur(3px)}
+.nw-crate-handoff-shell{height:100%;display:flex;flex-direction:column;min-height:0}
+.nw-crate-handoff-head{
+  min-height:54px;display:flex;align-items:center;gap:12px;padding:9px 13px 9px 17px;
+  border-bottom:1px solid var(--line);background:var(--panel)
+}
+.nw-crate-handoff-head strong{font-size:14px}
+.nw-crate-handoff-head span{font-size:11px;color:var(--muted);flex:1}
+.nw-crate-handoff-frame{border:0;min-height:0;flex:1;width:100%;background:var(--body)}
+.nw-crate-handoff-foot{
+  padding:8px 14px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)
+}
 
 /* Per-window App Info diagnostics. */
 .nw-app-info{ width:min(620px, 94vw); }
@@ -1469,6 +1515,159 @@ const APPS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════
+// THIRD-PARTY APPS — profile-local registrations from strict v1 manifests.
+// These entries never become trusted mirrors or system apps. They always run
+// in an opaque-origin sandbox, even if their URL later resolves same-origin.
+// ════════════════════════════════════════════════════════════════════
+const THIRD_PARTY_SCHEMA = 'https://naklios.dev/app-manifest/v1';
+const THIRD_PARTY_APPS_KEY = 'nakliOS.thirdPartyApps.v1';
+const THIRD_PARTY_MANIFEST_MAX_BYTES = 32768;
+const THIRD_PARTY_PERMISSIONS = new Set(['storage']);
+
+function isPlainRecord(value){
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function safeThirdPartyUrl(value, label){
+  if (typeof value !== 'string' || value.length > 2048) {
+    throw new Error(`${label} must be a URL no longer than 2048 characters`);
+  }
+  let parsed;
+  try { parsed = new URL(value); } catch(_){ throw new Error(`${label} is not a valid absolute URL`); }
+  const localHttp = parsed.protocol === 'http:' &&
+    (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]');
+  if (parsed.protocol !== 'https:' && !localHttp) {
+    throw new Error(`${label} must use HTTPS (HTTP is allowed only on localhost)`);
+  }
+  if (parsed.username || parsed.password) throw new Error(`${label} must not contain URL credentials`);
+  return parsed;
+}
+
+function normalizeThirdPartyManifest(raw){
+  if (!isPlainRecord(raw)) throw new Error('Manifest must be a JSON object');
+  const allowed = new Set([
+    'schema', 'id', 'name', 'version', 'url', 'description',
+    'icon', 'tags', 'permissions', 'display',
+  ]);
+  const unknown = Object.keys(raw).filter(key => !allowed.has(key));
+  if (unknown.length) throw new Error(`Unknown manifest field: ${unknown.join(', ')}`);
+  if (raw.schema !== THIRD_PARTY_SCHEMA) throw new Error(`schema must be ${THIRD_PARTY_SCHEMA}`);
+  if (typeof raw.id !== 'string' || raw.id.length > 80 ||
+      !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(raw.id) || raw.id.includes('..')) {
+    throw new Error('id must be a lowercase reverse-domain or app slug');
+  }
+  if (typeof raw.name !== 'string' || !raw.name.trim() || raw.name.trim().length > 60 ||
+      /[\u0000-\u001f\u007f]/.test(raw.name)) {
+    throw new Error('name must contain 1–60 characters');
+  }
+  if (typeof raw.version !== 'string' || raw.version.length > 64 ||
+      !/^[0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(raw.version)) {
+    throw new Error('version must be a numeric version such as 1.0.0');
+  }
+  const parsedUrl = safeThirdPartyUrl(raw.url, 'url');
+  if (raw.description != null && typeof raw.description !== 'string') {
+    throw new Error('description must be plain text');
+  }
+  const description = (raw.description || '').trim();
+  if (description.length > 240 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(description)) {
+    throw new Error('description must be 240 plain-text characters or fewer');
+  }
+  if (raw.icon != null && typeof raw.icon !== 'string') throw new Error('icon must be plain text');
+  const icon = raw.icon == null ? '◇' : raw.icon.trim();
+  if (!icon || [...icon].length > 8 || /[<>&]/.test(icon)) {
+    throw new Error('icon must be 1–8 visible characters without markup');
+  }
+  const tags = raw.tags == null ? [] : raw.tags;
+  if (!Array.isArray(tags) || tags.length > 12 || tags.some(tag =>
+    typeof tag !== 'string' || !/^[a-z0-9][a-z0-9-]{0,23}$/.test(tag)
+  )) throw new Error('tags must be up to 12 lowercase slugs');
+  const permissions = raw.permissions == null ? [] : raw.permissions;
+  if (!Array.isArray(permissions) || new Set(permissions).size !== permissions.length ||
+      permissions.some(permission => !THIRD_PARTY_PERMISSIONS.has(permission))) {
+    throw new Error('permissions may contain only the unique value "storage"');
+  }
+  const display = raw.display == null ? 'window' : raw.display;
+  if (display !== 'window' && display !== 'tab') {
+    throw new Error('display must be "window" or "tab"');
+  }
+  if (display === 'tab' && permissions.includes('storage')) {
+    throw new Error('storage permission requires display "window"; top-level tabs have no NakliOS storage bridge');
+  }
+  return Object.freeze({
+    schema: THIRD_PARTY_SCHEMA,
+    id: raw.id,
+    name: raw.name.trim(),
+    version: raw.version,
+    url: parsedUrl.href,
+    origin: parsedUrl.origin,
+    description,
+    icon,
+    tags: Object.freeze([...tags]),
+    permissions: Object.freeze([...permissions].sort()),
+    display,
+  });
+}
+
+function newThirdPartyAppId(){
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `thirdparty-${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function loadThirdPartyAppRecords(){
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(THIRD_PARTY_APPS_KEY) || '[]'); } catch(_){ return []; }
+  if (!Array.isArray(raw)) return [];
+  const records = [];
+  const ids = new Set();
+  const manifestIds = new Set();
+  for (const candidate of raw.slice(0, 100)){
+    try {
+      const manifest = normalizeThirdPartyManifest(candidate?.manifest);
+      const appId = candidate?.appId;
+      if (typeof appId !== 'string' || !/^thirdparty-[0-9a-f]{32}$/.test(appId) ||
+          ids.has(appId) || manifestIds.has(manifest.id)) continue;
+      let manifestSource = null;
+      if (candidate.manifestSource) manifestSource = safeThirdPartyUrl(candidate.manifestSource, 'manifest source').href;
+      ids.add(appId);
+      manifestIds.add(manifest.id);
+      records.push({
+        appId,
+        manifest,
+        manifestSource,
+        installedAt: Number.isFinite(candidate.installedAt) ? candidate.installedAt : 0,
+      });
+    } catch(_){}
+  }
+  return records;
+}
+
+function catalogAppFromThirdParty(record){
+  const manifest = record.manifest;
+  return {
+    id: record.appId,
+    name: manifest.name,
+    url: manifest.url,
+    glyph: manifest.icon,
+    bg: 'act',
+    description: manifest.description || `User-installed app from ${manifest.origin}`,
+    tags: [...manifest.tags, 'installed'],
+    iframeable: manifest.display !== 'tab',
+    thirdParty: true,
+    manifestId: manifest.id,
+    manifestVersion: manifest.version,
+    manifestSource: record.manifestSource,
+    permissions: [...manifest.permissions],
+  };
+}
+
+let THIRD_PARTY_APP_RECORDS = loadThirdPartyAppRecords();
+let THIRD_PARTY_CATALOG_APPS = THIRD_PARTY_APP_RECORDS.map(catalogAppFromThirdParty);
+APPS.push(...THIRD_PARTY_CATALOG_APPS);
+
+// ════════════════════════════════════════════════════════════════════
 // FOLDERS — a task-based first-level information architecture.
 // Every app has one predictable home; the Essentials dock keeps the four
 // everyday file-backed tools one click away.
@@ -1487,9 +1686,57 @@ const FOLDERS = [
   { id:'fld-games', kind:'folder', name:'Play', glyph:'🎮', bg:'act',
     apps:['minesweeper','solitaire','spider','kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
 ];
+if (THIRD_PARTY_CATALOG_APPS.length){
+  FOLDERS.push({
+    id:'fld-my-apps', kind:'folder', name:'My Apps', glyph:'＋', bg:'act',
+    apps:THIRD_PARTY_CATALOG_APPS.map(app => app.id),
+  });
+}
 
 // Build a Set of all app ids that are inside any folder (for fast lookup)
 const FOLDERED_APP_IDS = new Set(FOLDERS.flatMap(f => f.apps));
+
+function persistThirdPartyAppRecords(){
+  const serialized = THIRD_PARTY_APP_RECORDS.map(record => ({
+    appId: record.appId,
+    manifest: {
+      schema: record.manifest.schema,
+      id: record.manifest.id,
+      name: record.manifest.name,
+      version: record.manifest.version,
+      url: record.manifest.url,
+      description: record.manifest.description,
+      icon: record.manifest.icon,
+      tags: [...record.manifest.tags],
+      permissions: [...record.manifest.permissions],
+      display: record.manifest.display,
+    },
+    manifestSource: record.manifestSource,
+    installedAt: record.installedAt,
+  }));
+  localStorage.setItem(THIRD_PARTY_APPS_KEY, JSON.stringify(serialized));
+}
+
+function refreshThirdPartyCatalog(){
+  for (let index = APPS.length - 1; index >= 0; index -= 1){
+    if (APPS[index].thirdParty) APPS.splice(index, 1);
+  }
+  THIRD_PARTY_CATALOG_APPS = THIRD_PARTY_APP_RECORDS.map(catalogAppFromThirdParty);
+  APPS.push(...THIRD_PARTY_CATALOG_APPS);
+
+  let folder = FOLDERS.find(item => item.id === 'fld-my-apps');
+  if (THIRD_PARTY_CATALOG_APPS.length){
+    if (!folder){
+      folder = { id:'fld-my-apps', kind:'folder', name:'My Apps', glyph:'＋', bg:'act', apps:[] };
+      FOLDERS.push(folder);
+    }
+    folder.apps = THIRD_PARTY_CATALOG_APPS.map(app => app.id);
+  } else if (folder){
+    FOLDERS.splice(FOLDERS.indexOf(folder), 1);
+  }
+  FOLDERED_APP_IDS.clear();
+  for (const item of FOLDERS) for (const appId of item.apps) FOLDERED_APP_IDS.add(appId);
+}
 
 // Saved layouts can outlive catalog entries. Remove orphaned references so a
 // retired app cannot leave an invisible reserved grid cell, dock entry, or
@@ -2013,8 +2260,249 @@ async function crateSaveCredsBlob(bytes){
   await idbSet('crateCreds', bytes);
 }
 
+async function crateSaveCredsBlobCreateOnly(bytes){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).add(bytes, 'crateCreds');
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(
+      tx.error?.name === 'ConstraintError'
+        ? new DOMException('Crate credentials already exist', 'ConstraintError')
+        : (tx.error || new Error('Could not store Crate credentials'))
+    );
+    tx.onerror = () => {
+      // onabort is the single rejection path for transaction failures.
+    };
+  });
+}
+
 async function crateClearCredsBlob(){
   await idbDel('crateCreds').catch(() => {});
+}
+
+// Crate → NakliOS encrypted setup handoff (receiver v1).
+//
+// NakliOS creates an unguessable, memory-only nonce and loads only the
+// canonical Crate origin in a sandboxed cross-origin iframe. The sender may
+// return the already-encrypted `.crate-creds` JSON, never raw bucket fields or
+// a passphrase. Origin + source-window + nonce are all required, and a valid
+// envelope still needs explicit user consent before IndexedDB is changed.
+const CRATE_SETUP_ORIGIN = 'https://crate.naklios.dev';
+const CRATE_SETUP_TTL_MS = 2 * 60 * 1000;
+let crateSetupSession = null;
+
+function crateSetupNonce(){
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function crateSetupBase64Length(value, label){
+  if (
+    typeof value !== 'string' || !value.length || value.length > 200000
+    || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  ) throw new Error('Invalid encrypted credentials ' + label);
+  try { return atob(value).length; }
+  catch (_) { throw new Error('Invalid encrypted credentials ' + label); }
+}
+
+function validateCrateSetupEnvelope(text){
+  if (typeof text !== 'string' || !text.length || text.length > 256000) {
+    throw new Error('Encrypted credentials payload is missing or too large.');
+  }
+  let envelope;
+  try { envelope = JSON.parse(text); }
+  catch (_) { throw new Error('Encrypted credentials payload is not valid JSON.'); }
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    throw new Error('Encrypted credentials payload must be an object.');
+  }
+  const allowed = new Set(['v','type','hint','kdf','salt','iv','ct']);
+  if (Object.keys(envelope).some(key => !allowed.has(key))) {
+    throw new Error('Encrypted credentials payload contains unexpected fields.');
+  }
+  if (envelope.v !== 1 || envelope.type !== 'crate-creds') {
+    throw new Error('Only Crate credentials envelope v1 is supported.');
+  }
+  if (
+    !envelope.kdf || typeof envelope.kdf !== 'object'
+    || envelope.kdf.algo !== 'PBKDF2-SHA256'
+    || envelope.kdf.iter !== 600000
+    || Object.keys(envelope.kdf).some(key => key !== 'algo' && key !== 'iter')
+  ) throw new Error('Encrypted credentials use an unsupported key derivation scheme.');
+  if (typeof envelope.hint !== 'string' || !envelope.hint.trim() || envelope.hint.length > 128) {
+    throw new Error('Encrypted credentials have an invalid bucket hint.');
+  }
+  if (crateSetupBase64Length(envelope.salt, 'salt') !== 16) {
+    throw new Error('Encrypted credentials salt has the wrong length.');
+  }
+  if (crateSetupBase64Length(envelope.iv, 'IV') !== 12) {
+    throw new Error('Encrypted credentials IV has the wrong length.');
+  }
+  if (crateSetupBase64Length(envelope.ct, 'ciphertext') < 17) {
+    throw new Error('Encrypted credentials ciphertext is too short.');
+  }
+  return {
+    bytes:new TextEncoder().encode(JSON.stringify(envelope, null, 2) + '\n'),
+    hint:envelope.hint.trim(),
+  };
+}
+
+function closeCrateSetupHandoff(){
+  const session = crateSetupSession;
+  crateSetupSession = null;
+  if (!session) return;
+  clearTimeout(session.timer);
+  if (session.dialog?.open) session.dialog.close();
+  session.dialog?.remove();
+}
+
+function postCrateSetupAck(session, status){
+  try {
+    session.iframe.contentWindow.postMessage({
+      type:'naklios:crate-setup:ack:v1',
+      nonce:session.nonce,
+      status,
+    }, CRATE_SETUP_ORIGIN);
+  } catch (_) {}
+}
+
+async function handleCrateSetupMessage(event){
+  const session = crateSetupSession;
+  if (
+    !session || session.consumed || Date.now() > session.expiresAt
+    || event.origin !== CRATE_SETUP_ORIGIN
+    || event.source !== session.iframe.contentWindow
+  ) return;
+  const data = event.data;
+  if (
+    !data || typeof data !== 'object'
+    || data.type !== 'crate:naklios-setup:v1'
+    || data.nonce !== session.nonce
+    || Object.keys(data).some(key =>
+      !['type','nonce','encryptedCreds','senderVersion'].includes(key))
+  ) return;
+  session.consumed = true;
+  let validated;
+  try {
+    validated = validateCrateSetupEnvelope(data.encryptedCreds);
+  } catch (error) {
+    postCrateSetupAck(session, 'rejected');
+    await nakliosAlert(error?.message || String(error), {
+      title:'Handoff rejected',
+      kind:'error',
+    });
+    closeCrateSetupHandoff();
+    return;
+  }
+  if (state.crate || await crateLoadCredsBlob()) {
+    postCrateSetupAck(session, 'already-connected');
+    await nakliosAlert(
+      'NakliOS already has Crate credentials on this device. Disconnect them before importing a different encrypted setup.',
+      { title:'Crate already configured' },
+    );
+    closeCrateSetupHandoff();
+    return;
+  }
+  const accepted = await nakliosConfirm(
+    `Crate sent the encrypted setup for “${validated.hint}”. Store it on this device?\n\n` +
+    'The passphrase and raw bucket keys were not sent. You will enter the passphrase in NakliOS to unlock.',
+    { title:'Import encrypted Crate setup?', okLabel:'Store encrypted setup' },
+  );
+  if (crateSetupSession !== session || Date.now() > session.expiresAt) {
+    if (crateSetupSession === session) {
+      postCrateSetupAck(session, 'expired');
+      closeCrateSetupHandoff();
+    }
+    return;
+  }
+  if (!accepted) {
+    postCrateSetupAck(session, 'declined');
+    closeCrateSetupHandoff();
+    return;
+  }
+  try {
+    await crateSaveCredsBlobCreateOnly(validated.bytes);
+    state.crateBucketName = validated.hint;
+    state.crateLocked = true;
+    if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+    postCrateSetupAck(session, 'stored');
+    closeCrateSetupHandoff();
+    if (settingsOpen) { closeSettings(); openSettings('storage'); }
+    await crateInteractiveUnlock();
+    if (settingsOpen) { closeSettings(); openSettings('storage'); }
+  } catch (error) {
+    const alreadyConnected = error?.name === 'ConstraintError';
+    postCrateSetupAck(session, alreadyConnected ? 'already-connected' : 'failed');
+    closeCrateSetupHandoff();
+    await nakliosAlert(
+      alreadyConnected
+        ? 'Another NakliOS tab or setup flow connected Crate first. The encrypted setup was not overwritten.'
+        : 'The encrypted setup could not be stored: ' + (error?.message || error),
+      { title:alreadyConnected ? 'Crate already configured' : 'Crate setup failed', kind:'error' },
+    );
+  }
+}
+window.addEventListener('message', event => { void handleCrateSetupMessage(event); });
+
+async function crateInteractiveSetupHandoff(){
+  if (crateSetupSession?.dialog?.open) {
+    crateSetupSession.dialog.focus();
+    return;
+  }
+  if (state.crate || await crateLoadCredsBlob()) {
+    await nakliosAlert(
+      'NakliOS already has Crate credentials on this device. Disconnect them before importing a different encrypted setup.',
+      { title:'Crate already configured' },
+    );
+    return;
+  }
+  const nonce = crateSetupNonce();
+  const parentOrigin = location.origin;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'nw-crate-handoff';
+  dialog.setAttribute('aria-labelledby', 'nw-crate-handoff-title');
+  dialog.innerHTML = `
+    <div class="nw-crate-handoff-shell">
+      <header class="nw-crate-handoff-head">
+        <strong id="nw-crate-handoff-title">Set up Crate for NakliOS</strong>
+        <span>Only an encrypted credentials envelope can return to NakliOS.</span>
+        <button type="button" class="nw-dlg-btn" data-close>Close</button>
+      </header>
+      <iframe class="nw-crate-handoff-frame" title="Crate setup"
+        sandbox="allow-scripts allow-forms allow-downloads allow-same-origin"
+        referrerpolicy="no-referrer"></iframe>
+      <footer class="nw-crate-handoff-foot">
+        Direct handoff requires Crate’s “Send to NakliOS” action. Until that
+        sender ships, download the <code>.crate-creds</code> file and use the
+        existing file option in Settings.
+      </footer>
+    </div>`;
+  const iframe = dialog.querySelector('iframe');
+  iframe.src = CRATE_SETUP_ORIGIN + '/?naklios-handoff=v1&parentOrigin=' +
+    encodeURIComponent(parentOrigin) + '&nonce=' + encodeURIComponent(nonce);
+  document.body.appendChild(dialog);
+  const timer = setTimeout(() => {
+    if (crateSetupSession?.nonce !== nonce) return;
+    postCrateSetupAck(crateSetupSession, 'expired');
+    closeCrateSetupHandoff();
+    void nakliosAlert('The Crate setup handoff expired. Start it again when you are ready.', {
+      title:'Handoff expired',
+    });
+  }, CRATE_SETUP_TTL_MS);
+  crateSetupSession = {
+    nonce,
+    dialog,
+    iframe,
+    timer,
+    expiresAt:Date.now() + CRATE_SETUP_TTL_MS,
+    consumed:false,
+  };
+  dialog.querySelector('[data-close]').addEventListener('click', closeCrateSetupHandoff);
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    closeCrateSetupHandoff();
+  });
+  dialog.showModal();
 }
 
 // crateUnlock — given a creds-file byte buffer + passphrase, instantiate
@@ -2547,7 +3035,7 @@ function showContextMenu(x, y, items){
   menu.className = 'nw-context-menu';
   menu.innerHTML = items.map((it, i) => {
     if (it.separator) return '<div class="nw-cm-sep"></div>';
-    return `<button class="nw-cm-item${it.danger ? ' danger' : ''}" data-i="${i}">${it.label}</button>`;
+    return `<button class="nw-cm-item${it.danger ? ' danger' : ''}" data-i="${i}">${_dlgEscape(it.label)}</button>`;
   }).join('');
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
@@ -2605,16 +3093,20 @@ function _dlgEscape(s){
 // Core constructor — appends a <dialog>, shows it modally, resolves with
 // the returnValue of whichever button closed it (or 'cancel' on Escape).
 // The dialog removes itself from the DOM on close.
+let _nakliosDialogCounter = 0;
 function _nakliosDialog({ title, body, buttons, kind, allowHtmlBody }){
   return new Promise(resolve => {
     const dlg = document.createElement('dialog');
     dlg.className = 'nw-dlg' + (kind ? ' nw-dlg-' + kind : '');
+    const titleId = `nw-dlg-title-${++_nakliosDialogCounter}`;
+    if (title) dlg.setAttribute('aria-labelledby', titleId);
+    else dlg.setAttribute('aria-label', 'NakliOS dialog');
     // Body can be plain text (default, safe) or pre-escaped HTML (for the
     // rare callers that need <code> / <strong>). Default safe.
     const bodyHtml = allowHtmlBody ? body : _dlgEscape(body);
     dlg.innerHTML = `
       <form method="dialog" class="nw-dlg-form">
-        ${title ? `<h3 class="nw-dlg-title">${_dlgEscape(title)}</h3>` : ''}
+        ${title ? `<h3 class="nw-dlg-title" id="${titleId}">${_dlgEscape(title)}</h3>` : ''}
         <div class="nw-dlg-body">${bodyHtml}</div>
         <menu class="nw-dlg-actions">
           ${buttons.map(b => `<button
@@ -3055,16 +3547,16 @@ function renderIcons(){
       ? `<div class="nw-folder-mini">${item.apps.slice(0,4).map(aid => {
             const a = APPS.find(x => x.id === aid);
             if (a?.svg) return `<span><svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${a.svg}</svg></span>`;
-            return `<span>${a?.glyph || '·'}</span>`;
+            return `<span>${_dlgEscape(a?.glyph || '·')}</span>`;
           }).join('')}</div>`
       : item.svg
         ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${item.svg}</svg>`
-        : `<span class="nw-icon-glyph">${item.glyph || monoChar}</span>`;
+        : `<span class="nw-icon-glyph">${_dlgEscape(item.glyph || monoChar)}</span>`;
     el.innerHTML = `
       <div class="nw-icon-tile ${item.glyph ? 'has-glyph' : ''}" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
         ${previewHTML}
       </div>
-      <div class="nw-icon-label">${item.name}</div>
+      <div class="nw-icon-label">${_dlgEscape(item.name)}</div>
     `;
     if (!mobile && positions[item.id]){
       const p = positions[item.id];
@@ -3252,9 +3744,67 @@ function formatLaunchTiming(value, emptyLabel){
   return typeof value === 'number' ? `${Math.round(value)} ms` : emptyLabel;
 }
 
+const LAUNCH_DIAGNOSTIC_THRESHOLDS = Object.freeze({
+  loadWarningMs: 4000,
+  readyWarningMs: 8000,
+  fallbackMs: 15000,
+});
+
+function launchDiagnosticsSnapshot(){
+  const snapshots = Object.values(openWindows)
+    .filter(win => win?.dataset?.id)
+    .map(win => {
+      const app = win._app || APPS.find(item => item.id === win.dataset.id) || {};
+      const iframe = win.querySelector('iframe');
+      const timing = win._launchTiming || {};
+      const loadedUrl = iframe?.src || app.embedUrl || app.url || location.href;
+      let origin = location.origin;
+      let locationPath = '/';
+      try {
+        const parsed = new URL(loadedUrl, location.href);
+        origin = parsed.origin;
+        locationPath = parsed.pathname;
+      } catch(_){}
+      const sandboxed = iframe ? iframe.hasAttribute('sandbox') : false;
+      const loadMs = typeof timing.loaded === 'number' ? Math.round(timing.loaded) : null;
+      const readyMs = typeof timing.ready === 'number' ? Math.round(timing.ready) : null;
+      const fallbackMs = typeof timing.timeout === 'number' ? Math.round(timing.timeout) : null;
+      const status = fallbackMs != null
+        ? 'fallback'
+        : readyMs != null && readyMs > LAUNCH_DIAGNOSTIC_THRESHOLDS.readyWarningMs
+          ? 'slow-ready'
+          : readyMs == null && loadMs != null && loadMs > LAUNCH_DIAGNOSTIC_THRESHOLDS.loadWarningMs
+            ? 'slow-load'
+            : readyMs != null || loadMs != null
+              ? 'ready'
+              : 'pending';
+      return Object.freeze({
+        appId: app.id || win.dataset.id,
+        name: app.name || win.dataset.id,
+        location: `${origin}${locationPath}`,
+        origin,
+        sandboxed,
+        loadMs,
+        readyMs,
+        fallbackMs,
+        status,
+      });
+    });
+  return Object.freeze(snapshots);
+}
+
 function appProvenanceRows(win, mirrorManifest, mirrorError){
   const app = win._app || APPS.find(item => item.id === win.dataset.id);
   if (!app) return [{ label:'Provenance', value:'Unknown app registry entry' }];
+  if (app.thirdParty){
+    return [
+      { label:'Provenance', value:'User-installed third-party app' },
+      { label:'Manifest identity', value:app.manifestId || 'Unknown', mono:true },
+      { label:'Manifest version', value:app.manifestVersion || 'Unknown', mono:true },
+      { label:'Canonical origin', value:new URL(app.url).origin, mono:true },
+      { label:'Requested permissions', value:(app.permissions || []).join(', ') || 'None' },
+    ];
+  }
   if (app.kind === 'classic'){
     return [
       { label:'Provenance', value:'Built into this NakliOS release' },
@@ -3314,7 +3864,7 @@ function appDiagnosticRows(win, mirrorManifest, mirrorError){
   const sandboxState = !iframe
     ? 'Host-native window; no iframe sandbox'
     : sandboxAttr !== null
-      ? 'Enabled on a cross-origin iframe'
+      ? 'Enabled on an isolated iframe'
       : actualOrigin === location.origin
         ? 'None; same-origin integration'
         : 'None; cross-origin boundary only';
@@ -3475,7 +4025,7 @@ function makeWindow(opts){
     <div class="nw-titlebar">
       ${sandboxed ? `<span class="nw-title-sandbox" title="Runs in an isolated origin. NakliOS can't read its data, and it can't reach back into NakliOS.">🔒 sandboxed</span>` : ''}
       ${badge ? `<span class="nw-title-badge">${badge}</span>` : ''}
-      <span class="nw-title">${title}</span>
+      <span class="nw-title">${_dlgEscape(title)}</span>
       <button class="nw-info-btn" title="App Info" aria-label="App Info">ⓘ</button>
       <button class="nw-min-btn" title="Minimize (click dock to restore)" aria-label="Minimize">—</button>
       <button class="nw-fs-btn" title="Maximize / restore (Esc to exit)" aria-label="Maximize">⛶</button>
@@ -3625,7 +4175,7 @@ function updateDock(){
     btn.dataset.appId = it.id;
     btn.innerHTML = it.icon.svg
       ? `<svg class="nw-icon-svg nw-dock-item-svg" viewBox="0 0 24 24" aria-hidden="true">${it.icon.svg}</svg>`
-      : `<span class="nw-dock-item-glyph">${it.icon.glyph || it.icon.name.charAt(0)}</span>`;
+      : `<span class="nw-dock-item-glyph">${_dlgEscape(it.icon.glyph || it.icon.name.charAt(0))}</span>`;
     btn.addEventListener('click', () => {
       if (btn._wasDragged) { btn._wasDragged = false; return; }
       if (w){
@@ -3842,10 +4392,12 @@ function spawnIframeWindow(app, options = {}){
   // wall the "🔒 sandboxed" badge promises.
   let isSameOrigin = false;
   try { isSameOrigin = new URL(embedSrc, location.href).origin === location.origin; } catch(_){}
+  const forceOpaqueSandbox = app.thirdParty === true;
+  const sandboxed = forceOpaqueSandbox || !isSameOrigin;
 
   const win = makeWindow({
     id:app.id, title:app.name, width:980, height:640,
-    sandboxed: !isSameOrigin,
+    sandboxed,
     app,
   });
   const body = win.querySelector('.nw-body');
@@ -3857,21 +4409,26 @@ function spawnIframeWindow(app, options = {}){
   skel.className = 'nw-skeleton';
   const iconHTML = app.svg
     ? `<svg class="nw-skeleton-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>`
-    : `<div class="nw-skeleton-glyph">${app.glyph || app.name.charAt(0)}</div>`;
-  skel.innerHTML = `${iconHTML}<div class="nw-skeleton-name">${app.name}</div><div class="nw-skeleton-bar"></div>`;
+      : `<div class="nw-skeleton-glyph">${_dlgEscape(app.glyph || app.name.charAt(0))}</div>`;
+  skel.innerHTML = `${iconHTML}<div class="nw-skeleton-name">${_dlgEscape(app.name)}</div><div class="nw-skeleton-bar"></div>`;
   body.appendChild(skel);
   win._launchTiming = { started: performance.now(), loaded: null, ready: null, timeout: null };
   win._skeletonTimeout = setTimeout(() => markIframeLaunchPhase(win, 'timeout'), 15000);
 
   const iframe = document.createElement('iframe');
-  if (!isSameOrigin) {
+  if (forceOpaqueSandbox) {
+    // User-installed apps get scripts and ordinary interaction, but never
+    // allow-same-origin. Their document therefore receives an opaque origin
+    // and cannot become a privileged NakliOS peer.
+    iframe.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms allow-downloads');
+  } else if (!isSameOrigin) {
     iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-popups allow-forms allow-downloads');
   }
   iframe.setAttribute('referrerpolicy', 'no-referrer');
   iframe.title = app.name;
   iframe.src = embedSrc;
   win._embedSrc = embedSrc;
-  win._isSameOrigin = isSameOrigin;
+  win._isSameOrigin = isSameOrigin && !forceOpaqueSandbox;
   body.appendChild(iframe);
   // Register synchronously so messages posted by the iframe's first scripts
   // (typically naklios.title / naklios.ready) aren't dropped by the host's
@@ -4018,6 +4575,8 @@ function migrateAppPermission(appId){
 // the user if no decision exists yet. Returns the backend id ('fsa'|'crate')
 // on grant, or null on deny / no available backend / cancelled prompt.
 async function fsEnsurePermission(appId){
+  const app = APPS.find(a => a.id === appId);
+  if (app?.thirdParty && !(app.permissions || []).includes('storage')) return null;
   migrateAppPermission(appId);
   const v = state.appPermissions[appId];
   if (v && v.granted === false) return null;
@@ -4028,7 +4587,6 @@ async function fsEnsurePermission(appId){
   }
   const avail = backendsAvailable();
   if (avail.length === 0) return null;
-  const app = APPS.find(a => a.id === appId);
   const name = app?.name || appId;
 
   let chosen = null;
@@ -4084,6 +4642,10 @@ async function fsEnsurePermission(appId){
 // NakliOS still mediates the change: the host names the target, explains that
 // switching does not copy data, and requires a user confirmation.
 async function fsHostSelectBackend(appId, requestedBackendId){
+  const app = APPS.find(a => a.id === appId);
+  if (app?.thirdParty && !(app.permissions || []).includes('storage')) {
+    throw new Error('This app did not request the storage permission in its installed manifest');
+  }
   const target = BACKENDS[requestedBackendId];
   if (!target || !target.isConnected()) throw new Error('Requested backend is not connected');
 
@@ -4091,7 +4653,6 @@ async function fsHostSelectBackend(appId, requestedBackendId){
   const currentId = appBoundBackend(appId);
   if (currentId === requestedBackendId) return true;
 
-  const app = APPS.find(a => a.id === appId);
   const appName = app?.name || appId;
   const targetWhere = target.id === 'crate'
     ? `Crate <code>${_dlgEscape(target.displayName() || 'Crate')}</code>`
@@ -4161,7 +4722,9 @@ function capabilitySnapshot(appId){
   const v = state.appPermissions[appId];
   const explicitlyDenied = v === 'denied' ||
     (v && typeof v === 'object' && v.granted === false);
-  const available = backendsAvailable();
+  const app = APPS.find(item => item.id === appId);
+  const manifestAllowsStorage = !app?.thirdParty || (app.permissions || []).includes('storage');
+  const available = manifestAllowsStorage ? backendsAvailable() : [];
   const fsCap = available.length > 0 && !explicitlyDenied;
   const fsBackends = available.map(backendDescriptor).filter(Boolean);
   const fsBackend = appBoundBackend(appId);
@@ -4676,19 +5239,19 @@ function openFolder(folder){
     const bgVar = app.bg || 'brand';
     const bgColor = `color-mix(in srgb, var(--${bgVar}) 22%, var(--panel))`;
     return `
-      <button class="nw-folder-app" data-app-id="${app.id}" title="${(app.description||'').replace(/"/g,'&quot;')} — drag out to put on desktop">
+      <button class="nw-folder-app" data-app-id="${app.id}" title="${_dlgEscape(app.description || '')} — drag out to put on desktop">
         <div class="nw-folder-app-tile" style="background:${bgColor}; border-color:color-mix(in srgb, var(--${bgVar}) 30%, var(--line));">
-          ${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : (app.glyph || app.name.charAt(0))}
+          ${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : _dlgEscape(app.glyph || app.name.charAt(0))}
         </div>
-        <div class="nw-folder-app-label">${app.name}</div>
+        <div class="nw-folder-app-label">${_dlgEscape(app.name)}</div>
       </button>`;
   }).join('');
 
   wrap.innerHTML = `
-    <div class="nw-folder-popover" role="dialog" aria-label="${folder.name} folder">
+    <div class="nw-folder-popover" role="dialog" aria-label="${_dlgEscape(folder.name)} folder">
       <div class="nw-folder-head">
-        <div class="nw-folder-head-glyph">${folder.glyph}</div>
-        <div class="nw-folder-head-title">${folder.name}
+        <div class="nw-folder-head-glyph">${_dlgEscape(folder.glyph)}</div>
+        <div class="nw-folder-head-title">${_dlgEscape(folder.name)}
           <span class="nw-folder-head-count">  ·  ${apps.length} apps  ·  right-click or drag out to move to desktop</span>
         </div>
         <button class="nw-folder-close" aria-label="Close folder">✕</button>
@@ -4861,12 +5424,12 @@ function openSpotlight(){
     list.innerHTML = items.map((app, i) => `
       <div class="nw-spot-item ${i === active ? 'is-active' : ''}" id="spot-option-${i}"
         role="option" aria-selected="${i === active}" data-idx="${i}">
-        <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : (app.glyph || app.name.charAt(0))}</div>
+        <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : _dlgEscape(app.glyph || app.name.charAt(0))}</div>
         <div style="flex:1; min-width:0;">
-          <div class="nw-spot-name">${app.name}</div>
-          <div class="nw-spot-desc">${(app.description || '').replace(/&mdash;/g,'—').replace(/&rarr;/g,'→').replace(/&times;/g,'×')}</div>
+          <div class="nw-spot-name">${_dlgEscape(app.name)}</div>
+          <div class="nw-spot-desc">${_dlgEscape((app.description || '').replace(/&mdash;/g,'—').replace(/&rarr;/g,'→').replace(/&times;/g,'×'))}</div>
         </div>
-        <div class="nw-spot-meta">${app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || ''}</div>
+        <div class="nw-spot-meta">${_dlgEscape(app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || '')}</div>
       </div>
     `).join('') || `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">No matches.</span></div>`;
     const activeOption = items.length ? `spot-option-${active}` : '';
@@ -4902,6 +5465,310 @@ function openSpotlight(){
 }
 
 // ════════════════════════════════════════════════════════════════════
+// ADD APP — strict manifest review, explicit consent, local registry.
+// ════════════════════════════════════════════════════════════════════
+function thirdPartyManifestJSON(manifest){
+  return JSON.stringify({
+    schema: manifest.schema,
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    url: manifest.url,
+    description: manifest.description,
+    icon: manifest.icon,
+    tags: [...manifest.tags],
+    permissions: [...manifest.permissions],
+    display: manifest.display,
+  }, null, 2);
+}
+
+async function fetchThirdPartyManifest(sourceUrl){
+  const source = safeThirdPartyUrl(sourceUrl, 'manifest source');
+  const response = await fetch(source.href, {
+    credentials:'omit',
+    cache:'no-store',
+    redirect:'error',
+    referrerPolicy:'no-referrer',
+    headers:{ Accept:'application/json' },
+  });
+  if (!response.ok) throw new Error(`Manifest request failed with HTTP ${response.status}`);
+  const declaredBytes = Number(response.headers.get('content-length') || 0);
+  if (declaredBytes > THIRD_PARTY_MANIFEST_MAX_BYTES) throw new Error('Manifest exceeds the 32 KiB limit');
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('This browser cannot safely stream the manifest response');
+  const decoder = new TextDecoder();
+  let receivedBytes = 0;
+  let text = '';
+  while (true){
+    const { done, value } = await reader.read();
+    if (done) break;
+    receivedBytes += value.byteLength;
+    if (receivedBytes > THIRD_PARTY_MANIFEST_MAX_BYTES){
+      await reader.cancel();
+      throw new Error('Manifest exceeds the 32 KiB limit');
+    }
+    text += decoder.decode(value, { stream:true });
+  }
+  text += decoder.decode();
+  let raw;
+  try { raw = JSON.parse(text); } catch(_){ throw new Error('Manifest response is not valid JSON'); }
+  return { manifest:normalizeThirdPartyManifest(raw), manifestSource:source.href };
+}
+
+function promptThirdPartyManifest(){
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'nw-dlg';
+    dialog.setAttribute('aria-labelledby', 'nw-add-app-title');
+    dialog.innerHTML = `
+      <form class="nw-dlg-form nw-app-manifest-form">
+        <h2 class="nw-dlg-title" id="nw-add-app-title">Add an app</h2>
+        <p class="nw-app-manifest-help">
+          Paste a NakliOS v1 manifest, or load one from an HTTPS URL. Loading
+          omits credentials and referrer data. Nothing is installed until the
+          separate review screen is accepted.
+        </p>
+        <label for="nw-app-manifest-url">Manifest URL (optional)</label>
+        <div class="nw-app-manifest-url-row">
+          <input id="nw-app-manifest-url" type="url" inputmode="url"
+            autocomplete="off" autocapitalize="off" spellcheck="false"
+            placeholder="https://example.com/naklios-app.json">
+          <button class="nw-dlg-btn" id="nw-app-manifest-load" type="button">Load</button>
+        </div>
+        <label for="nw-app-manifest-json">Manifest JSON</label>
+        <textarea id="nw-app-manifest-json" autocomplete="off" autocapitalize="off"
+          spellcheck="false" aria-describedby="nw-app-manifest-error"></textarea>
+        <p class="nw-app-manifest-error" id="nw-app-manifest-error" role="alert"></p>
+        <menu class="nw-dlg-actions">
+          <button class="nw-dlg-btn" type="button" id="nw-app-manifest-cancel">Cancel</button>
+          <button class="nw-dlg-btn primary" type="submit">Review app</button>
+        </menu>
+      </form>`;
+    document.body.appendChild(dialog);
+    const form = dialog.querySelector('form');
+    const urlInput = dialog.querySelector('#nw-app-manifest-url');
+    const textarea = dialog.querySelector('#nw-app-manifest-json');
+    const loadButton = dialog.querySelector('#nw-app-manifest-load');
+    const error = dialog.querySelector('#nw-app-manifest-error');
+    textarea.value = JSON.stringify({
+      schema: THIRD_PARTY_SCHEMA,
+      id: 'com.example.my-app',
+      name: 'My App',
+      version: '1.0.0',
+      url: 'https://example.com/app/',
+      description: 'What this app does.',
+      icon: '◇',
+      tags: ['tool'],
+      permissions: [],
+      display: 'window',
+    }, null, 2);
+    let loadedSource = null;
+    const finish = value => {
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve(value);
+    };
+    dialog.querySelector('#nw-app-manifest-cancel').addEventListener('click', () => finish(null));
+    dialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      finish(null);
+    });
+    loadButton.addEventListener('click', async () => {
+      error.textContent = '';
+      loadButton.disabled = true;
+      try {
+        const loaded = await fetchThirdPartyManifest(urlInput.value.trim());
+        textarea.value = thirdPartyManifestJSON(loaded.manifest);
+        loadedSource = loaded.manifestSource;
+        error.textContent = 'Manifest loaded. Review the JSON, then continue.';
+      } catch (caught){
+        loadedSource = null;
+        error.textContent = caught?.message || String(caught);
+      } finally {
+        loadButton.disabled = false;
+      }
+    });
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      error.textContent = '';
+      try {
+        const text = textarea.value;
+        if (new Blob([text]).size > THIRD_PARTY_MANIFEST_MAX_BYTES) throw new Error('Manifest exceeds the 32 KiB limit');
+        const manifest = normalizeThirdPartyManifest(JSON.parse(text));
+        const typedSource = urlInput.value.trim();
+        const manifestSource = typedSource
+          ? safeThirdPartyUrl(typedSource, 'manifest source').href
+          : null;
+        // Remember a remote update source only if this exact URL was loaded.
+        // Editing a URL after loading cannot silently claim update authority.
+        finish({
+          manifest,
+          manifestSource: loadedSource === manifestSource ? manifestSource : null,
+        });
+      } catch (caught){
+        error.textContent = caught instanceof SyntaxError
+          ? 'Manifest JSON is not valid.'
+          : caught?.message || String(caught);
+      }
+    });
+    dialog.showModal();
+    textarea.focus();
+  });
+}
+
+function sameStringList(left, right){
+  return JSON.stringify([...(left || [])].sort()) === JSON.stringify([...(right || [])].sort());
+}
+
+async function consentThirdPartyInstall(manifest, manifestSource){
+  const existing = THIRD_PARTY_APP_RECORDS.find(record => record.manifest.id === manifest.id) || null;
+  const originChanged = !!existing && existing.manifest.origin !== manifest.origin;
+  const permissionsChanged = !!existing &&
+    !sameStringList(existing.manifest.permissions, manifest.permissions);
+  const sourceChanged = !!existing && existing.manifestSource !== manifestSource;
+  const changes = [];
+  if (originChanged) changes.push(
+    `<strong>Origin changed:</strong> <code>${_dlgEscape(existing.manifest.origin)}</code> → <code>${_dlgEscape(manifest.origin)}</code>. The replacement receives a new storage namespace.`
+  );
+  if (permissionsChanged) changes.push(
+    `<strong>Permissions changed:</strong> ${(existing.manifest.permissions || []).join(', ') || 'none'} → ${manifest.permissions.join(', ') || 'none'}. Any earlier storage grant is revoked.`
+  );
+  if (sourceChanged) changes.push('<strong>Manifest source changed.</strong> Future update checks will use the new source shown here.');
+  const storageLine = manifest.permissions.includes('storage')
+    ? getMode() === 'basic'
+      ? 'Requested for its hosted window. Basic mode currently opens it in a top-level tab, so NakliOS storage stays unavailable until the app is opened in Immersive; NakliOS then asks again on first use.'
+      : 'May ask for app-scoped Folder or Crate storage. NakliOS asks again on first use.'
+    : 'No NakliOS storage access requested.';
+  const answer = await _nakliosDialog({
+    title: existing ? `Review update for ${manifest.name}` : `Install ${manifest.name}?`,
+    body:
+      `<strong>Identity</strong> · <code>${_dlgEscape(manifest.id)}</code><br>` +
+      `<strong>Version</strong> · ${_dlgEscape(manifest.version)}<br>` +
+      `<strong>App origin</strong> · <code>${_dlgEscape(manifest.origin)}</code><br>` +
+      `<strong>Manifest source</strong> · ${manifestSource ? `<code>${_dlgEscape(manifestSource)}</code>` : 'Pasted locally; no automatic update source'}<br>` +
+      `<strong>Display</strong> · ${manifest.display === 'tab' ? 'Canonical browser tab' : 'NakliOS window'}<br><br>` +
+      `${changes.length ? `${changes.join('<br>')}<br><br>` : ''}` +
+      `<strong>Isolation</strong> · Windowed apps always run in an opaque-origin sandbox. ` +
+      `They never become a same-origin system app or mirror.<br>` +
+      `<strong>Storage</strong> · ${_dlgEscape(storageLine)}<br><br>` +
+      `Installation is local to this browser profile. Uninstalling later removes the registration, not app data.`,
+    buttons: [
+      { value:'cancel', label:'Cancel' },
+      { value:'install', label:existing ? (originChanged || permissionsChanged ? 'Re-consent & update' : 'Update') : 'Install', primary:true },
+    ],
+    allowHtmlBody:true,
+  });
+  return answer === 'install' ? { existing, originChanged, permissionsChanged } : null;
+}
+
+function purgeLayoutAppId(appId){
+  for (const key of ['hidden', 'pinned', 'unfoldered', 'recent']){
+    state.layout[key] = (state.layout[key] || []).filter(id => id !== appId);
+  }
+  delete state.layout.positions?.[appId];
+  delete state.layout.windowPositions?.[appId];
+}
+
+async function installThirdPartyManifest(manifest, manifestSource = null){
+  const review = await consentThirdPartyInstall(manifest, manifestSource);
+  if (!review) return null;
+  const appId = review.existing && !review.originChanged
+    ? review.existing.appId
+    : newThirdPartyAppId();
+  const collision = THIRD_PARTY_APP_RECORDS.find(record =>
+    record.appId === appId && record !== review.existing
+  );
+  if (collision) throw new Error('App identity collision; installation refused');
+  if (review.existing && openWindows[review.existing.appId]){
+    await nakliosAlert('Close the running app before updating its registration.', {
+      title:'App is still open',
+      kind:'error',
+    });
+    return null;
+  }
+
+  if (review.existing){
+    THIRD_PARTY_APP_RECORDS = THIRD_PARTY_APP_RECORDS.filter(record => record !== review.existing);
+    if (review.originChanged){
+      purgeLayoutAppId(review.existing.appId);
+      delete state.appPermissions[review.existing.appId];
+    } else if (review.permissionsChanged){
+      delete state.appPermissions[review.existing.appId];
+    }
+  }
+  // Registrations are profile-local while appPermissions can be present in a
+  // restored NakliOS state snapshot. A genuinely new random install identity
+  // must never inherit even a coincidentally stale runtime decision.
+  if (!review.existing || review.originChanged) delete state.appPermissions[appId];
+  THIRD_PARTY_APP_RECORDS.push({
+    appId,
+    manifest,
+    manifestSource,
+    installedAt: Date.now(),
+  });
+  persistThirdPartyAppRecords();
+  refreshThirdPartyCatalog();
+  saveAppPermissions();
+  saveLayout();
+  renderIcons();
+  updateDock();
+  return APPS.find(app => app.id === appId) || null;
+}
+
+async function openAddAppDialog(){
+  const candidate = await promptThirdPartyManifest();
+  if (!candidate) return null;
+  try {
+    return await installThirdPartyManifest(candidate.manifest, candidate.manifestSource);
+  } catch (caught){
+    await nakliosAlert(caught?.message || String(caught), { title:'App not installed', kind:'error' });
+    return null;
+  }
+}
+
+async function updateThirdPartyApp(appId){
+  const record = THIRD_PARTY_APP_RECORDS.find(item => item.appId === appId);
+  if (!record?.manifestSource) return null;
+  try {
+    const loaded = await fetchThirdPartyManifest(record.manifestSource);
+    if (loaded.manifest.id !== record.manifest.id) {
+      throw new Error('Update manifest identity does not match the installed app');
+    }
+    return await installThirdPartyManifest(loaded.manifest, loaded.manifestSource);
+  } catch (caught){
+    await nakliosAlert(caught?.message || String(caught), { title:'Update check failed', kind:'error' });
+    return null;
+  }
+}
+
+async function uninstallThirdPartyApp(appId){
+  const record = THIRD_PARTY_APP_RECORDS.find(item => item.appId === appId);
+  if (!record) return false;
+  if (openWindows[appId]){
+    await nakliosAlert('Close the running app before uninstalling its registration.', {
+      title:'App is still open',
+      kind:'error',
+    });
+    return false;
+  }
+  const ok = await nakliosConfirm(
+    `Remove ${record.manifest.name} from this browser profile? Its Folder, Crate, and origin data will not be deleted.`,
+    { title:`Uninstall ${record.manifest.name}?`, okLabel:'Uninstall', danger:true }
+  );
+  if (!ok) return false;
+  THIRD_PARTY_APP_RECORDS = THIRD_PARTY_APP_RECORDS.filter(item => item !== record);
+  delete state.appPermissions[appId];
+  purgeLayoutAppId(appId);
+  persistThirdPartyAppRecords();
+  refreshThirdPartyCatalog();
+  saveAppPermissions();
+  saveLayout();
+  renderIcons();
+  updateDock();
+  return true;
+}
+
+// ════════════════════════════════════════════════════════════════════
 // SETTINGS
 // ════════════════════════════════════════════════════════════════════
 let settingsOpen = false;
@@ -4909,10 +5776,13 @@ let settingsReturnFocus = null;
 
 function focusSettingsSection(section){
   const pop = document.getElementById('settings-pop');
-  if (!pop || section !== 'storage') return;
-  const heading = pop.querySelector('#settings-storage-heading');
+  if (!pop || (section !== 'storage' && section !== 'apps')) return;
+  const heading = pop.querySelector(section === 'apps' ? '#settings-apps-heading' : '#settings-storage-heading');
   heading?.scrollIntoView({ block:'start' });
-  pop.querySelector('#fs-connect, #fs-regrant, #crate-unlock, #crate-connect-file, #crate-connect-manual, #fs-disconnect, #crate-lock')?.focus();
+  const selector = section === 'apps'
+    ? '#third-party-add, .third-party-open, .third-party-update, .third-party-uninstall'
+    : '#fs-connect, #fs-regrant, #crate-unlock, #crate-connect-file, #crate-connect-manual, #fs-disconnect, #crate-lock';
+  pop.querySelector(selector)?.focus();
 }
 
 function openSettings(section){
@@ -5013,6 +5883,7 @@ function openSettings(section){
       <div class="nw-fs-connect-actions">
         <button class="nw-fs-btn-primary" id="crate-connect-file">Use <code>.crate-creds</code> file…</button>
         <button class="nw-fs-btn-secondary" id="crate-connect-manual">Enter bucket details…</button>
+        <button class="nw-fs-btn-secondary" id="crate-connect-handoff">Open Crate setup…</button>
       </div>
     `}
     <div class="nw-fs-blurb">${crateUnlocked || crateLocked
@@ -5024,6 +5895,21 @@ function openSettings(section){
     </label>
   `;
 
+  const installedAppsHTML = THIRD_PARTY_APP_RECORDS.length
+    ? `<div class="nw-installed-apps">${THIRD_PARTY_APP_RECORDS.map(record => `
+        <div class="nw-installed-app">
+          <div class="nw-installed-app-name">${_dlgEscape(record.manifest.icon)} ${_dlgEscape(record.manifest.name)}</div>
+          <div class="nw-installed-app-meta" title="${_dlgEscape(record.manifest.origin)}">
+            ${_dlgEscape(record.manifest.id)} · v${_dlgEscape(record.manifest.version)}
+          </div>
+          <div class="nw-installed-app-actions">
+            <button type="button" class="third-party-open" data-app-id="${record.appId}">Open</button>
+            ${record.manifestSource ? `<button type="button" class="third-party-update" data-app-id="${record.appId}">Update</button>` : ''}
+            <button type="button" class="third-party-uninstall" data-app-id="${record.appId}">Uninstall</button>
+          </div>
+        </div>`).join('')}</div>`
+    : '<p class="nw-fs-blurb">No personal apps installed in this browser profile.</p>';
+
   wrap.innerHTML = `
     <h3 id="settings-title" style="margin:0 0 14px; font-size:15px;">Settings</h3>
     <h4 id="settings-storage-heading" tabindex="-1">Folder (local)</h4>
@@ -5034,6 +5920,13 @@ function openSettings(section){
     ${modeHTML}
     <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
     <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
+    <h4 id="settings-apps-heading" tabindex="-1">Apps</h4>
+    ${installedAppsHTML}
+    <button class="nw-fs-btn-primary" id="third-party-add" type="button">＋ Add app from manifest…</button>
+    <div class="nw-fs-blurb">
+      Personal apps opened in NakliOS windows run in an opaque sandbox; tab apps open at their canonical origin. Registrations stay in this browser profile.
+      <a class="nw-foot-link" href="docs/third-party-apps-v1.md" target="_blank">Manifest standard →</a>
+    </div>
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
@@ -5087,6 +5980,10 @@ function openSettings(section){
     e.preventDefault();
     if (await crateInteractiveManual()){ closeSettings(); openSettings(); }
   });
+  wrap.querySelector('#crate-connect-handoff')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await crateInteractiveSetupHandoff();
+  });
 
   wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
     if (await crateInteractiveUnlock()){ closeSettings(); openSettings(); }
@@ -5115,6 +6012,34 @@ function openSettings(section){
   });
   wrap.querySelector('#crate-stay')?.addEventListener('change', (e) => {
     setCrateStayUnlocked(e.target.checked);
+  });
+
+  wrap.querySelector('#third-party-add')?.addEventListener('click', async () => {
+    closeSettings();
+    const app = await openAddAppDialog();
+    if (app) openApp(app);
+    else openSettings('apps');
+  });
+  wrap.querySelectorAll('.third-party-open').forEach(button => {
+    button.addEventListener('click', () => {
+      const app = APPS.find(item => item.id === button.dataset.appId);
+      closeSettings();
+      if (app) openApp(app);
+    });
+  });
+  wrap.querySelectorAll('.third-party-update').forEach(button => {
+    button.addEventListener('click', async () => {
+      closeSettings();
+      await updateThirdPartyApp(button.dataset.appId);
+      openSettings('apps');
+    });
+  });
+  wrap.querySelectorAll('.third-party-uninstall').forEach(button => {
+    button.addEventListener('click', async () => {
+      closeSettings();
+      await uninstallThirdPartyApp(button.dataset.appId);
+      openSettings('apps');
+    });
   });
 
   // close on outside click
@@ -7526,6 +8451,10 @@ window.nakliOS = {
   moveAppToDesktop, isInFolder,
   addSticky, deleteSticky, openCheatSheet,
   minimizeWindow,
+  // Read-only launch telemetry. Values are process-local and contain no
+  // document data, credentials, or cross-session identifiers.
+  launchDiagnostics: launchDiagnosticsSnapshot,
+  launchDiagnosticThresholds: LAUNCH_DIAGNOSTIC_THRESHOLDS,
   // Dialog primitives — used by the crate flow + reusable elsewhere.
   alert: nakliosAlert, confirm: nakliosConfirm, passphrase: nakliosPassphrase,
   // Filesystem — system-app access (no namespace enforcement).
