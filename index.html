@@ -3511,6 +3511,55 @@ function formatLaunchTiming(value, emptyLabel){
   return typeof value === 'number' ? `${Math.round(value)} ms` : emptyLabel;
 }
 
+const LAUNCH_DIAGNOSTIC_THRESHOLDS = Object.freeze({
+  loadWarningMs: 4000,
+  readyWarningMs: 8000,
+  fallbackMs: 15000,
+});
+
+function launchDiagnosticsSnapshot(){
+  const snapshots = Object.values(openWindows)
+    .filter(win => win?.dataset?.id)
+    .map(win => {
+      const app = win._app || APPS.find(item => item.id === win.dataset.id) || {};
+      const iframe = win.querySelector('iframe');
+      const timing = win._launchTiming || {};
+      const loadedUrl = iframe?.src || app.embedUrl || app.url || location.href;
+      let origin = location.origin;
+      let locationPath = '/';
+      try {
+        const parsed = new URL(loadedUrl, location.href);
+        origin = parsed.origin;
+        locationPath = parsed.pathname;
+      } catch(_){}
+      const sandboxed = iframe ? iframe.hasAttribute('sandbox') : false;
+      const loadMs = typeof timing.loaded === 'number' ? Math.round(timing.loaded) : null;
+      const readyMs = typeof timing.ready === 'number' ? Math.round(timing.ready) : null;
+      const fallbackMs = typeof timing.timeout === 'number' ? Math.round(timing.timeout) : null;
+      const status = fallbackMs != null
+        ? 'fallback'
+        : readyMs != null && readyMs > LAUNCH_DIAGNOSTIC_THRESHOLDS.readyWarningMs
+          ? 'slow-ready'
+          : readyMs == null && loadMs != null && loadMs > LAUNCH_DIAGNOSTIC_THRESHOLDS.loadWarningMs
+            ? 'slow-load'
+            : readyMs != null || loadMs != null
+              ? 'ready'
+              : 'pending';
+      return Object.freeze({
+        appId: app.id || win.dataset.id,
+        name: app.name || win.dataset.id,
+        location: `${origin}${locationPath}`,
+        origin,
+        sandboxed,
+        loadMs,
+        readyMs,
+        fallbackMs,
+        status,
+      });
+    });
+  return Object.freeze(snapshots);
+}
+
 function appProvenanceRows(win, mirrorManifest, mirrorError){
   const app = win._app || APPS.find(item => item.id === win.dataset.id);
   if (!app) return [{ label:'Provenance', value:'Unknown app registry entry' }];
@@ -7790,6 +7839,10 @@ window.nakliOS = {
   moveAppToDesktop, isInFolder,
   addSticky, deleteSticky, openCheatSheet,
   minimizeWindow,
+  // Read-only launch telemetry. Values are process-local and contain no
+  // document data, credentials, or cross-session identifiers.
+  launchDiagnostics: launchDiagnosticsSnapshot,
+  launchDiagnosticThresholds: LAUNCH_DIAGNOSTIC_THRESHOLDS,
   // Dialog primitives — used by the crate flow + reusable elsewhere.
   alert: nakliosAlert, confirm: nakliosConfirm, passphrase: nakliosPassphrase,
   // Filesystem — system-app access (no namespace enforcement).
