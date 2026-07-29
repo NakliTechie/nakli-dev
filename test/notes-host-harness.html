@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Notes host harness</title>
+<style>
+body{margin:0;background:#17111f;color:#eee;font:13px/1.4 ui-monospace,monospace}
+header{height:42px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid #463853}
+header strong{flex:1}button{padding:5px 10px}#result.pass{color:#9fe59f}#result.fail{color:#ff9a9a}
+iframe{display:block;width:100%;height:calc(100vh - 43px);border:0;background:#faf2e2}
+</style>
+</head>
+<body>
+<header>
+  <strong>Notes fake NakliOS host</strong>
+  <button id="run">Run storage regression</button>
+  <span id="result">Ready</span>
+</header>
+<iframe id="app" title="Notes"></iframe>
+<script>
+(function(){
+'use strict';
+
+const app = document.getElementById('app');
+const result = document.getElementById('result');
+const stores = { fsa:new Map(), crate:new Map() };
+const subscriptions = new Map();
+let activeBackend = null;
+let subscriptionCounter = 0;
+
+function capabilities(){
+  app.contentWindow.postMessage({
+    type:'naklios:capabilities',
+    fs:true,
+    fsBackends:[
+      { id:'fsa', label:'Folder', name:'Harness Folder' },
+      { id:'crate', label:'Crate', name:'Harness Crate' },
+    ],
+    fsBackend:activeBackend,
+  }, '*');
+}
+function reply(source, requestId, value, error){
+  source.postMessage({
+    type:'naklios:fs:reply',
+    requestId,
+    result:value,
+    error:error ? String(error.message || error) : undefined,
+  }, '*');
+}
+window.addEventListener('message', async event => {
+  if (event.source !== app.contentWindow) return;
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'naklios:theme-request'){
+    event.source.postMessage({
+      type:'naklios:theme',
+      theme:'paper',
+      colors:{ BODY:'#faf2e2',PANEL:'#fdf8ec',INK:'#2c1810',BRAND:'#c8512a',ACT:'#2a4a8a',OK:'#5a7a30',ROW:'#f0e2c8' },
+      mood:'warm',
+    }, '*');
+    return;
+  }
+  if (msg.type === 'naklios:capabilities-request'){
+    capabilities();
+    return;
+  }
+  if (!String(msg.type || '').startsWith('naklios:fs:')) return;
+  const op = msg.type.slice('naklios:fs:'.length);
+  try {
+    if (op === 'selectBackend'){
+      if (!(msg.backend in stores)) throw new Error('Unknown backend');
+      activeBackend = msg.backend;
+      capabilities();
+      reply(event.source, msg.requestId, true);
+      return;
+    }
+    if (op === 'unsubscribe'){
+      subscriptions.delete(msg.subscriptionId);
+      return;
+    }
+    if (!activeBackend) throw new Error('No backend selected');
+    if (msg.backend && msg.backend !== activeBackend) throw new Error('Stale backend');
+    const store = stores[activeBackend];
+    if (op === 'subscribe'){
+      const id = `test-sub-${++subscriptionCounter}`;
+      subscriptions.set(id, { source:event.source, backend:activeBackend, path:msg.path || '' });
+      reply(event.source, msg.requestId, id);
+    } else if (op === 'read'){
+      if (!store.has(msg.path)) throw new Error('File not found');
+      reply(event.source, msg.requestId, store.get(msg.path));
+    } else if (op === 'write'){
+      store.set(msg.path, String(msg.data));
+      reply(event.source, msg.requestId, null);
+    } else if (op === 'delete'){
+      store.delete(msg.path);
+      reply(event.source, msg.requestId, null);
+    } else if (op === 'exists'){
+      reply(event.source, msg.requestId, store.has(msg.path));
+    } else if (op === 'list'){
+      reply(event.source, msg.requestId, [...store.keys()].filter(path => path.startsWith(msg.prefix || '')).sort());
+    } else {
+      throw new Error(`Unsupported operation: ${op}`);
+    }
+  } catch (error) {
+    reply(event.source, msg.requestId, null, error);
+  }
+});
+
+function waitFor(test, message, timeout=3500){
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(() => {
+      try {
+        const value = test();
+        if (value){
+          clearInterval(timer);
+          resolve(value);
+        } else if (Date.now() - started > timeout){
+          clearInterval(timer);
+          reject(new Error(message));
+        }
+      } catch (_) {}
+    }, 25);
+  });
+}
+function doc(){ return app.contentDocument; }
+function click(selector){
+  const element = doc().querySelector(selector);
+  if (!element) throw new Error(`Missing control: ${selector}`);
+  element.click();
+}
+function edit(selector, value){
+  const element = doc().querySelector(selector);
+  if (!element) throw new Error(`Missing field: ${selector}`);
+  element.value = value;
+  element.dispatchEvent(new Event('input', { bubbles:true }));
+}
+function activeLibraryLabel(){ return doc().querySelector('#storage-note strong')?.textContent; }
+function noteTitles(){ return [...doc().querySelectorAll('.note-row .title')].map(node => node.textContent); }
+function sendRemoteEvent(path){
+  for (const [subscriptionId, sub] of subscriptions){
+    if (sub.backend !== activeBackend) continue;
+    sub.source.postMessage({
+      type:'naklios:fs:event',
+      subscriptionId,
+      event:{ op:'update', path, backend:activeBackend, source:'remote' },
+    }, '*');
+  }
+}
+async function boot(){
+  localStorage.removeItem('naklios.notes.location');
+  app.src = '../apps/notes/';
+  await waitFor(() => doc()?.querySelector('#locations'), 'Notes did not boot');
+  capabilities();
+}
+async function run(){
+  result.className = '';
+  result.textContent = 'Running…';
+  stores.fsa.clear();
+  stores.crate.clear();
+  subscriptions.clear();
+  activeBackend = null;
+  try {
+    localStorage.removeItem('naklios.notes.location');
+    app.src = '../apps/notes/?run=' + Date.now();
+    await waitFor(() => activeLibraryLabel() === 'Crate', 'Notes did not prefer connected Crate');
+
+    click('#new-note');
+    await waitFor(() => doc().querySelector('#note-title') && !doc().querySelector('#editor-shell').hidden, 'Crate note did not open');
+    edit('#note-title', 'Crate note');
+    edit('#note-body', 'This note belongs only to the encrypted Crate library.');
+    await waitFor(() => stores.crate.has('library.json') && [...stores.crate.keys()].some(path => path.endsWith('.md')), 'Crate autosave did not write files');
+    if (![...stores.crate.keys()].some(path => path.endsWith('.json') && path !== 'library.json')) {
+      throw new Error('Crate note metadata file missing');
+    }
+
+    click('[data-location="fsa"]');
+    await waitFor(
+      () => activeLibraryLabel() === 'Folder' &&
+        doc().querySelector('#save-state')?.textContent === 'Saved to Folder' &&
+        noteTitles().length === 0,
+      'Folder library did not open',
+    );
+    if (noteTitles().length !== 0) throw new Error('Crate note leaked into Folder library');
+    click('#new-note');
+    await waitFor(
+      () => !doc().querySelector('#editor-shell')?.hidden && noteTitles().length === 1,
+      'Folder note did not open',
+    );
+    edit('#note-title', 'Folder note');
+    edit('#note-body', 'This is a different library.');
+    await waitFor(() => stores.fsa.has('library.json') && noteTitles().includes('Folder note'), 'Folder note did not autosave');
+
+    click('[data-location="crate"]');
+    await waitFor(
+      () => activeLibraryLabel() === 'Crate' &&
+        doc().querySelector('#save-state')?.textContent === 'Saved to Crate' &&
+        noteTitles().includes('Crate note'),
+      'Crate library did not restore',
+    );
+    if (noteTitles().includes('Folder note')) throw new Error('Folder note leaked into Crate library');
+
+    const crateLibrary = JSON.parse(stores.crate.get('library.json'));
+    const original = crateLibrary.notes[0];
+    original.title = 'Remote Crate note';
+    original.excerpt = 'Changed on another device';
+    original.updatedAt = Date.now() + 1000;
+    stores.crate.set('library.json', JSON.stringify(crateLibrary));
+    stores.crate.set(`notes/${original.id}.md`, 'Changed on another device');
+    sendRemoteEvent('library.json');
+    await waitFor(() => noteTitles().includes('Remote Crate note'), 'Remote Crate event did not refresh Notes');
+
+    edit('#note-body', 'Unsaved local conflict');
+    const secondLibrary = JSON.parse(stores.crate.get('library.json'));
+    secondLibrary.notes[0].title = 'Second-device edit';
+    secondLibrary.notes[0].excerpt = 'Remote version wins only by explicit choice';
+    secondLibrary.notes[0].updatedAt = Date.now() + 2000;
+    stores.crate.set('library.json', JSON.stringify(secondLibrary));
+    stores.crate.set(`notes/${original.id}.md`, 'Remote version wins only by explicit choice');
+    sendRemoteEvent('library.json');
+    await waitFor(() => !doc().querySelector('#remote-change').hidden, 'Dirty remote conflict was not surfaced');
+    click('#remote-change');
+    await waitFor(() => doc().querySelector('#confirm-dialog').open, 'Conflict decision dialog did not open');
+    if (doc().querySelector('#confirm-dialog-cancel').textContent !== 'Decide later' ||
+        doc().querySelector('#confirm-dialog-keep').textContent !== 'Keep mine' ||
+        doc().querySelector('#confirm-dialog-ok').textContent !== 'Reload') {
+      throw new Error('Conflict dialog does not offer all three safe decisions');
+    }
+    click('#confirm-dialog-cancel');
+    await waitFor(() => !doc().querySelector('#remote-change').hidden, 'Decide later did not preserve the conflict');
+    if (stores.crate.get(`notes/${original.id}.md`) !== 'Remote version wins only by explicit choice') {
+      throw new Error('Unsaved local conflict overwrote remote data without a decision');
+    }
+    click('#remote-change');
+    await waitFor(() => doc().querySelector('#confirm-dialog').open, 'Conflict dialog did not reopen');
+    click('#confirm-dialog-ok');
+    await waitFor(
+      () => noteTitles().includes('Second-device edit') &&
+        doc().querySelector('#note-body')?.value === 'Remote version wins only by explicit choice',
+      'Explicit reload did not accept the remote version',
+    );
+
+    app.contentWindow.location.reload();
+    await waitFor(() => activeLibraryLabel() === 'Crate' && noteTitles().includes('Second-device edit'), 'Crate library did not survive reload');
+
+    result.className = 'pass';
+    result.textContent = 'PASS · isolated libraries, autosave, conflict choice, remote refresh, reload recovery';
+  } catch (error) {
+    result.className = 'fail';
+    result.textContent = 'FAIL · ' + error.message;
+    throw error;
+  }
+}
+
+document.getElementById('run').addEventListener('click', () => void run());
+if (new URLSearchParams(location.search).has('autorun')) void run();
+else void boot();
+})();
+</script>
+</body>
+</html>

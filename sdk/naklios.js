@@ -16,6 +16,7 @@
  *     if (naklios.capabilities.fs){
  *       await naklios.fs.write('vault.json', JSON.stringify(vault));
  *       const data = await naklios.fs.read('vault.json');
+ *       const stop = await naklios.fs.subscribe('', event => refresh(event));
  *     }
  *   </script>
  *
@@ -52,6 +53,7 @@
   // Request/reply correlation for fs RPCs
   var pendingRpc = new Map();   // requestId → { resolve, reject }
   var rpcCounter = 0;
+  var fsSubscriptions = new Map(); // subscriptionId → callback
 
   function send(type, data) {
     if (!inNakliOS) return;
@@ -93,7 +95,11 @@
         try { cb(currentTheme); } catch (_) {}
       });
     } else if (msg.type === 'naklios:beforeclose') {
-      if (beforeCloseCb) { try { beforeCloseCb(); } catch (_) {} }
+      var closeWork;
+      try { closeWork = beforeCloseCb ? beforeCloseCb() : null; } catch (_) { closeWork = null; }
+      Promise.resolve(closeWork).catch(function () {}).then(function () {
+        send('naklios:beforeclose-ready', { requestId: msg.requestId });
+      });
     } else if (msg.type === 'naklios:capabilities') {
       if (typeof msg.fs === 'boolean') capabilities.fs = msg.fs;
       if (Array.isArray(msg.fsBackends)) capabilities.fsBackends = msg.fsBackends;
@@ -107,13 +113,28 @@
       pendingRpc.delete(msg.requestId);
       if (msg.error) p.reject(new Error(msg.error));
       else p.resolve(msg.result);
+    } else if (msg.type === 'naklios:fs:event' && msg.subscriptionId) {
+      var listener = fsSubscriptions.get(msg.subscriptionId);
+      if (listener) {
+        try { listener(msg.event || {}); } catch (_) {}
+      }
+    } else if (msg.type === 'naklios:fs:subscription-ended' && msg.subscriptionId) {
+      var endedListener = fsSubscriptions.get(msg.subscriptionId);
+      fsSubscriptions.delete(msg.subscriptionId);
+      if (endedListener) {
+        try { endedListener({ op: 'disconnected', reason: msg.reason || 'Storage subscription ended' }); } catch (_) {}
+      }
     }
   });
 
   window.naklios = {
     version: 1,
     capabilities: capabilities,   // mutated in place; read fields directly
-    ready: function () { send('naklios:ready'); },
+    ready: function () {
+      send('naklios:ready', {
+        features: { beforeCloseAck: true, fsSubscribe: true },
+      });
+    },
     title: function (s) { send('naklios:title', { title: String(s) }); },
     close: function () { send('naklios:close'); },
     beforeClose: function (cb) { beforeCloseCb = typeof cb === 'function' ? cb : null; },
@@ -145,6 +166,24 @@
       list:       function (prefix)     { return rpc('naklios:fs:list', fsPayload({ prefix: prefix || '' })); },
       delete:     function (path)       { return rpc('naklios:fs:delete', fsPayload({ path: path })); },
       exists:     function (path)       { return rpc('naklios:fs:exists', fsPayload({ path: path })); },
+      // Watch an app-relative path or directory. Crate events are immediate;
+      // Folder changes are detected by a lightweight host poll. Resolves to
+      // an unsubscribe function.
+      subscribe: async function (path, cb) {
+        if (typeof cb !== 'function') throw new Error('naklios.fs.subscribe requires a callback');
+        var subscriptionId = await rpc(
+          'naklios:fs:subscribe',
+          fsPayload({ path: path || '' }),
+        );
+        fsSubscriptions.set(subscriptionId, cb);
+        var active = true;
+        return function () {
+          if (!active) return;
+          active = false;
+          fsSubscriptions.delete(subscriptionId);
+          send('naklios:fs:unsubscribe', { subscriptionId: subscriptionId });
+        };
+      },
       // Explicit backend changes are always confirmed by the NakliOS host.
       // Switching changes the app-scoped view; it never copies or deletes data.
       useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },

@@ -37,7 +37,7 @@ assert.match(
 );
 assert.match(
   html,
-  /msg\.type\s*===\s*'naklios:ready'[\s\S]*markIframeLaunchPhase\(findWin\(\),\s*'ready'\)/,
+  /msg\.type\s*===\s*'naklios:ready'[\s\S]*?const win = findWin\(\)[\s\S]*?markIframeLaunchPhase\(win,\s*'ready'\)/,
   'cooperative ready signals still reveal apps before iframe load',
 );
 assert.doesNotMatch(

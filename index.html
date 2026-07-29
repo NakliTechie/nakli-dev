@@ -1328,6 +1328,13 @@ const APPS = [
     description:'Browse Files-owned data in your connected Folder or encrypted Crate.',
     tags:['tool','filesystem'], desktopAlign:'right', desktopOrder:5,
     svg:`<path d="M3 7c0-1 0.7-2 2-2h4l2 2h8c1 0 2 1 2 2v8c0 1-1 2-2 2H5c-1 0-2-1-2-2z"/>` },
+  { id:'notes', name:'Notes', kind:'system',
+    url:'./apps/notes/',
+    embedUrl:'./apps/notes/',
+    glyph:'✎', bg:'brand',
+    description:'A private notebook library with autosave, search, pinning, and separate Browser, Folder, or encrypted Crate storage.',
+    tags:['tool','notes','writing','productivity'], desktopAlign:'right', desktopOrder:6,
+    svg:`<path d="M5 3h11l3 3v15H5z"/><path d="M16 3v4h4"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="16" y2="15"/><line x1="8" y1="19" x2="13" y2="19"/>` },
   { id:'books', name:'Books', kind:'system',
     url:'https://naklitechie.github.io/Books/',
     embedUrl:/^(localhost|127\.0\.0\.1)$/.test(location.hostname)
@@ -1335,7 +1342,7 @@ const APPS = [
       : 'https://naklitechie.github.io/Books/',
     glyph:'📖', bg:'act',
     description:'Browser-native reader for ePub, PDF, MOBI, AZW3, FB2 and plain text. Library, progress, bookmarks, and notes persist in your NakliOS Folder or Crate.',
-    tags:['tool','reading'], desktopAlign:'right', desktopOrder:6,
+    tags:['tool','reading'], desktopAlign:'right', desktopOrder:7,
     svg:`<path d="M3 5c3-1 6-1 9 1c3-2 6-2 9-1v13c-3-1-6-1-9 1c-3-2-6-2-9-1z"/><line x1="12" y1="6" x2="12" y2="20"/>` },
   { id:'tapasya', name:'Tapasya', url:'https://naklitechie.github.io/Tapasya/', glyph:'🧠', bg:'act',
     description:'Train a language model in your browser — byte tokenizer → BPE → WebGPU EGGROLL.', tags:['ai','ml','education'], maxMode:'basic',
@@ -3586,17 +3593,38 @@ function minimizeWindow(win){
 }
 
 function closeWindow(win){
+  if (win._closing) return;
+  const iframe = win.querySelector('iframe');
+  if (iframe && win._sdkFeatures?.beforeCloseAck){
+    win._closing = true;
+    const requestId = `close_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    win._closeRequestId = requestId;
+    win._closeAckTimer = setTimeout(() => finalizeCloseWindow(win), 5000);
+    try {
+      iframe.contentWindow.postMessage({ type:'naklios:beforeclose', requestId }, '*');
+      return;
+    } catch(_){}
+  }
+  finalizeCloseWindow(win);
+}
+
+function finalizeCloseWindow(win){
+  if (!win?.isConnected) return;
   const id = win.dataset.id;
   if (fullscreenWin === win){ fullscreenWin = null; fullscreenSaved = null; }
   if (appInfoWindow === win){
     document.getElementById('nw-app-info-dialog')?.close();
   }
   clearTimeout(win._skeletonTimeout);
+  clearTimeout(win._closeAckTimer);
   try { win._beforeClose?.(); } catch(_){}
   delete openWindows[id];
   const iframe = win.querySelector('iframe');
   if (iframe){
-    try { iframe.contentWindow.postMessage({ type:'naklios:beforeclose' }, '*'); } catch(_){}
+    if (!win._sdkFeatures?.beforeCloseAck) {
+      try { iframe.contentWindow.postMessage({ type:'naklios:beforeclose' }, '*'); } catch(_){}
+    }
+    fsHostUnsubscribeSource(iframe.contentWindow);
     knownIframes.delete(iframe.contentWindow);
   }
   win.remove();
@@ -4043,6 +4071,7 @@ function postCapabilities(iframe, appId){
   } catch(_){}
 }
 function broadcastCapabilities(){
+  pruneStaleFsSubscriptions();
   document.querySelectorAll('.nw-window iframe').forEach(iframe => {
     const appId = iframe.closest('.nw-window')?.dataset.id;
     if (appId) postCapabilities(iframe, appId);
@@ -4055,6 +4084,215 @@ function broadcastCapabilities(){
   // Re-paint the topbar chips on every backend state change. Defensive
   // try — chips might not be in DOM yet during early boot.
   try { renderTopbarChips(); } catch(_){}
+}
+
+// Filesystem subscriptions are app-scoped and backend-affine, just like
+// reads and writes. Crate forwards its own onChange stream. Folder uses a
+// two-second metadata poll because browser FSA has no widely available
+// change observer yet.
+const fsSubscriptions = new Map();
+let fsSubscriptionCounter = 0;
+let fsPollTimer = null;
+let fsCrateWatchTarget = null;
+let fsCrateWatchUnsubscribe = null;
+
+function normaliseSubscriptionPath(appId, path){
+  const raw = String(path || '');
+  const segments = raw.split('/').filter(Boolean);
+  if (segments.some(segment => segment === '.' || segment === '..')) {
+    throw new Error('Unsafe subscription path');
+  }
+  const relative = segments.join('/');
+  return {
+    relative,
+    full: relative ? `apps/${appId}/${relative}` : `apps/${appId}`,
+  };
+}
+
+function subscriptionPathMatches(path, prefix){
+  const normal = String(path || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  return normal === prefix || normal.startsWith(prefix + '/');
+}
+
+function appRelativeEventPath(appId, path){
+  const normal = String(path || '').replace(/^\/+/, '');
+  const prefix = `apps/${appId}/`;
+  if (normal === `apps/${appId}`) return '';
+  return normal.startsWith(prefix) ? normal.slice(prefix.length) : normal;
+}
+
+function postFsSubscriptionEvent(sub, event){
+  const candidates = [event.path, event.from, event.to].filter(Boolean);
+  if (!candidates.some(path => subscriptionPathMatches(path, sub.fullPrefix))) return;
+  const clean = { op:event.op || 'update', backend:sub.backendId };
+  if (event.path != null) clean.path = appRelativeEventPath(sub.appId, event.path);
+  if (event.from != null) clean.from = appRelativeEventPath(sub.appId, event.from);
+  if (event.to != null) clean.to = appRelativeEventPath(sub.appId, event.to);
+  if (event.size != null) clean.size = event.size;
+  if (event.source != null) clean.source = event.source;
+  try {
+    sub.source.postMessage({
+      type:'naklios:fs:event',
+      subscriptionId:sub.id,
+      event:clean,
+    }, '*');
+  } catch(_){}
+}
+
+function ensureCrateSubscriptionWatcher(){
+  if (fsCrateWatchTarget === state.crate) return;
+  try { fsCrateWatchUnsubscribe?.(); } catch(_){}
+  fsCrateWatchUnsubscribe = null;
+  fsCrateWatchTarget = state.crate || null;
+  if (!fsCrateWatchTarget) return;
+  fsCrateWatchUnsubscribe = fsCrateWatchTarget.onChange(event => {
+    for (const sub of fsSubscriptions.values()){
+      if (sub.backendId === 'crate') postFsSubscriptionEvent(sub, event);
+    }
+  });
+}
+
+async function fsaSubscriptionSnapshot(fullPrefix){
+  const snapshot = new Map();
+  if (!state.fsHandle) return snapshot;
+  const segments = fullPrefix.split('/').filter(Boolean);
+  let dir = state.fsHandle;
+  try {
+    for (const segment of segments) dir = await dir.getDirectoryHandle(segment);
+  } catch(_){
+    // The watched path may be a file rather than a directory.
+    try {
+      dir = state.fsHandle;
+      for (const segment of segments.slice(0, -1)) {
+        dir = await dir.getDirectoryHandle(segment);
+      }
+      const handle = await dir.getFileHandle(segments.at(-1));
+      const file = await handle.getFile();
+      snapshot.set(fullPrefix, `${file.lastModified}:${file.size}`);
+    } catch(_){}
+    return snapshot;
+  }
+  async function walk(handle, prefix){
+    for await (const [name, child] of handle.entries()){
+      const path = prefix ? `${prefix}/${name}` : name;
+      if (child.kind === 'directory'){
+        snapshot.set(path + '/', 'directory');
+        await walk(child, path);
+      } else {
+        try {
+          const file = await child.getFile();
+          snapshot.set(path, `${file.lastModified}:${file.size}`);
+        } catch(_){}
+      }
+    }
+  }
+  await walk(dir, fullPrefix);
+  return snapshot;
+}
+
+function diffFsaSubscriptionSnapshots(previous, current){
+  const events = [];
+  for (const [path, fingerprint] of current){
+    if (!previous.has(path)) events.push({ op:'create', path, source:'external' });
+    else if (previous.get(path) !== fingerprint) events.push({ op:'update', path, source:'external' });
+  }
+  for (const [path] of previous){
+    if (!current.has(path)) events.push({ op:'delete', path, source:'external' });
+  }
+  return events;
+}
+
+async function pollFsaSubscriptions(){
+  for (const sub of fsSubscriptions.values()){
+    if (sub.backendId !== 'fsa' || sub.polling) continue;
+    if (!BACKENDS.fsa.isConnected()){
+      endFsSubscription(sub.id, 'Folder disconnected');
+      continue;
+    }
+    sub.polling = true;
+    try {
+      const current = await fsaSubscriptionSnapshot(sub.fullPrefix);
+      const events = diffFsaSubscriptionSnapshots(sub.snapshot || new Map(), current);
+      sub.snapshot = current;
+      events.forEach(event => postFsSubscriptionEvent(sub, event));
+    } finally {
+      sub.polling = false;
+    }
+  }
+}
+
+function ensureFsaSubscriptionPoll(){
+  if (fsPollTimer || !Array.from(fsSubscriptions.values()).some(sub => sub.backendId === 'fsa')) return;
+  fsPollTimer = setInterval(() => { void pollFsaSubscriptions(); }, 2000);
+}
+
+function stopUnusedFsaSubscriptionPoll(){
+  if (!fsPollTimer || Array.from(fsSubscriptions.values()).some(sub => sub.backendId === 'fsa')) return;
+  clearInterval(fsPollTimer);
+  fsPollTimer = null;
+}
+
+function endFsSubscription(id, reason){
+  const sub = fsSubscriptions.get(id);
+  if (!sub) return;
+  fsSubscriptions.delete(id);
+  try {
+    sub.source.postMessage({
+      type:'naklios:fs:subscription-ended',
+      subscriptionId:id,
+      reason,
+    }, '*');
+  } catch(_){}
+  stopUnusedFsaSubscriptionPoll();
+}
+
+function fsHostUnsubscribe(source, id){
+  const sub = fsSubscriptions.get(id);
+  if (!sub || sub.source !== source) return false;
+  fsSubscriptions.delete(id);
+  stopUnusedFsaSubscriptionPoll();
+  return true;
+}
+
+function fsHostUnsubscribeSource(source){
+  for (const [id, sub] of fsSubscriptions){
+    if (sub.source === source) fsSubscriptions.delete(id);
+  }
+  stopUnusedFsaSubscriptionPoll();
+}
+
+function pruneStaleFsSubscriptions(){
+  ensureCrateSubscriptionWatcher();
+  for (const [id, sub] of fsSubscriptions){
+    if (appBoundBackend(sub.appId) !== sub.backendId) {
+      endFsSubscription(id, 'Storage backend changed or disconnected');
+    }
+  }
+}
+
+async function fsHostSubscribe(source, msg, appId){
+  const backendId = await fsEnsurePermission(appId);
+  if (!backendId) throw new Error('Permission denied');
+  if (msg.backend && msg.backend !== backendId) {
+    throw new Error('Storage backend changed before the subscription was created');
+  }
+  const path = normaliseSubscriptionPath(appId, msg.path);
+  const id = `s${++fsSubscriptionCounter}_${Date.now()}`;
+  const sub = {
+    id,
+    source,
+    appId,
+    backendId,
+    relativePath:path.relative,
+    fullPrefix:path.full,
+    snapshot:null,
+    polling:false,
+  };
+  if (backendId === 'fsa') sub.snapshot = await fsaSubscriptionSnapshot(path.full);
+  fsSubscriptions.set(id, sub);
+  if (backendId === 'crate') ensureCrateSubscriptionWatcher();
+  else ensureFsaSubscriptionPoll();
+  return id;
 }
 
 // ── TOPBAR BACKEND CHIPS ──────────────────────────────────────────────
@@ -4169,7 +4407,17 @@ window.addEventListener('message', async e => {
   const findWin = () => { const f = findIframe(); return f ? f.closest('.nw-window') : null; };
   const getAppId = () => findWin()?.dataset.id || null;
   if (msg.type === 'naklios:ready'){
-    markIframeLaunchPhase(findWin(), 'ready');
+    const win = findWin();
+    if (win && msg.features && typeof msg.features === 'object') {
+      win._sdkFeatures = {
+        beforeCloseAck:msg.features.beforeCloseAck === true,
+        fsSubscribe:msg.features.fsSubscribe === true,
+      };
+    }
+    markIframeLaunchPhase(win, 'ready');
+  } else if (msg.type === 'naklios:beforeclose-ready'){
+    const win = findWin();
+    if (win?._closing && msg.requestId === win._closeRequestId) finalizeCloseWindow(win);
   } else if (msg.type === 'naklios:close'){
     const win = findWin();
     if (win) closeWindow(win);
@@ -4190,12 +4438,16 @@ window.addEventListener('message', async e => {
       if (!appId) throw new Error('Unknown app');
       const op = msg.type.slice('naklios:fs:'.length);
       if (op === 'selectBackend') reply.result = await fsHostSelectBackend(appId, msg.backend);
+      else if (op === 'subscribe') reply.result = await fsHostSubscribe(e.source, msg, appId);
+      else if (op === 'unsubscribe') reply.result = fsHostUnsubscribe(e.source, msg.subscriptionId);
       else if (op === 'list') reply.result = await fsHostList(msg, appId);
       else reply.result = await fsHostHandle(msg, op, appId);
     } catch (err){
       reply.error = String(err?.message || err);
     }
-    try { e.source.postMessage(reply, '*'); } catch(_){}
+    if (msg.requestId) {
+      try { e.source.postMessage(reply, '*'); } catch(_){}
+    }
   }
 });
 

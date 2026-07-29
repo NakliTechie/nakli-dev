@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notes — NakliOS</title>
+<meta name="description" content="Private notes stored in your browser, NakliOS Folder, or encrypted Crate.">
+<style>
+:root{
+  --body:#faf2e2; --panel:#fdf8ec; --ink:#2c1810; --brand:#c8512a;
+  --act:#2a4a8a; --ok:#5a7a30; --row:#f0e2c8;
+  --muted:color-mix(in srgb, var(--ink) 58%, var(--body));
+  --faint:color-mix(in srgb, var(--ink) 36%, var(--body));
+  --line:color-mix(in srgb, var(--ink) 14%, transparent);
+  --strong-line:color-mix(in srgb, var(--ink) 25%, transparent);
+  --shadow:0 16px 48px rgba(40,20,8,.18);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+.sr-only{
+  position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+  margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;
+  white-space:nowrap!important;border:0!important;
+}
+html,body{height:100%;margin:0;overflow:hidden}
+body{
+  color:var(--ink); background:var(--body);
+  font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+button,input,textarea,select{font:inherit}
+button{color:inherit}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{
+  outline:2px solid var(--act); outline-offset:2px;
+}
+.app{height:100%;display:flex;flex-direction:column;min-height:0}
+.topbar{
+  min-height:52px;display:flex;align-items:center;gap:12px;padding:8px 14px;
+  background:var(--panel);border-bottom:1px solid var(--line);flex:none;
+}
+.brand{display:flex;align-items:center;gap:8px;font-weight:750;font-size:15px}
+.brand-mark{
+  width:29px;height:29px;border-radius:9px;display:grid;place-items:center;
+  color:#fff;background:var(--brand);box-shadow:inset 0 0 0 1px rgba(255,255,255,.2);
+}
+.location-switch{
+  display:flex;align-items:center;padding:2px;border:1px solid var(--line);
+  border-radius:9px;background:var(--body);min-width:0;
+}
+.location-switch button{
+  border:0;background:transparent;padding:5px 9px;border-radius:7px;
+  color:var(--muted);cursor:pointer;white-space:nowrap;font-size:12px;
+}
+.location-switch button:hover{color:var(--ink);background:var(--row)}
+.location-switch button.active{background:var(--panel);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.13)}
+.location-switch button[disabled]{opacity:.42;cursor:not-allowed}
+.search-wrap{position:relative;flex:1;max-width:390px;margin-left:auto}
+.search-wrap::before{
+  content:"⌕";position:absolute;left:10px;top:50%;transform:translateY(-52%);
+  color:var(--muted);font-size:17px;pointer-events:none;
+}
+#search{
+  width:100%;border:1px solid var(--line);background:var(--body);color:var(--ink);
+  border-radius:9px;padding:7px 10px 7px 30px;
+}
+.primary,.icon-btn,.quiet-btn{
+  border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--row);
+  padding:6px 10px;
+}
+.primary{border-color:transparent;background:var(--brand);color:#fff;font-weight:650}
+.primary:hover{filter:brightness(1.06)}
+.icon-btn:hover,.quiet-btn:hover{background:color-mix(in srgb,var(--brand) 12%,var(--row))}
+.workspace{
+  min-height:0;flex:1;display:grid;grid-template-columns:210px 290px minmax(320px,1fr);
+}
+.sidebar,.note-column,.editor{min-height:0}
+.sidebar{
+  background:color-mix(in srgb,var(--panel) 72%,var(--body));
+  border-right:1px solid var(--line);display:flex;flex-direction:column;
+}
+.sidebar-scroll,.note-list{min-height:0;overflow:auto;scrollbar-color:var(--faint) transparent;scrollbar-width:thin}
+.side-heading{
+  padding:14px 13px 6px;display:flex;align-items:center;gap:8px;
+  color:var(--muted);font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.08em;
+}
+.side-heading span{flex:1}
+.side-heading button{border:0;background:none;color:var(--muted);cursor:pointer;padding:1px 5px;font-size:17px}
+.collection{
+  width:calc(100% - 12px);margin:1px 6px;border:0;background:transparent;color:var(--ink);
+  border-radius:7px;padding:7px 9px;display:flex;gap:8px;align-items:center;text-align:left;cursor:pointer;
+}
+.collection:hover{background:var(--row)}
+.collection.active{background:color-mix(in srgb,var(--brand) 16%,var(--panel));font-weight:650}
+.collection .label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.collection .count{font-size:11px;color:var(--muted)}
+.storage-note{
+  margin-top:auto;padding:11px 13px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:11px;
+}
+.storage-note strong{color:var(--ink)}
+.note-column{
+  background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;
+}
+.list-head{
+  flex:none;min-height:49px;padding:10px 12px;display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid var(--line);
+}
+.list-head h2{margin:0;font-size:14px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note-list{flex:1}
+.note-row{
+  display:block;width:100%;border:0;border-bottom:1px solid var(--line);background:transparent;
+  padding:11px 13px;text-align:left;cursor:pointer;color:var(--ink);
+}
+.note-row:hover{background:color-mix(in srgb,var(--row) 58%,transparent)}
+.note-row.active{background:color-mix(in srgb,var(--brand) 14%,var(--panel));box-shadow:inset 3px 0 var(--brand)}
+.note-title-line{display:flex;gap:6px;align-items:center;font-weight:680}
+.note-title-line .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.note-title-line .pin{font-size:10px;color:var(--brand)}
+.note-excerpt{
+  color:var(--muted);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.note-meta{color:var(--faint);font-size:10px;margin-top:4px;display:flex;gap:8px}
+.empty-list{padding:34px 18px;text-align:center;color:var(--muted)}
+.empty-list strong{display:block;color:var(--ink);margin-bottom:5px}
+.editor{background:var(--body);display:flex;flex-direction:column;min-width:0}
+.editor-empty{height:100%;display:grid;place-items:center;color:var(--muted);text-align:center;padding:30px}
+.editor-shell{height:100%;display:flex;flex-direction:column;min-height:0}
+.editor-bar{
+  min-height:49px;flex:none;display:flex;align-items:center;gap:7px;padding:7px 12px;
+  border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 76%,var(--body));
+}
+.editor-bar .spacer{flex:1}
+#mobile-back{display:none}
+.format-group{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.format-group button{border:0;border-right:1px solid var(--line);border-radius:0;background:transparent;padding:4px 8px;cursor:pointer}
+.format-group button:last-child{border-right:0}
+.format-group button:hover{background:var(--row)}
+#notebook-select{
+  min-width:105px;max-width:170px;border:1px solid var(--line);border-radius:7px;
+  background:var(--panel);color:var(--ink);padding:4px 7px;
+}
+#note-title{
+  flex:none;width:100%;border:0;background:transparent;color:var(--ink);
+  font:750 24px/1.2 Georgia,serif;padding:22px 28px 7px;
+}
+#note-title::placeholder,#note-body::placeholder{color:var(--faint)}
+#note-body{
+  flex:1;min-height:0;width:100%;resize:none;border:0;background:transparent;color:var(--ink);
+  padding:10px 28px 34px;font:15px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.statusbar{
+  min-height:27px;flex:none;display:flex;align-items:center;gap:8px;padding:4px 12px;
+  border-top:1px solid var(--line);background:var(--panel);font-size:11px;color:var(--muted);
+}
+.statusbar .spacer{flex:1}
+#remote-change{border:0;background:none;color:var(--brand);font-weight:700;cursor:pointer;padding:0}
+.toast{
+  position:fixed;right:16px;bottom:42px;z-index:40;max-width:min(360px,calc(100vw - 32px));
+  background:var(--ink);color:var(--panel);border-radius:9px;padding:9px 12px;
+  box-shadow:var(--shadow);opacity:0;transform:translateY(8px);pointer-events:none;
+  transition:.16s ease;
+}
+.toast.show{opacity:1;transform:none}
+dialog{
+  width:min(420px,calc(100vw - 28px));border:1px solid var(--strong-line);
+  border-radius:13px;background:var(--panel);color:var(--ink);padding:0;box-shadow:var(--shadow);
+}
+dialog::backdrop{background:rgba(20,12,8,.46);backdrop-filter:blur(2px)}
+.dialog-body{padding:19px}
+.dialog-body h2{font-size:17px;margin:0 0 7px}
+.dialog-body p{color:var(--muted);margin:0 0 14px}
+.dialog-body input{
+  width:100%;border:1px solid var(--strong-line);border-radius:8px;background:var(--body);
+  color:var(--ink);padding:8px 10px;
+}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 19px;border-top:1px solid var(--line)}
+.dialog-actions button{min-width:76px}
+.danger{color:#b63232}
+.danger.primary{background:#b63232;color:white}
+@media(max-width:760px){
+  .workspace{grid-template-columns:170px 230px minmax(300px,1fr)}
+  .brand span:last-child{display:none}
+  .topbar{gap:7px;padding-inline:8px}
+  .location-switch button{padding-inline:6px}
+}
+@media(max-width:580px){
+  .workspace{grid-template-columns:145px minmax(210px,1fr)}
+  .editor{position:fixed;inset:52px 0 0 0;z-index:10;display:none}
+  .editor.mobile-open{display:flex}
+  #mobile-back{display:inline-block}
+  .search-wrap{display:none}
+}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<script src="../../sdk/naklios.js"></script>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">N</span><span>Notes</span></div>
+    <div class="location-switch" id="locations" aria-label="Notes storage location"></div>
+    <label class="search-wrap">
+      <span class="sr-only">Search notes</span>
+      <input id="search" type="search" placeholder="Search every note" autocomplete="off">
+    </label>
+    <button class="primary" id="new-note">＋ New note</button>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar" aria-label="Notebooks">
+      <div class="sidebar-scroll">
+        <div class="side-heading"><span>Library</span></div>
+        <div id="system-collections"></div>
+        <div class="side-heading">
+          <span>Notebooks</span>
+          <button id="new-notebook" aria-label="New notebook" title="New notebook">＋</button>
+        </div>
+        <div id="notebooks"></div>
+      </div>
+      <div class="storage-note" id="storage-note">Loading storage…</div>
+    </aside>
+
+    <section class="note-column" aria-label="Notes">
+      <div class="list-head">
+        <h2 id="list-title">All Notes</h2>
+        <span id="result-count"></span>
+      </div>
+      <div class="note-list" id="note-list"></div>
+    </section>
+
+    <article class="editor" id="editor" aria-label="Note editor">
+      <div class="editor-empty" id="editor-empty">
+        <div><strong>Select a note</strong><br>or create one to start writing.</div>
+      </div>
+      <div class="editor-shell" id="editor-shell" hidden>
+        <div class="editor-bar">
+          <button class="icon-btn" id="mobile-back" aria-label="Back to notes">←</button>
+          <div class="format-group" aria-label="Formatting">
+            <button data-wrap="**" title="Bold"><strong>B</strong></button>
+            <button data-wrap="*" title="Italic"><em>I</em></button>
+            <button data-prefix="- [ ] " title="Checklist">☑</button>
+          </div>
+          <select id="notebook-select" aria-label="Move to notebook"></select>
+          <span class="spacer"></span>
+          <button class="quiet-btn" id="pin-note">Pin</button>
+          <button class="quiet-btn danger" id="trash-note">Move to Trash</button>
+        </div>
+        <input id="note-title" placeholder="Untitled note" maxlength="180" aria-label="Note title">
+        <textarea id="note-body" placeholder="Start writing…" spellcheck="true" aria-label="Note body"></textarea>
+      </div>
+    </article>
+  </main>
+
+  <footer class="statusbar">
+    <span id="save-state">Starting…</span>
+    <button id="remote-change" hidden>Changes available — reload</button>
+    <span class="spacer"></span>
+    <span id="word-count">0 words</span>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<dialog id="text-dialog" aria-labelledby="text-dialog-title">
+  <form method="dialog">
+    <div class="dialog-body">
+      <h2 id="text-dialog-title">New notebook</h2>
+      <p id="text-dialog-copy">Give this notebook a name.</p>
+      <input id="text-dialog-input" maxlength="80" autocomplete="off">
+    </div>
+    <div class="dialog-actions">
+      <button value="cancel">Cancel</button>
+      <button class="primary" value="ok">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+  <form method="dialog">
+    <div class="dialog-body">
+      <h2 id="confirm-dialog-title">Delete note forever?</h2>
+      <p id="confirm-dialog-copy">This removes the note from this storage location and cannot be undone.</p>
+    </div>
+    <div class="dialog-actions">
+      <button id="confirm-dialog-cancel" value="cancel">Cancel</button>
+      <button id="confirm-dialog-keep" value="keep" hidden>Keep mine</button>
+      <button class="primary danger" id="confirm-dialog-ok" value="ok">Delete forever</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(function(){
+'use strict';
+
+const $ = id => document.getElementById(id);
+const APP_ID = 'notes';
+const LIBRARY_FILE = 'library.json';
+const DEFAULT_NOTEBOOK_ID = 'inbox';
+const LOCATION_KEY = 'naklios.notes.location';
+const SELECTION_PREFIX = 'naklios.notes.selection.';
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+let library = null;
+let activeLocation = 'browser';
+let activeAdapter = null;
+let currentCollection = 'all';
+let selectedId = null;
+let bodyCache = new Map();
+let dirty = false;
+let editRevision = 0;
+let savedRevision = 0;
+let saveTimer = null;
+let saveQueue = Promise.resolve();
+let loadingToken = 0;
+let searchToken = 0;
+let toastTimer = null;
+let capabilitiesReady = false;
+let unsubscribeFs = null;
+let remoteReloadTimer = null;
+let handlingDisconnect = false;
+const ownWrites = new Map();
+
+function now(){ return Date.now(); }
+function uid(prefix){
+  const id = globalThis.crypto?.randomUUID?.() ||
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${id}`;
+}
+function defaultLibrary(){
+  const ts = now();
+  return {
+    version: 1,
+    updatedAt: ts,
+    notebooks: [{ id: DEFAULT_NOTEBOOK_ID, name: 'Notes', createdAt: ts }],
+    notes: [],
+  };
+}
+function notePath(id, ext){ return `notes/${id}.${ext}`; }
+function selectedNote(){ return library?.notes.find(note => note.id === selectedId) || null; }
+function notebookName(id){ return library?.notebooks.find(book => book.id === id)?.name || 'Notes'; }
+function excerpt(text){
+  return String(text || '').replace(/[#>*_`~[\]-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
+function words(text){
+  const value = String(text || '').trim();
+  return value ? value.split(/\s+/).length : 0;
+}
+function setSaveState(text){ $('save-state').textContent = text; }
+function showToast(message){
+  clearTimeout(toastTimer);
+  $('toast').textContent = message;
+  $('toast').classList.add('show');
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2600);
+}
+function formatDate(ts){
+  const date = new Date(ts || 0);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  }
+  return date.toLocaleDateString([], { month:'short', day:'numeric' });
+}
+function locationLabel(id){
+  if (id === 'browser') return 'Browser';
+  const descriptor = naklios.capabilities.fsBackends.find(item => item.id === id);
+  return descriptor?.label || (id === 'crate' ? 'Crate' : 'Folder');
+}
+function locationDetail(id){
+  if (id === 'browser') return 'Private to this browser';
+  const descriptor = naklios.capabilities.fsBackends.find(item => item.id === id);
+  if (id === 'crate') return descriptor?.name ? `Encrypted Crate · ${descriptor.name}` : 'Encrypted Crate';
+  return descriptor?.name ? `NakliOS Folder · ${descriptor.name}` : 'NakliOS Folder';
+}
+
+function openNotesDb(){
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('naklios-notes-v1', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('files');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function idbRequest(mode, action){
+  const db = await openNotesDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('files', mode);
+      const store = tx.objectStore('files');
+      let request;
+      try { request = action(store); } catch (error) { reject(error); return; }
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+const browserAdapter = {
+  id:'browser',
+  async read(path){
+    const value = await idbRequest('readonly', store => store.get(path));
+    if (value == null) throw new Error('File not found');
+    return typeof value === 'string' ? value : decoder.decode(value);
+  },
+  async write(path, data){ await idbRequest('readwrite', store => store.put(String(data), path)); },
+  async delete(path){ await idbRequest('readwrite', store => store.delete(path)); },
+  async exists(path){ return (await idbRequest('readonly', store => store.getKey(path))) != null; },
+  async list(prefix){
+    const keys = await idbRequest('readonly', store => store.getAllKeys());
+    return keys.filter(key => String(key).startsWith(prefix || '')).map(String).sort();
+  },
+};
+const hostedAdapter = {
+  id:'hosted',
+  read:path => naklios.fs.read(path),
+  write:(path,data) => {
+    ownWrites.set(path, now());
+    return naklios.fs.write(path,data);
+  },
+  delete:path => {
+    ownWrites.set(path, now());
+    return naklios.fs.delete(path);
+  },
+  exists:path => naklios.fs.exists(path),
+  list:prefix => naklios.fs.list(prefix),
+};
+
+async function readJson(path, fallback){
+  try {
+    const parsed = JSON.parse(await activeAdapter.read(path));
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+function normaliseLibrary(value){
+  const base = value && value.version === 1 ? value : defaultLibrary();
+  if (!Array.isArray(base.notebooks)) base.notebooks = [];
+  if (!base.notebooks.some(book => book.id === DEFAULT_NOTEBOOK_ID)) {
+    base.notebooks.unshift({ id:DEFAULT_NOTEBOOK_ID, name:'Notes', createdAt:now() });
+  }
+  base.notebooks = base.notebooks
+    .filter(book => book && typeof book.id === 'string' && typeof book.name === 'string')
+    .map(book => ({ id:book.id, name:book.name.slice(0,80), createdAt:Number(book.createdAt) || now() }));
+  if (!Array.isArray(base.notes)) base.notes = [];
+  base.notes = base.notes
+    .filter(note => note && typeof note.id === 'string')
+    .map(note => ({
+      id:note.id,
+      notebookId:base.notebooks.some(book => book.id === note.notebookId) ? note.notebookId : DEFAULT_NOTEBOOK_ID,
+      title:String(note.title || 'Untitled note').slice(0,180),
+      excerpt:String(note.excerpt || '').slice(0,180),
+      pinned:!!note.pinned,
+      trashedAt:note.trashedAt ? Number(note.trashedAt) : null,
+      createdAt:Number(note.createdAt) || now(),
+      updatedAt:Number(note.updatedAt) || now(),
+    }));
+  return base;
+}
+async function writeLibrary(){
+  library.updatedAt = now();
+  ownWrites.set(LIBRARY_FILE, now());
+  await activeAdapter.write(LIBRARY_FILE, JSON.stringify(library, null, 2));
+}
+async function writeMetadata(note){
+  const path = notePath(note.id, 'json');
+  ownWrites.set(path, now());
+  await activeAdapter.write(path, JSON.stringify(note, null, 2));
+}
+
+function availableLocations(){
+  return ['browser', ...naklios.capabilities.fsBackends.map(item => item.id)];
+}
+function renderLocations(){
+  const root = $('locations');
+  root.replaceChildren();
+  const locations = [
+    { id:'browser', label:'Browser', enabled:true },
+    { id:'fsa', label:'Folder', enabled:naklios.capabilities.fsBackends.some(item => item.id === 'fsa') },
+    { id:'crate', label:'Crate', enabled:naklios.capabilities.fsBackends.some(item => item.id === 'crate') },
+  ];
+  for (const location of locations){
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = location.label;
+    button.dataset.location = location.id;
+    button.disabled = !location.enabled;
+    button.classList.toggle('active', activeLocation === location.id);
+    button.setAttribute('aria-pressed', String(activeLocation === location.id));
+    button.title = location.enabled
+      ? `Open the separate ${location.label} library`
+      : `${location.label} is not connected in NakliOS`;
+    button.addEventListener('click', () => switchLocation(location.id));
+    root.appendChild(button);
+  }
+  $('storage-note').replaceChildren();
+  const strong = document.createElement('strong');
+  strong.textContent = locationLabel(activeLocation);
+  $('storage-note').append(strong, document.createElement('br'), locationDetail(activeLocation));
+}
+
+async function waitForBackend(id, timeout=1800){
+  if (naklios.capabilities.fsBackend === id) return true;
+  return await new Promise(resolve => {
+    const started = now();
+    const timer = setInterval(() => {
+      if (naklios.capabilities.fsBackend === id) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (now() - started > timeout) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 30);
+  });
+}
+async function activateLocation(id, { initial=false } = {}){
+  if (id !== 'browser'){
+    if (!availableLocations().includes(id)) throw new Error(`${locationLabel(id)} is not connected`);
+    if (naklios.capabilities.fsBackend !== id){
+      const accepted = await naklios.fs.useBackend(id);
+      if (!accepted) throw new Error('Storage switch cancelled');
+      if (!await waitForBackend(id)) throw new Error('NakliOS did not finish binding the storage location');
+    }
+  }
+  activeLocation = id;
+  activeAdapter = id === 'browser' ? browserAdapter : hostedAdapter;
+  localStorage.setItem(LOCATION_KEY, id);
+  renderLocations();
+  await loadLibrary();
+  await subscribeToLocation();
+  if (!initial) showToast(`Opened the separate ${locationLabel(id)} library. Nothing was copied.`);
+}
+async function switchLocation(id){
+  if (id === activeLocation) return;
+  try {
+    await flushNow();
+    setSaveState(`Opening ${locationLabel(id)}…`);
+    await activateLocation(id);
+  } catch (error) {
+    setSaveState('Storage switch cancelled');
+    showToast(error.message || 'Could not switch storage');
+    renderLocations();
+  }
+}
+
+async function handleActiveLocationDisconnect(){
+  if (handlingDisconnect || activeLocation === 'browser') return;
+  handlingDisconnect = true;
+  clearTimeout(saveTimer);
+  try {
+    if (dirty) await flushNow();
+    await saveQueue.catch(() => {});
+    if (dirty || editRevision > savedRevision){
+      setSaveState(`${locationLabel(activeLocation)} disconnected — reconnect to save`);
+      showToast('Storage disconnected while this note has unsaved changes. Reconnect it before switching libraries.');
+      renderLocations();
+      return;
+    }
+    await activateLocation('browser', { initial:true });
+    showToast('Storage disconnected. Opened the separate Browser library.');
+  } finally {
+    handlingDisconnect = false;
+  }
+}
+
+async function chooseInitialLocation(){
+  const stored = localStorage.getItem(LOCATION_KEY);
+  const available = availableLocations();
+  let preferred = available.includes(stored) ? stored : null;
+  if (!preferred && naklios.capabilities.fsBackend && available.includes(naklios.capabilities.fsBackend)) {
+    preferred = naklios.capabilities.fsBackend;
+  }
+  if (!preferred) preferred = available.includes('crate') ? 'crate' : (available.includes('fsa') ? 'fsa' : 'browser');
+  try {
+    await activateLocation(preferred, { initial:true });
+  } catch (_) {
+    await activateLocation('browser', { initial:true });
+    if (preferred !== 'browser') showToast(`${locationLabel(preferred)} was not opened. Using Browser instead.`);
+  }
+}
+
+async function loadLibrary(){
+  clearTimeout(saveTimer);
+  dirty = false;
+  const token = ++loadingToken;
+  setSaveState(`Loading ${locationLabel(activeLocation)}…`);
+  const loaded = normaliseLibrary(await readJson(LIBRARY_FILE, null));
+  if (token !== loadingToken) return;
+  library = loaded;
+  bodyCache = new Map();
+  currentCollection = 'all';
+  const remembered = localStorage.getItem(SELECTION_PREFIX + activeLocation);
+  selectedId = library.notes.some(note => note.id === remembered) ? remembered : null;
+  if (!(await activeAdapter.exists(LIBRARY_FILE).catch(() => false))) await writeLibrary();
+  renderSidebar();
+  await renderNoteList();
+  if (selectedId) await selectNote(selectedId, { skipFlush:true });
+  else clearEditor();
+  setSaveState(`Saved to ${locationLabel(activeLocation)}`);
+  naklios.title(`Notes — ${locationLabel(activeLocation)}`);
+}
+
+function notesForCollection(){
+  const search = $('search').value.trim().toLocaleLowerCase();
+  return library.notes.filter(note => {
+    if (currentCollection === 'trash') return !!note.trashedAt;
+    if (note.trashedAt) return false;
+    if (currentCollection === 'pinned' && !note.pinned) return false;
+    if (!['all','pinned'].includes(currentCollection) && note.notebookId !== currentCollection) return false;
+    if (!search) return true;
+    const cached = bodyCache.get(note.id) || '';
+    return `${note.title}\n${note.excerpt}\n${cached}`.toLocaleLowerCase().includes(search);
+  }).sort((a,b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+}
+function collectionLabel(){
+  if (currentCollection === 'all') return 'All Notes';
+  if (currentCollection === 'pinned') return 'Pinned';
+  if (currentCollection === 'trash') return 'Recently Deleted';
+  return notebookName(currentCollection);
+}
+function collectionButton(id, icon, label, count){
+  const button = document.createElement('button');
+  button.className = 'collection';
+  button.classList.toggle('active', currentCollection === id);
+  const iconNode = document.createElement('span');
+  iconNode.textContent = icon;
+  const labelNode = document.createElement('span');
+  labelNode.className = 'label';
+  labelNode.textContent = label;
+  const countNode = document.createElement('span');
+  countNode.className = 'count';
+  countNode.textContent = String(count);
+  button.append(iconNode, labelNode, countNode);
+  button.addEventListener('click', async () => {
+    await flushNow();
+    currentCollection = id;
+    if (selectedId && !notesForCollection().some(note => note.id === selectedId)) {
+      selectedId = null;
+      clearEditor();
+    }
+    renderSidebar();
+    await renderNoteList();
+  });
+  return button;
+}
+function renderSidebar(){
+  if (!library) return;
+  const live = library.notes.filter(note => !note.trashedAt);
+  const system = $('system-collections');
+  system.replaceChildren(
+    collectionButton('all','▤','All Notes',live.length),
+    collectionButton('pinned','◆','Pinned',live.filter(note => note.pinned).length),
+    collectionButton('trash','♲','Recently Deleted',library.notes.length-live.length),
+  );
+  const books = $('notebooks');
+  books.replaceChildren();
+  for (const notebook of library.notebooks){
+    books.appendChild(collectionButton(
+      notebook.id,
+      '▱',
+      notebook.name,
+      live.filter(note => note.notebookId === notebook.id).length,
+    ));
+  }
+}
+async function hydrateSearchBodies(query, token){
+  if (!query) return;
+  const candidates = library.notes.filter(note => !bodyCache.has(note.id));
+  await Promise.all(candidates.map(async note => {
+    try { bodyCache.set(note.id, await activeAdapter.read(notePath(note.id,'md'))); }
+    catch (_) { bodyCache.set(note.id, ''); }
+  }));
+  if (token === searchToken) await renderNoteList({ skipHydrate:true });
+}
+async function renderNoteList({ skipHydrate=false } = {}){
+  if (!library) return;
+  const query = $('search').value.trim();
+  const token = ++searchToken;
+  if (query && !skipHydrate) void hydrateSearchBodies(query, token);
+  const notes = notesForCollection();
+  $('list-title').textContent = query ? `Search · ${collectionLabel()}` : collectionLabel();
+  $('result-count').textContent = String(notes.length);
+  const root = $('note-list');
+  root.replaceChildren();
+  if (!notes.length){
+    const empty = document.createElement('div');
+    empty.className = 'empty-list';
+    const strong = document.createElement('strong');
+    strong.textContent = query ? 'No matching notes' : (currentCollection === 'trash' ? 'Trash is empty' : 'No notes yet');
+    const copy = document.createElement('span');
+    copy.textContent = query ? 'Try another search.' : (currentCollection === 'trash' ? 'Deleted notes stay here until you remove them forever.' : 'Create a note to begin.');
+    empty.append(strong, copy);
+    root.appendChild(empty);
+    return;
+  }
+  for (const note of notes){
+    const row = document.createElement('button');
+    row.className = 'note-row';
+    row.classList.toggle('active', note.id === selectedId);
+    const titleLine = document.createElement('div');
+    titleLine.className = 'note-title-line';
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = note.title || 'Untitled note';
+    titleLine.appendChild(title);
+    if (note.pinned){
+      const pin = document.createElement('span');
+      pin.className = 'pin';
+      pin.textContent = '◆';
+      pin.title = 'Pinned';
+      titleLine.appendChild(pin);
+    }
+    const desc = document.createElement('div');
+    desc.className = 'note-excerpt';
+    desc.textContent = note.excerpt || 'No additional text';
+    const meta = document.createElement('div');
+    meta.className = 'note-meta';
+    meta.textContent = `${formatDate(note.updatedAt)} · ${notebookName(note.notebookId)}`;
+    row.append(titleLine, desc, meta);
+    row.addEventListener('click', () => selectNote(note.id));
+    root.appendChild(row);
+  }
+}
+
+async function readNoteBody(id){
+  if (bodyCache.has(id)) return bodyCache.get(id);
+  let value = '';
+  try { value = await activeAdapter.read(notePath(id,'md')); } catch (_){}
+  bodyCache.set(id, value);
+  return value;
+}
+function populateNotebookSelect(note){
+  const select = $('notebook-select');
+  select.replaceChildren();
+  for (const notebook of library.notebooks){
+    const option = document.createElement('option');
+    option.value = notebook.id;
+    option.textContent = notebook.name;
+    option.selected = notebook.id === note.notebookId;
+    select.appendChild(option);
+  }
+}
+async function selectNote(id, { skipFlush=false } = {}){
+  if (id === selectedId && !skipFlush) return;
+  if (!skipFlush) await flushNow();
+  const note = library.notes.find(item => item.id === id);
+  if (!note) return clearEditor();
+  const token = ++loadingToken;
+  selectedId = id;
+  localStorage.setItem(SELECTION_PREFIX + activeLocation, id);
+  const body = await readNoteBody(id);
+  if (token !== loadingToken || selectedId !== id) return;
+  $('editor-empty').hidden = true;
+  $('editor-shell').hidden = false;
+  $('note-title').value = note.title === 'Untitled note' ? '' : note.title;
+  $('note-body').value = body;
+  const inTrash = !!note.trashedAt;
+  $('pin-note').textContent = inTrash ? 'Restore' : (note.pinned ? 'Unpin' : 'Pin');
+  $('trash-note').textContent = inTrash ? 'Delete forever' : 'Move to Trash';
+  $('pin-note').hidden = false;
+  populateNotebookSelect(note);
+  $('notebook-select').disabled = inTrash;
+  $('word-count').textContent = `${words(body)} words`;
+  dirty = false;
+  savedRevision = editRevision;
+  $('editor').classList.add('mobile-open');
+  renderSidebar();
+  await renderNoteList({ skipHydrate:true });
+}
+function clearEditor(){
+  selectedId = null;
+  $('editor-empty').hidden = false;
+  $('editor-shell').hidden = true;
+  $('editor').classList.remove('mobile-open');
+  $('word-count').textContent = '0 words';
+}
+
+function captureEditor(){
+  const note = selectedNote();
+  if (!note) return null;
+  const body = $('note-body').value;
+  const title = $('note-title').value.trim() || excerpt(body).split(/[.!?\n]/)[0].slice(0,80) || 'Untitled note';
+  return {
+    id:note.id,
+    title,
+    body,
+    notebookId:$('notebook-select').value || note.notebookId,
+    revision:editRevision,
+  };
+}
+function scheduleSave(){
+  if (!selectedNote()) return;
+  dirty = true;
+  editRevision++;
+  setSaveState('Unsaved changes');
+  $('word-count').textContent = `${words($('note-body').value)} words`;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void flushNow(), 500);
+}
+async function flushNow(){
+  clearTimeout(saveTimer);
+  const snapshot = dirty ? captureEditor() : null;
+  if (!snapshot) return saveQueue;
+  dirty = false;
+  const locationAtCapture = activeLocation;
+  saveQueue = saveQueue.catch(() => {}).then(async () => {
+    if (activeLocation !== locationAtCapture) return;
+    const note = library.notes.find(item => item.id === snapshot.id);
+    if (!note) return;
+    note.title = snapshot.title;
+    note.excerpt = excerpt(snapshot.body);
+    note.notebookId = snapshot.notebookId;
+    note.updatedAt = now();
+    bodyCache.set(note.id, snapshot.body);
+    setSaveState(`Saving to ${locationLabel(activeLocation)}…`);
+    ownWrites.set(notePath(note.id,'md'), now());
+    await activeAdapter.write(notePath(note.id,'md'), snapshot.body);
+    await writeMetadata(note);
+    await writeLibrary();
+    savedRevision = Math.max(savedRevision, snapshot.revision);
+    if (savedRevision === editRevision) setSaveState(`Saved to ${locationLabel(activeLocation)}`);
+    renderSidebar();
+    await renderNoteList({ skipHydrate:true });
+  }).catch(error => {
+    dirty = true;
+    setSaveState('Save failed');
+    showToast(`Could not save: ${error.message}`);
+  });
+  return saveQueue;
+}
+
+async function createNote(){
+  await flushNow();
+  const notebookId = library.notebooks.some(book => book.id === currentCollection)
+    ? currentCollection : DEFAULT_NOTEBOOK_ID;
+  const ts = now();
+  const note = {
+    id:uid('note'), notebookId, title:'Untitled note', excerpt:'', pinned:false,
+    trashedAt:null, createdAt:ts, updatedAt:ts,
+  };
+  library.notes.unshift(note);
+  bodyCache.set(note.id, '');
+  await activeAdapter.write(notePath(note.id,'md'), '');
+  await writeMetadata(note);
+  await writeLibrary();
+  currentCollection = notebookId;
+  renderSidebar();
+  await renderNoteList();
+  selectedId = null;
+  await selectNote(note.id);
+  $('note-title').focus();
+}
+function showTextDialog(){
+  const dialog = $('text-dialog');
+  const input = $('text-dialog-input');
+  input.value = '';
+  dialog.showModal();
+  setTimeout(() => input.focus(), 0);
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok' ? input.value.trim() : ''), { once:true });
+  });
+}
+function showDeleteDialog(){
+  const dialog = $('confirm-dialog');
+  $('confirm-dialog-title').textContent = 'Delete note forever?';
+  $('confirm-dialog-copy').textContent = 'This removes the note from this storage location and cannot be undone.';
+  const cancel = $('confirm-dialog-cancel');
+  const keep = $('confirm-dialog-keep');
+  const accept = $('confirm-dialog-ok');
+  cancel.textContent = 'Cancel';
+  keep.hidden = true;
+  accept.textContent = 'Delete forever';
+  accept.classList.add('danger');
+  dialog.showModal();
+  cancel.focus();
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once:true });
+  });
+}
+function showExternalChangeDialog(){
+  const dialog = $('confirm-dialog');
+  $('confirm-dialog-title').textContent = 'Changes arrived from storage';
+  $('confirm-dialog-copy').textContent =
+    'Reload the version from storage, or keep this editor version and save it over the incoming change.';
+  const later = $('confirm-dialog-cancel');
+  const keep = $('confirm-dialog-keep');
+  const reload = $('confirm-dialog-ok');
+  later.textContent = 'Decide later';
+  keep.textContent = 'Keep mine';
+  keep.hidden = false;
+  reload.textContent = 'Reload';
+  reload.classList.remove('danger');
+  dialog.showModal();
+  later.focus();
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue === 'ok') resolve('reload');
+      else if (dialog.returnValue === 'keep') resolve('keep');
+      else resolve('later');
+    }, { once:true });
+  });
+}
+async function createNotebook(){
+  const name = await showTextDialog();
+  if (!name) return;
+  const notebook = { id:uid('book'), name:name.slice(0,80), createdAt:now() };
+  library.notebooks.push(notebook);
+  await writeLibrary();
+  currentCollection = notebook.id;
+  selectedId = null;
+  clearEditor();
+  renderSidebar();
+  await renderNoteList();
+}
+async function togglePin(){
+  const note = selectedNote();
+  if (!note || note.trashedAt) return;
+  note.pinned = !note.pinned;
+  note.updatedAt = now();
+  await writeMetadata(note);
+  await writeLibrary();
+  $('pin-note').textContent = note.pinned ? 'Unpin' : 'Pin';
+  renderSidebar();
+  await renderNoteList({ skipHydrate:true });
+}
+async function trashOrDelete(){
+  await flushNow();
+  const note = selectedNote();
+  if (!note) return;
+  if (!note.trashedAt){
+    note.trashedAt = now();
+    note.updatedAt = now();
+    await writeMetadata(note);
+    await writeLibrary();
+    selectedId = null;
+    clearEditor();
+    renderSidebar();
+    await renderNoteList();
+    showToast('Moved to Recently Deleted');
+    return;
+  }
+  if (!await showDeleteDialog()) return;
+  await activeAdapter.delete(notePath(note.id,'md')).catch(() => {});
+  await activeAdapter.delete(notePath(note.id,'json')).catch(() => {});
+  library.notes = library.notes.filter(item => item.id !== note.id);
+  bodyCache.delete(note.id);
+  await writeLibrary();
+  selectedId = null;
+  clearEditor();
+  renderSidebar();
+  await renderNoteList();
+  showToast('Note deleted forever');
+}
+async function restoreSelected(){
+  const note = selectedNote();
+  if (!note?.trashedAt) return;
+  note.trashedAt = null;
+  note.updatedAt = now();
+  await writeMetadata(note);
+  await writeLibrary();
+  currentCollection = note.notebookId;
+  renderSidebar();
+  await renderNoteList();
+  await selectNote(note.id, { skipFlush:true });
+  showToast('Note restored');
+}
+
+function applyFormatting(button){
+  const area = $('note-body');
+  const start = area.selectionStart;
+  const end = area.selectionEnd;
+  const value = area.value;
+  if (button.dataset.wrap != null){
+    const mark = button.dataset.wrap;
+    area.setRangeText(mark + value.slice(start,end) + mark, start, end, 'select');
+    area.selectionStart = start + mark.length;
+    area.selectionEnd = end + mark.length;
+  } else {
+    const prefix = button.dataset.prefix || '';
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+    area.setRangeText(prefix, lineStart, lineStart, 'end');
+  }
+  area.focus();
+  scheduleSave();
+}
+
+function isOwnWrite(path){
+  const ts = ownWrites.get(path);
+  if (!ts) return false;
+  if (now() - ts < 2500) return true;
+  ownWrites.delete(path);
+  return false;
+}
+async function reloadExternalChanges(){
+  $('remote-change').hidden = true;
+  if (dirty || editRevision > savedRevision){
+    const decision = await showExternalChangeDialog();
+    if (decision === 'later'){
+      $('remote-change').hidden = false;
+      setSaveState('Changes arrived — choose which version to keep');
+      return;
+    }
+    if (decision === 'keep'){
+      scheduleSave();
+      await flushNow();
+      showToast('Kept this version');
+      return;
+    }
+    clearTimeout(saveTimer);
+    dirty = false;
+    editRevision = savedRevision;
+  }
+  await loadLibrary();
+  showToast('Reloaded changes from storage');
+}
+async function handleFsEvent(event){
+  const paths = [event.path,event.from,event.to].filter(Boolean);
+  if (event.source !== 'remote' && paths.length && paths.every(isOwnWrite)) return;
+  if (dirty || editRevision > savedRevision){
+    clearTimeout(saveTimer);
+    $('remote-change').hidden = false;
+    setSaveState('Changes arrived — choose which version to keep');
+    return;
+  }
+  clearTimeout(remoteReloadTimer);
+  remoteReloadTimer = setTimeout(() => void reloadExternalChanges(), 180);
+}
+async function subscribeToLocation(){
+  if (unsubscribeFs){
+    try { unsubscribeFs(); } catch (_){}
+    unsubscribeFs = null;
+  }
+  if (activeLocation === 'browser' || typeof naklios.fs.subscribe !== 'function') return;
+  try {
+    unsubscribeFs = await naklios.fs.subscribe('', handleFsEvent);
+  } catch (_) {}
+}
+
+function applyTheme(theme){
+  const colors = theme?.colors;
+  if (!colors) return;
+  const root = document.documentElement.style;
+  root.setProperty('--body', colors.BODY);
+  root.setProperty('--panel', colors.PANEL);
+  root.setProperty('--ink', colors.INK);
+  root.setProperty('--brand', colors.BRAND);
+  root.setProperty('--act', colors.ACT);
+  root.setProperty('--ok', colors.OK);
+  root.setProperty('--row', colors.ROW);
+}
+
+$('new-note').addEventListener('click', () => void createNote());
+$('new-notebook').addEventListener('click', () => void createNotebook());
+$('pin-note').addEventListener('click', () => {
+  if (selectedNote()?.trashedAt) void restoreSelected();
+  else void togglePin();
+});
+$('trash-note').addEventListener('click', () => {
+  if (selectedNote()?.trashedAt) void trashOrDelete();
+  else void trashOrDelete();
+});
+$('notebook-select').addEventListener('change', async () => {
+  const target = $('notebook-select').value;
+  scheduleSave();
+  await flushNow();
+  currentCollection = target;
+  renderSidebar();
+  await renderNoteList();
+});
+$('note-title').addEventListener('input', scheduleSave);
+$('note-body').addEventListener('input', scheduleSave);
+$('search').addEventListener('input', () => void renderNoteList());
+$('remote-change').addEventListener('click', () => void reloadExternalChanges());
+$('mobile-back').addEventListener('click', () => $('editor').classList.remove('mobile-open'));
+document.querySelectorAll('[data-wrap],[data-prefix]').forEach(button => {
+  button.addEventListener('click', () => applyFormatting(button));
+});
+$('note-body').addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's'){
+    event.preventDefault();
+    void flushNow();
+  }
+});
+window.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n'){
+    event.preventDefault();
+    void createNote();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f'){
+    event.preventDefault();
+    $('search').focus();
+  }
+  if (event.key === 'Escape' && innerWidth <= 580) $('editor').classList.remove('mobile-open');
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') void flushNow();
+});
+naklios.beforeClose(() => flushNow());
+naklios.theme.onChange(applyTheme);
+naklios.theme.request();
+
+let capabilityBootTimer = setTimeout(() => {
+  if (!capabilitiesReady){
+    capabilitiesReady = true;
+    void chooseInitialLocation();
+  }
+}, 650);
+naklios.onCapabilitiesChange(capabilities => {
+  renderLocations();
+  if (!capabilitiesReady && (capabilities.fsBackends.length || !capabilities.hosted)){
+    clearTimeout(capabilityBootTimer);
+    capabilitiesReady = true;
+    void chooseInitialLocation();
+    return;
+  }
+  if (capabilitiesReady && activeLocation !== 'browser' &&
+      !capabilities.fsBackends.some(item => item.id === activeLocation)){
+    void handleActiveLocationDisconnect();
+  }
+});
+naklios.requestCapabilities();
+naklios.ready();
+})();
+</script>
+</body>
+</html>

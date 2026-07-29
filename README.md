@@ -30,6 +30,11 @@ One line in the `APPS` array at the top of `index.html`:
 
 Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`, `embedUrl:'https://naklios.dev/apps/<id>/'` (same-origin mirror for FSA-needing apps; see `apps/manifest.json`).
 
+Stateful and cooperative apps should follow the
+[`NakliOS app contract`](docs/app-contract.md), including backend-affine
+filesystem calls, separate Browser/Folder/Crate libraries, async close
+durability, and explicit remote-conflict handling.
+
 ## Mirroring an app for same-origin embedding
 
 Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-System-Access-using app inside Immersive mode, mirror it under `apps/<id>/` so it loads from `naklios.dev` itself.
@@ -88,6 +93,15 @@ The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and lo
 **Notepad v2** is a practical multi-document editor with horizontal open-document tabs, autosave, search/replace (including case-sensitive and regular-expression modes), go-to-line, Markdown edit/split/preview modes, local file open/Save As, import/download, word wrap, font and tab-size controls, and keyboard shortcuts. Persistence follows a deliberate order: an app-scoped NakliOS Folder or Crate whenever one is connected, durable local file handles when working from this device, then an IndexedDB recovery/session journal (with the former localStorage registry retained only as a compatibility fallback). The journal restores open tabs and newer unsaved text after a crash, reload, or shutdown. Switching locations never migrates data implicitly, and the original v1 scratch value is preserved after one-time migration.
 
 **Books v1.1** remains hosted in both desktop modes. It uses the current storage SDK, keeps Folder and Crate libraries isolated, and adds filtering, sorting, duplicate protection, modal-confirmed removal, and reader appearance preferences. Local development loads the sibling `Books/` checkout; production keeps the cross-origin published app.
+
+**Notes v1** is a bundled three-pane notebook app that stays hosted in both
+desktop modes. Browser, Folder, and encrypted Crate are visibly separate
+libraries: switching locations never copies or deletes notes. Notes autosaves
+Markdown content and separate JSON metadata, restores its library after
+reloads, supports notebooks, full-text search, pinning, and soft deletion, and
+uses `naklios.fs.subscribe()` for live storage-change notifications when the
+host backend supports them. It complements Notepad: Notes manages a library;
+Notepad opens arbitrary files.
 
 ## License
 
