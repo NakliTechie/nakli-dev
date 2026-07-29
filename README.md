@@ -21,7 +21,18 @@ the storage capabilities currently offered to that app, and whether the
 artifact is built in, canonical, or a mirror locked to a source commit and
 SHA-256.
 
-## Adding a new app
+## Adding apps
+
+People can install a personal web app from **Settings → Apps → Add app from
+manifest**. The versioned
+[`third-party app standard`](docs/third-party-apps-v1.md) defines identity,
+themes, lifecycle, app-scoped storage, permissions, sandboxing, updates,
+accessibility, and acceptance checks. Personal registrations are profile-local.
+Windowed apps are always opaque-origin sandboxed; apps that require their own
+origin state can explicitly open in a normal top-level tab. Neither route
+becomes a privileged mirror.
+
+Maintainers add a first-party catalog app in source:
 
 One line in the `APPS` array at the top of `index.html`:
 

@@ -62,3 +62,6 @@ jobs:
 
       - name: Verify the experience-mode compatibility policy
         run: node scripts/test-experience-mode-policy.mjs
+
+      - name: Verify third-party app manifests, isolation, and lifecycle
+        run: node scripts/test-third-party-apps.mjs
