@@ -863,6 +863,24 @@ body.is-mobile .nw-dock{display:none;}
 }
 .nw-dlg-copy-btn.copied{ color:var(--ok); border-color:var(--ok); }
 
+.nw-crate-handoff{
+  width:min(900px,calc(100vw - 28px));height:min(720px,calc(100vh - 28px));
+  padding:0;border:1px solid var(--line);border-radius:14px;
+  background:var(--panel);color:var(--ink);box-shadow:0 24px 80px rgba(0,0,0,.42);
+}
+.nw-crate-handoff::backdrop{background:rgba(8,12,14,.62);backdrop-filter:blur(3px)}
+.nw-crate-handoff-shell{height:100%;display:flex;flex-direction:column;min-height:0}
+.nw-crate-handoff-head{
+  min-height:54px;display:flex;align-items:center;gap:12px;padding:9px 13px 9px 17px;
+  border-bottom:1px solid var(--line);background:var(--panel)
+}
+.nw-crate-handoff-head strong{font-size:14px}
+.nw-crate-handoff-head span{font-size:11px;color:var(--muted);flex:1}
+.nw-crate-handoff-frame{border:0;min-height:0;flex:1;width:100%;background:var(--body)}
+.nw-crate-handoff-foot{
+  padding:8px 14px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)
+}
+
 /* Per-window App Info diagnostics. */
 .nw-app-info{ width:min(620px, 94vw); }
 .nw-app-info .nw-dlg-form{ gap:12px; }
@@ -2013,8 +2031,249 @@ async function crateSaveCredsBlob(bytes){
   await idbSet('crateCreds', bytes);
 }
 
+async function crateSaveCredsBlobCreateOnly(bytes){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).add(bytes, 'crateCreds');
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(
+      tx.error?.name === 'ConstraintError'
+        ? new DOMException('Crate credentials already exist', 'ConstraintError')
+        : (tx.error || new Error('Could not store Crate credentials'))
+    );
+    tx.onerror = () => {
+      // onabort is the single rejection path for transaction failures.
+    };
+  });
+}
+
 async function crateClearCredsBlob(){
   await idbDel('crateCreds').catch(() => {});
+}
+
+// Crate → NakliOS encrypted setup handoff (receiver v1).
+//
+// NakliOS creates an unguessable, memory-only nonce and loads only the
+// canonical Crate origin in a sandboxed cross-origin iframe. The sender may
+// return the already-encrypted `.crate-creds` JSON, never raw bucket fields or
+// a passphrase. Origin + source-window + nonce are all required, and a valid
+// envelope still needs explicit user consent before IndexedDB is changed.
+const CRATE_SETUP_ORIGIN = 'https://crate.naklios.dev';
+const CRATE_SETUP_TTL_MS = 2 * 60 * 1000;
+let crateSetupSession = null;
+
+function crateSetupNonce(){
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function crateSetupBase64Length(value, label){
+  if (
+    typeof value !== 'string' || !value.length || value.length > 200000
+    || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  ) throw new Error('Invalid encrypted credentials ' + label);
+  try { return atob(value).length; }
+  catch (_) { throw new Error('Invalid encrypted credentials ' + label); }
+}
+
+function validateCrateSetupEnvelope(text){
+  if (typeof text !== 'string' || !text.length || text.length > 256000) {
+    throw new Error('Encrypted credentials payload is missing or too large.');
+  }
+  let envelope;
+  try { envelope = JSON.parse(text); }
+  catch (_) { throw new Error('Encrypted credentials payload is not valid JSON.'); }
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    throw new Error('Encrypted credentials payload must be an object.');
+  }
+  const allowed = new Set(['v','type','hint','kdf','salt','iv','ct']);
+  if (Object.keys(envelope).some(key => !allowed.has(key))) {
+    throw new Error('Encrypted credentials payload contains unexpected fields.');
+  }
+  if (envelope.v !== 1 || envelope.type !== 'crate-creds') {
+    throw new Error('Only Crate credentials envelope v1 is supported.');
+  }
+  if (
+    !envelope.kdf || typeof envelope.kdf !== 'object'
+    || envelope.kdf.algo !== 'PBKDF2-SHA256'
+    || envelope.kdf.iter !== 600000
+    || Object.keys(envelope.kdf).some(key => key !== 'algo' && key !== 'iter')
+  ) throw new Error('Encrypted credentials use an unsupported key derivation scheme.');
+  if (typeof envelope.hint !== 'string' || !envelope.hint.trim() || envelope.hint.length > 128) {
+    throw new Error('Encrypted credentials have an invalid bucket hint.');
+  }
+  if (crateSetupBase64Length(envelope.salt, 'salt') !== 16) {
+    throw new Error('Encrypted credentials salt has the wrong length.');
+  }
+  if (crateSetupBase64Length(envelope.iv, 'IV') !== 12) {
+    throw new Error('Encrypted credentials IV has the wrong length.');
+  }
+  if (crateSetupBase64Length(envelope.ct, 'ciphertext') < 17) {
+    throw new Error('Encrypted credentials ciphertext is too short.');
+  }
+  return {
+    bytes:new TextEncoder().encode(JSON.stringify(envelope, null, 2) + '\n'),
+    hint:envelope.hint.trim(),
+  };
+}
+
+function closeCrateSetupHandoff(){
+  const session = crateSetupSession;
+  crateSetupSession = null;
+  if (!session) return;
+  clearTimeout(session.timer);
+  if (session.dialog?.open) session.dialog.close();
+  session.dialog?.remove();
+}
+
+function postCrateSetupAck(session, status){
+  try {
+    session.iframe.contentWindow.postMessage({
+      type:'naklios:crate-setup:ack:v1',
+      nonce:session.nonce,
+      status,
+    }, CRATE_SETUP_ORIGIN);
+  } catch (_) {}
+}
+
+async function handleCrateSetupMessage(event){
+  const session = crateSetupSession;
+  if (
+    !session || session.consumed || Date.now() > session.expiresAt
+    || event.origin !== CRATE_SETUP_ORIGIN
+    || event.source !== session.iframe.contentWindow
+  ) return;
+  const data = event.data;
+  if (
+    !data || typeof data !== 'object'
+    || data.type !== 'crate:naklios-setup:v1'
+    || data.nonce !== session.nonce
+    || Object.keys(data).some(key =>
+      !['type','nonce','encryptedCreds','senderVersion'].includes(key))
+  ) return;
+  session.consumed = true;
+  let validated;
+  try {
+    validated = validateCrateSetupEnvelope(data.encryptedCreds);
+  } catch (error) {
+    postCrateSetupAck(session, 'rejected');
+    await nakliosAlert(error?.message || String(error), {
+      title:'Handoff rejected',
+      kind:'error',
+    });
+    closeCrateSetupHandoff();
+    return;
+  }
+  if (state.crate || await crateLoadCredsBlob()) {
+    postCrateSetupAck(session, 'already-connected');
+    await nakliosAlert(
+      'NakliOS already has Crate credentials on this device. Disconnect them before importing a different encrypted setup.',
+      { title:'Crate already configured' },
+    );
+    closeCrateSetupHandoff();
+    return;
+  }
+  const accepted = await nakliosConfirm(
+    `Crate sent the encrypted setup for “${validated.hint}”. Store it on this device?\n\n` +
+    'The passphrase and raw bucket keys were not sent. You will enter the passphrase in NakliOS to unlock.',
+    { title:'Import encrypted Crate setup?', okLabel:'Store encrypted setup' },
+  );
+  if (crateSetupSession !== session || Date.now() > session.expiresAt) {
+    if (crateSetupSession === session) {
+      postCrateSetupAck(session, 'expired');
+      closeCrateSetupHandoff();
+    }
+    return;
+  }
+  if (!accepted) {
+    postCrateSetupAck(session, 'declined');
+    closeCrateSetupHandoff();
+    return;
+  }
+  try {
+    await crateSaveCredsBlobCreateOnly(validated.bytes);
+    state.crateBucketName = validated.hint;
+    state.crateLocked = true;
+    if (typeof broadcastCapabilities === 'function') broadcastCapabilities();
+    postCrateSetupAck(session, 'stored');
+    closeCrateSetupHandoff();
+    if (settingsOpen) { closeSettings(); openSettings('storage'); }
+    await crateInteractiveUnlock();
+    if (settingsOpen) { closeSettings(); openSettings('storage'); }
+  } catch (error) {
+    const alreadyConnected = error?.name === 'ConstraintError';
+    postCrateSetupAck(session, alreadyConnected ? 'already-connected' : 'failed');
+    closeCrateSetupHandoff();
+    await nakliosAlert(
+      alreadyConnected
+        ? 'Another NakliOS tab or setup flow connected Crate first. The encrypted setup was not overwritten.'
+        : 'The encrypted setup could not be stored: ' + (error?.message || error),
+      { title:alreadyConnected ? 'Crate already configured' : 'Crate setup failed', kind:'error' },
+    );
+  }
+}
+window.addEventListener('message', event => { void handleCrateSetupMessage(event); });
+
+async function crateInteractiveSetupHandoff(){
+  if (crateSetupSession?.dialog?.open) {
+    crateSetupSession.dialog.focus();
+    return;
+  }
+  if (state.crate || await crateLoadCredsBlob()) {
+    await nakliosAlert(
+      'NakliOS already has Crate credentials on this device. Disconnect them before importing a different encrypted setup.',
+      { title:'Crate already configured' },
+    );
+    return;
+  }
+  const nonce = crateSetupNonce();
+  const parentOrigin = location.origin;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'nw-crate-handoff';
+  dialog.setAttribute('aria-labelledby', 'nw-crate-handoff-title');
+  dialog.innerHTML = `
+    <div class="nw-crate-handoff-shell">
+      <header class="nw-crate-handoff-head">
+        <strong id="nw-crate-handoff-title">Set up Crate for NakliOS</strong>
+        <span>Only an encrypted credentials envelope can return to NakliOS.</span>
+        <button type="button" class="nw-dlg-btn" data-close>Close</button>
+      </header>
+      <iframe class="nw-crate-handoff-frame" title="Crate setup"
+        sandbox="allow-scripts allow-forms allow-downloads allow-same-origin"
+        referrerpolicy="no-referrer"></iframe>
+      <footer class="nw-crate-handoff-foot">
+        Direct handoff requires Crate’s “Send to NakliOS” action. Until that
+        sender ships, download the <code>.crate-creds</code> file and use the
+        existing file option in Settings.
+      </footer>
+    </div>`;
+  const iframe = dialog.querySelector('iframe');
+  iframe.src = CRATE_SETUP_ORIGIN + '/?naklios-handoff=v1&parentOrigin=' +
+    encodeURIComponent(parentOrigin) + '&nonce=' + encodeURIComponent(nonce);
+  document.body.appendChild(dialog);
+  const timer = setTimeout(() => {
+    if (crateSetupSession?.nonce !== nonce) return;
+    postCrateSetupAck(crateSetupSession, 'expired');
+    closeCrateSetupHandoff();
+    void nakliosAlert('The Crate setup handoff expired. Start it again when you are ready.', {
+      title:'Handoff expired',
+    });
+  }, CRATE_SETUP_TTL_MS);
+  crateSetupSession = {
+    nonce,
+    dialog,
+    iframe,
+    timer,
+    expiresAt:Date.now() + CRATE_SETUP_TTL_MS,
+    consumed:false,
+  };
+  dialog.querySelector('[data-close]').addEventListener('click', closeCrateSetupHandoff);
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    closeCrateSetupHandoff();
+  });
+  dialog.showModal();
 }
 
 // crateUnlock — given a creds-file byte buffer + passphrase, instantiate
@@ -5013,6 +5272,7 @@ function openSettings(section){
       <div class="nw-fs-connect-actions">
         <button class="nw-fs-btn-primary" id="crate-connect-file">Use <code>.crate-creds</code> file…</button>
         <button class="nw-fs-btn-secondary" id="crate-connect-manual">Enter bucket details…</button>
+        <button class="nw-fs-btn-secondary" id="crate-connect-handoff">Open Crate setup…</button>
       </div>
     `}
     <div class="nw-fs-blurb">${crateUnlocked || crateLocked
@@ -5086,6 +5346,10 @@ function openSettings(section){
   wrap.querySelector('#crate-connect-manual')?.addEventListener('click', async (e) => {
     e.preventDefault();
     if (await crateInteractiveManual()){ closeSettings(); openSettings(); }
+  });
+  wrap.querySelector('#crate-connect-handoff')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await crateInteractiveSetupHandoff();
   });
 
   wrap.querySelector('#crate-unlock')?.addEventListener('click', async () => {
