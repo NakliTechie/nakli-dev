@@ -1,15 +1,15 @@
 # NakliOS
 
-A private, browser-native desktop for single-file tools. Apps stay standalone; NakliOS gives them a home — a spotlight (⌘K), themed wallpapers, folders, a dock, sticky notes, and an Immersive mode where cooperative apps feel native inside the OS instead of foreign in iframes.
+A private, browser-native desktop for single-file tools. Apps stay standalone; NakliOS gives them a home — a spotlight (⌘K), themed wallpapers, task-based folders, an Essentials dock, sticky notes, and windowed apps that feel native inside the OS.
 
 **Try it: [naklios.dev](https://naklios.dev/)**
 
-40-odd privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. The [NakliTechie collection](https://naklitechie.github.io/) is the first apps NakliOS hosts. No build step, no backend, no telemetry.
+Dozens of privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. A new profile starts with one skippable welcome action that creates a real Browser-backed note; storage setup waits until it is actually needed. The desktop is grouped into Essentials, Create & Convert, Think & Research, Work & Build, Privacy & Security, and Play. No build step, backend, or telemetry.
 
 ## Modes
 
-- **Basic** — built-in classics (Minesweeper, Solitaire, Calculator, Notepad, Spider) open as inline windows; storage-dependent system apps such as Files, Tijori, and Books stay hosted; other apps open a new tab. Default.
-- **Immersive** *(experimental)* — light apps open as iframe windows inside the desktop.
+- **Immersive** — the default for new profiles. Compatible apps open in responsive NakliOS windows on desktop and mobile; apps that cannot embed still open in a tab.
+- **Basic** — built-ins and storage-dependent system apps stay hosted; other web apps open in new tabs. An existing explicit Basic preference is preserved.
 
 Every NakliOS window has an **App Info** button in its titlebar. It shows the
 actual loaded URL and origin, iframe sandbox tokens, load/SDK-ready timings,
@@ -85,6 +85,10 @@ Cooperative apps that want persistent state use the `naklios.fs.*` SDK surface. 
 - **Crate (cloud, encrypted)** — BYOK end-to-end-encrypted folder on Cloudflare R2. Multi-device sync is built in. Connect with the `.crate-creds` file from [crate.naklios.dev](https://crate.naklios.dev/), or enter the bucket name, account ID, API keys, and folder passphrase directly.
 
 Both can be connected at the same time. On first use, each app is asked which backend to store its data in, and cooperative apps can surface that same choice in their own storage picker. NakliOS confirms every explicit rebind, remembers it per app, and does not copy or delete data when switching. Apps see the same `apps/<id>/` layout regardless of backend, so the same source code works against either.
+
+**Files intentionally has no Browser-backed virtual filesystem.** It browses only
+its app-scoped data in a connected Folder or Crate, and routes disconnected
+users directly to NakliOS Storage settings.
 
 The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and loaded dynamically the first time the user clicks **Connect Crate** — zero cost for users who don't opt in.
 

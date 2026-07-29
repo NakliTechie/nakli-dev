@@ -21,7 +21,7 @@ assert.ok(notesEntry, 'Notes launcher entry exists');
 assert.match(notesEntry[0], /kind:'system'/, 'Notes remains hosted in Basic and Immersive modes');
 assert.match(notesEntry[0], /url:'\.\/apps\/notes\/'/, 'Notes uses the bundled same-origin app');
 assert.match(notesEntry[0], /Browser, Folder, or encrypted Crate/, 'launcher describes distinct storage locations');
-assert.match(host, /if \(app\.kind === 'system'\) return spawnIframeWindow\(app\);/);
+assert.match(host, /if \(app\.kind === 'system'\) return spawnIframeWindow\(app, options\);/);
 
 assert.match(notes, /<script src="\.\.\/\.\.\/sdk\/naklios\.js"><\/script>/, 'Notes loads the public SDK');
 assert.doesNotMatch(notes, /\b(?:alert|confirm|prompt)\s*\(/, 'Notes uses styled dialogs only');
@@ -32,6 +32,8 @@ for (const method of ['read', 'write', 'delete', 'exists', 'list', 'useBackend',
 }
 assert.match(notes, /indexedDB\.open\('naklios-notes-v1'/, 'Browser library persists in IndexedDB');
 assert.match(notes, /const LOCATION_KEY = 'naklios\.notes\.location'/, 'selected library survives reload');
+assert.match(notes, /LAUNCH_ACTION === 'new-note'[\s\S]*?await createNote\(\)/,
+  'first-run onboarding can create a real Browser-backed note after storage boot');
 assert.match(notes, /Nothing was copied/, 'switching libraries explicitly avoids migration');
 
 assert.match(notes, /const LIBRARY_FILE = 'library\.json'/, 'library index has a stable path');

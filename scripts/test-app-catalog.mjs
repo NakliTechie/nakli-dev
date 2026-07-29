@@ -29,16 +29,45 @@ for (const retiredId of [
   );
 }
 
+for (const [id, name] of [
+  ['fld-essentials', 'Essentials'],
+  ['fld-create', 'Create & Convert'],
+  ['fld-research', 'Think & Research'],
+  ['fld-work', 'Work & Build'],
+  ['fld-privacy', 'Privacy & Security'],
+  ['fld-games', 'Play'],
+]) {
+  assert.match(html, new RegExp(`id:'${id}'[\\s\\S]*?name:'${name}'`),
+    `${name} task folder must be present`);
+}
 assert.match(
   html,
-  /id:'fld-utilities'[\s\S]*?apps:\[[^\]]*'rangrez'/,
-  'Rangrez remains available as a practical Utilities app',
+  /id:'fld-create'[\s\S]*?apps:\[[^\]]*'rangrez'/,
+  'Rangrez remains available under Create & Convert',
 );
 assert.doesNotMatch(
   html,
-  /id:'fld-fun'/,
-  'the portfolio-style Fun folder must not return',
+  /id:'fld-(?:fun|utilities)'/,
+  'legacy portfolio-style folders must not return',
 );
+assert.match(
+  html,
+  /state\.layout\.pinned = \['files','notes','notepad','books'\]/,
+  'new profiles pin the four Essentials apps',
+);
+assert.match(
+  html,
+  /function getDesktopItems\(\)[\s\S]*?for \(const folder of FOLDERS\)[\s\S]*?if \(isInFolder\(app\.id\)\) continue/,
+  'the cold desktop is task folders plus deliberate user pull-outs',
+);
+
+const appsBlock = html.slice(html.indexOf('const APPS = ['), html.indexOf('const FOLDERS = ['));
+const foldersBlock = html.slice(html.indexOf('const FOLDERS = ['), html.indexOf('// Build a Set of all app ids'));
+const activeAppIds = [...appsBlock.matchAll(/\{ id:'([^']+)'/g)].map(match => match[1]);
+for (const appId of activeAppIds) {
+  const homes = [...foldersBlock.matchAll(new RegExp(`'${appId}'`, 'g'))];
+  assert.equal(homes.length, 1, `${appId} must have exactly one task-folder home`);
+}
 
 assert.match(
   html,

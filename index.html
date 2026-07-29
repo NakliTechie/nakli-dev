@@ -16,8 +16,8 @@
 :root{
   --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
   --brand:#c8512a; --act:#3a5a8a; --ok:#7a9a3a; --row:#221a13;
-  --muted:color-mix(in srgb, var(--ink) 60%, var(--body));
-  --faint:color-mix(in srgb, var(--ink) 30%, var(--body));
+  --muted:color-mix(in srgb, var(--ink) 70%, var(--body));
+  --faint:color-mix(in srgb, var(--ink) 62%, var(--body));
   --line:color-mix(in srgb, var(--ink) 14%, transparent);
   --line-strong:color-mix(in srgb, var(--ink) 30%, transparent);
   --tile-bg:var(--panel);
@@ -355,6 +355,10 @@ input{font:inherit; color:inherit;}
   background:#fff;
 }
 .nw-window.is-dragging .nw-body iframe{pointer-events:none;}
+.nw-window.is-mobile-window{
+  min-width:0; min-height:0;
+  border-left:0; border-right:0; border-radius:0;
+}
 
 /* ── OVERLAYS ── */
 #overlay-root{position:absolute; inset:0; pointer-events:none; z-index:1000;}
@@ -366,6 +370,41 @@ input{font:inherit; color:inherit;}
   display:flex; align-items:flex-start; justify-content:center;
   padding-top:14vh;
 }
+
+/* ── FIRST RUN ── */
+.nw-welcome-backdrop{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  padding:24px;
+  background:color-mix(in srgb, var(--body) 68%, rgba(0,0,0,.62));
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+}
+.nw-welcome{
+  width:min(480px, 100%);
+  border:1px solid var(--line-strong); border-radius:18px;
+  background:var(--panel); color:var(--ink);
+  box-shadow:var(--shadow);
+  padding:28px;
+}
+.nw-welcome-mark{
+  width:44px; height:44px; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  margin-bottom:18px;
+  background:linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 58%, var(--act)));
+  color:var(--panel); font-size:22px; font-weight:800;
+}
+.nw-welcome h2{margin:0 0 10px; font-size:24px; letter-spacing:-.02em;}
+.nw-welcome p{margin:0; color:var(--muted); line-height:1.55; font-size:14px;}
+.nw-welcome-actions{display:flex; flex-wrap:wrap; gap:10px; margin-top:24px;}
+.nw-welcome-primary,
+.nw-welcome-secondary{
+  min-height:42px; padding:9px 16px; border-radius:9px;
+  border:1px solid var(--line-strong); font-weight:650;
+}
+.nw-welcome-primary{background:var(--brand); color:var(--panel); border-color:var(--brand);}
+.nw-welcome-secondary{background:var(--row); color:var(--ink);}
+.nw-welcome-primary:hover{filter:brightness(1.06);}
+.nw-welcome-secondary:hover{border-color:var(--brand);}
 
 /* ── SPOTLIGHT ── */
 .nw-spotlight{
@@ -443,6 +482,7 @@ input{font:inherit; color:inherit;}
   cursor:pointer; border-radius:8px; overflow:hidden;
   border:2px solid transparent;
   transition:transform 0.12s;
+  padding:0; text-align:initial;
 }
 .nw-wp:hover{transform:translateY(-1px);}
 .nw-wp.is-active{border-color:var(--brand);}
@@ -1204,12 +1244,17 @@ body.is-mobile .nw-dock{display:none;}
   body.is-mobile #mode-pill,
   body.is-mobile .brand-sub,
   body.is-mobile .topbar-chip-label{display:none;}
-  body.is-mobile .topbar-chip{padding:5px 8px;}
-  body.is-mobile #spotlight-btn{min-width:0; padding:6px 8px;}
+  body.is-mobile .topbar-chip,
+  body.is-mobile .topbar-btn{
+    min-width:44px; min-height:44px; padding:5px 8px;
+    justify-content:center;
+  }
+  body.is-mobile #spotlight-btn{min-width:44px; padding:6px 8px;}
   body.is-mobile #spotlight-btn span:first-child{font-size:0;}
   body.is-mobile #spotlight-btn::before{content:"🔍"; font-size:14px;}
   body.is-mobile #topbar{padding:0 10px; gap:8px;}
   body.is-mobile .brand{font-size:13px;}
+  body.is-mobile #footer-nav .moat{display:none;}
   body.is-mobile .icon-area{
     padding:16px;
     display:grid !important;
@@ -1220,6 +1265,15 @@ body.is-mobile .nw-dock{display:none;}
   body.is-mobile .nw-icon{
     position:static !important;
     width:auto; height:auto;
+  }
+  body.is-mobile .nw-titlebar{
+    height:44px; padding:0 4px; gap:2px;
+  }
+  body.is-mobile .nw-info-btn,
+  body.is-mobile .nw-min-btn,
+  body.is-mobile .nw-fs-btn,
+  body.is-mobile .nw-close{
+    width:44px; height:44px; flex:0 0 44px;
   }
 }
 @media (max-width: 380px){
@@ -1237,23 +1291,23 @@ body.is-mobile .nw-dock{display:none;}
       <span class="brand-sub">— private browser desktop</span>
     </div>
     <div class="topbar-spacer"></div>
-    <button id="spotlight-btn" class="topbar-btn" title="Search apps (⌘K)">
+    <button id="spotlight-btn" class="topbar-btn" title="Search apps (⌘K)" aria-label="Search apps">
       <span>Search apps…</span>
       <span class="kbd" id="kbd-hint">⌘K</span>
     </button>
-    <button id="fsa-chip" class="topbar-chip" title="Local folder backend">
+    <button id="fsa-chip" class="topbar-chip" title="Local folder backend" aria-label="Folder — not connected">
       <span class="topbar-chip-dot"></span>
       <span class="topbar-chip-icon">📁</span>
       <span class="topbar-chip-label">Folder</span>
     </button>
-    <button id="crate-chip" class="topbar-chip" title="Crate cloud backend">
+    <button id="crate-chip" class="topbar-chip" title="Crate cloud backend" aria-label="Crate — not connected">
       <span class="topbar-chip-dot"></span>
       <span class="topbar-chip-icon">☁️</span>
       <span class="topbar-chip-label">Crate</span>
     </button>
-    <span id="mode-pill" title="Click Settings to change mode">Basic</span>
+    <button id="mode-pill" type="button" title="Click Settings to change mode" aria-label="Experience mode: Immersive">Immersive</button>
     <span id="clock">—</span>
-    <button id="settings-btn" class="topbar-btn" title="Settings">⚙</button>
+    <button id="settings-btn" class="topbar-btn" title="Settings" aria-label="Settings">⚙</button>
   </header>
 
   <main id="icon-grid">
@@ -1415,14 +1469,23 @@ const APPS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════
-// FOLDERS — group apps on the desktop. Classics stay un-foldered.
-// Click a folder → centered popover with the contained apps.
+// FOLDERS — a task-based first-level information architecture.
+// Every app has one predictable home; the Essentials dock keeps the four
+// everyday file-backed tools one click away.
 // ════════════════════════════════════════════════════════════════════
 const FOLDERS = [
-  { id:'fld-games', kind:'folder', name:'Games', glyph:'🎮', bg:'brand',
-    apps:['kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
-  { id:'fld-utilities', kind:'folder', name:'Utilities', glyph:'🧰', bg:'ok',
-    apps:['mantra','rotor','mehfil','kagaz','rangrez','babellocal','sniplocal','blurlocal','striplocal','scanlocal','voicevault','bolo','sansadlocal','nemawashi'] },
+  { id:'fld-essentials', kind:'folder', name:'Essentials', glyph:'✦', bg:'brand',
+    apps:['files','notes','notepad','books','calculator'] },
+  { id:'fld-create', kind:'folder', name:'Create & Convert', glyph:'🎨', bg:'ok',
+    apps:['slate','kagaz','rangrez','sniplocal','blurlocal','striplocal','scanlocal','voicevault','bolo'] },
+  { id:'fld-research', kind:'folder', name:'Think & Research', glyph:'🔎', bg:'act',
+    apps:['mantra','babellocal','localmind','vaultmind','sansadlocal'] },
+  { id:'fld-work', kind:'folder', name:'Work & Build', glyph:'🧭', bg:'ok',
+    apps:['kanzen','nakliposter','bofh','mod','nemawashi'] },
+  { id:'fld-privacy', kind:'folder', name:'Privacy & Security', glyph:'🔐', bg:'brand',
+    apps:['tijori','rotor','mehfil'] },
+  { id:'fld-games', kind:'folder', name:'Play', glyph:'🎮', bg:'act',
+    apps:['minesweeper','solitaire','spider','kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
 ];
 
 // Build a Set of all app ids that are inside any folder (for fast lookup)
@@ -1492,6 +1555,14 @@ const THEMES = [
 // STATE
 // ════════════════════════════════════════════════════════════════════
 const LS_KEY = { mode:'nakliOS.mode', theme:'nakliOS.theme', layout:'nakliOS.layout' };
+const WELCOME_KEY = 'nakliOS.welcome.v1';
+// Capture this before boot writes the default theme/layout. A returning user
+// should not be shown onboarding just because the welcome flag is new.
+const HAD_EXISTING_PROFILE = Object.keys(localStorage)
+  .some(key => {
+    const normalized = key.toLowerCase();
+    return normalized.startsWith('naklios.') || normalized.startsWith('naklos.');
+  });
 
 // Migrate v2.15 brand rename: naklOS.* → nakliOS.* (preserve existing users' state)
 (function migrateBrandKeys(){
@@ -1551,17 +1622,24 @@ const state = {
 
 function isCoarse(){ return matchMedia('(pointer: coarse)').matches; }
 function isMobile(){ return isCoarse() || innerWidth < 720; }
-function getDefaultMode(){ return 'basic'; }
+function getDefaultMode(){ return 'immersive'; }
 function getMode(){ return state.mode || getDefaultMode(); }
+
+function renderModePill(m = getMode()){
+  const label = m === 'immersive' ? 'Immersive' : 'Basic';
+  const pill = document.getElementById('mode-pill');
+  if (!pill) return;
+  pill.textContent = label;
+  pill.setAttribute('aria-label', `Experience mode: ${label}`);
+}
 
 function setMode(m){
   state.mode = m;
   localStorage.setItem(LS_KEY.mode, m);
-  document.getElementById('mode-pill').textContent = m === 'immersive' ? 'Immersive' : 'Basic';
+  renderModePill(m);
   fsScheduleStateWrite();
 }
 function effectiveMode(app){
-  if (isMobile()) return 'basic';
   let m = getMode();
   if (m === 'immersive' && app && app.maxMode === 'basic') m = 'basic';
   return m;
@@ -1576,9 +1654,10 @@ function saveAppPermissions(){
   fsScheduleStateWrite();
 }
 
-// Default-pin the four classics so new users see something useful in the dock.
+// New profiles start with the everyday file-backed tools in the dock.
+// Existing customized docks are preserved exactly as saved.
 if (!state.layout.pinned){
-  state.layout.pinned = ['minesweeper','solitaire','calculator','notepad'];
+  state.layout.pinned = ['files','notes','notepad','books'];
   saveLayout();
 }
 state.layout.unfoldered = state.layout.unfoldered || [];
@@ -2732,8 +2811,8 @@ function nakliosManualCreds(opts = {}){
     dlg.className = 'nw-dlg nw-dlg-manual';
     dlg.innerHTML = `
       <form method="dialog" class="nw-dlg-form">
-        <h3 class="nw-dlg-title">${_dlgEscape(opts.title || 'Enter credentials')}</h3>
-        ${opts.body ? `<p class="nw-dlg-hint">${_dlgEscape(opts.body)}</p>` : ''}
+        <h3 class="nw-dlg-title" id="nw-manual-creds-title">${_dlgEscape(opts.title || 'Enter credentials')}</h3>
+        ${opts.body ? `<p class="nw-dlg-hint" id="nw-manual-creds-hint">${_dlgEscape(opts.body)}</p>` : ''}
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Bucket name</span>
           <input name="bucketName" type="text" autocomplete="off"
@@ -2771,6 +2850,8 @@ function nakliosManualCreds(opts = {}){
         </menu>
       </form>
     `;
+    dlg.setAttribute('aria-labelledby', 'nw-manual-creds-title');
+    if (opts.body) dlg.setAttribute('aria-describedby', 'nw-manual-creds-hint');
     document.body.appendChild(dlg);
 
     const form   = dlg.querySelector('form');
@@ -2863,14 +2944,12 @@ function applyTheme(id){
 const ICON_W = 104, ICON_H = 124; // grid cell (with label below)
 const GRID_PAD = 24;
 
-// Items shown on the main desktop: classics first, then folders, then any
-// ungrouped non-classic apps (defensive — should be empty if FOLDERS covers all).
+// Items shown on the main desktop: task folders, then any apps deliberately
+// pulled out by the user (or defensively left ungrouped).
 function getDesktopItems(){
   const items = [];
-  for (const app of APPS) if (app.kind === 'classic') items.push(app);
   for (const folder of FOLDERS) items.push(folder);
   for (const app of APPS){
-    if (app.kind === 'classic') continue;
     if (isInFolder(app.id)) continue; // dynamic — respects state.layout.unfoldered
     items.push(app);
   }
@@ -2945,6 +3024,15 @@ function renderIcons(){
       const pb = pos[b.id] || {x:99, y:99};
       if (pa.y !== pb.y) return pa.y - pb.y;
       return pa.x - pb.x;
+    });
+  } else {
+    // Absolute positioning must not make keyboard focus jump around the screen.
+    // Follow the same column-major order used by the desktop auto-layout.
+    list = list.slice().sort((a, b) => {
+      const pa = positions[a.id] || {x:99, y:99};
+      const pb = positions[b.id] || {x:99, y:99};
+      if (pa.x !== pb.x) return pa.x - pb.x;
+      return pa.y - pb.y;
     });
   }
 
@@ -3396,6 +3484,7 @@ function makeWindow(opts){
     <div class="nw-body"></div>
   `;
   root.appendChild(win);
+  fitWindowToViewport(win);
   openWindows[id] = win;
   win.addEventListener('pointerdown', () => focusWindow(win));
   win.querySelector('.nw-close').addEventListener('click', e => {
@@ -3417,6 +3506,39 @@ function makeWindow(opts){
 
 let fullscreenWin = null;
 let fullscreenSaved = null;
+
+function fitWindowToViewport(win){
+  if (!win?.isConnected) return;
+  const grid = document.getElementById('icon-grid')?.getBoundingClientRect();
+  if (!grid) return;
+  if (isMobile()){
+    if (!win.classList.contains('is-mobile-window')){
+      win._desktopGeometry = {
+        left:win.style.left,
+        top:win.style.top,
+        width:win.style.width,
+        height:win.style.height,
+      };
+    }
+    win.classList.add('is-mobile-window');
+    win.style.left = grid.left + 'px';
+    win.style.top = grid.top + 'px';
+    win.style.width = grid.width + 'px';
+    win.style.height = grid.height + 'px';
+    return;
+  }
+  if (win.classList.contains('is-mobile-window')){
+    win.classList.remove('is-mobile-window');
+    const saved = win._desktopGeometry;
+    if (saved){
+      win.style.left = saved.left;
+      win.style.top = saved.top;
+      win.style.width = saved.width;
+      win.style.height = saved.height;
+    }
+    win._desktopGeometry = null;
+  }
+}
 
 function toggleFullscreen(win){
   if (fullscreenWin === win){
@@ -3626,6 +3748,7 @@ function finalizeCloseWindow(win){
 function makeDraggable(win){
   const bar = win.querySelector('.nw-titlebar');
   bar.addEventListener('pointerdown', e => {
+    if (isMobile()) return;
     // Don't start a drag from the title buttons or interactive children
     if (e.target.closest('.nw-close, .nw-fs-btn, button')) return;
     if (e.button !== 0) return;
@@ -3684,14 +3807,17 @@ function spawnInlineWindow(app){
   builder(body, win);
 }
 
-function themedAppUrl(app){
+function themedAppUrl(app, options = {}){
   // Pass current theme so cooperating apps can inherit OS color scheme.
   // Apps that don't read these params see them as ignored extras.
   // For iframe embedding prefer app.embedUrl (same-origin mirror under naklios.dev/apps/<id>/);
   // fall back to app.url (canonical, cross-origin). Same-origin enables FSA picker etc.
   const base = app.embedUrl || app.url;
   const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}naklios-theme=${encodeURIComponent(state.theme)}`;
+  const action = options.action
+    ? `&naklios-action=${encodeURIComponent(options.action)}`
+    : '';
+  return `${base}${sep}naklios-theme=${encodeURIComponent(state.theme)}${action}`;
 }
 
 function markIframeLaunchPhase(win, phase){
@@ -3709,8 +3835,8 @@ function markIframeLaunchPhase(win, phase){
   refreshOpenAppInfo(win);
 }
 
-function spawnIframeWindow(app){
-  const embedSrc = themedAppUrl(app);
+function spawnIframeWindow(app, options = {}){
+  const embedSrc = themedAppUrl(app, options);
   // Same-origin mirrors (naklios.dev/apps/<id>/) drop the sandbox so FSA/OPFS
   // picker etc. work. Cross-origin apps keep the sandbox — that's the privacy
   // wall the "🔒 sandboxed" badge promises.
@@ -3719,7 +3845,6 @@ function spawnIframeWindow(app){
 
   const win = makeWindow({
     id:app.id, title:app.name, width:980, height:640,
-    badge: app.kind === 'system' ? undefined : 'EXPERIMENTAL',
     sandboxed: !isSameOrigin,
     app,
   });
@@ -4321,6 +4446,11 @@ function renderTopbarChips(){
   fsaChip.title = fsaState === 'active'   ? `Local folder: ${state.fsFolderName || ''}`
                 : fsaState === 'pending'  ? 'Folder permission needs re-grant'
                                           : 'No local folder connected';
+  fsaChip.setAttribute('aria-label', fsaState === 'active'
+    ? `Folder connected: ${state.fsFolderName || 'Folder'}`
+    : fsaState === 'pending'
+      ? `Folder needs permission: ${state.fsFolderName || 'Folder'}`
+      : 'Folder — not connected');
 
   // Crate chip
   const crState = crateChipState();
@@ -4332,6 +4462,11 @@ function renderTopbarChips(){
   crateChip.title = crState === 'active' ? `Crate (unlocked): ${state.crateBucketName || ''}`
                   : crState === 'locked' ? `Crate locked: ${state.crateBucketName || ''}`
                                          : 'No Crate connected';
+  crateChip.setAttribute('aria-label', crState === 'active'
+    ? `Crate connected: ${state.crateBucketName || 'Crate'}`
+    : crState === 'locked'
+      ? `Crate locked: ${state.crateBucketName || 'Crate'}`
+      : 'Crate — not connected');
 }
 
 // FSA chip click → state-appropriate menu via the existing
@@ -4423,6 +4558,8 @@ window.addEventListener('message', async e => {
   } else if (msg.type === 'naklios:capabilities-request'){
     const iframe = findIframe(); const appId = getAppId();
     if (iframe && appId) postCapabilities(iframe, appId);
+  } else if (msg.type === 'naklios:open-settings'){
+    openSettings(typeof msg.section === 'string' ? msg.section : 'storage');
   } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:fs:')){
     const reply = { type: 'naklios:fs:reply', requestId: msg.requestId };
     try {
@@ -4453,21 +4590,61 @@ function recordRecent(appId){
   saveLayout();
 }
 
-function openApp(app){
+function openApp(app, options = {}){
   recordRecent(app.id);
   if (openWindows[app.id]) { focusWindow(openWindows[app.id]); return; }
   // System apps depend on the host bridge and must remain inside NakliOS
   // even when the desktop is in Basic mode.
-  if (app.kind === 'system') return spawnIframeWindow(app);
+  if (app.kind === 'system') return spawnIframeWindow(app, options);
   const m = effectiveMode(app);
   if (m === 'immersive') {
     if (app.kind === 'classic') return spawnInlineWindow(app);
     if (app.iframeable === false) return window.open(app.url, '_blank', 'noopener');
-    return spawnIframeWindow(app);
+    return spawnIframeWindow(app, options);
   }
   // Basic
   if (app.kind === 'classic') return spawnInlineWindow(app);
   return window.open(app.url, '_blank', 'noopener');
+}
+
+function openWelcome(){
+  if (HAD_EXISTING_PROFILE || localStorage.getItem(WELCOME_KEY)) return;
+  const root = document.getElementById('overlay-root');
+  if (!root || document.getElementById('welcome-backdrop')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'nw-welcome-backdrop';
+  wrap.id = 'welcome-backdrop';
+  wrap.innerHTML = `
+    <section class="nw-welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-copy">
+      <div class="nw-welcome-mark" aria-hidden="true">n</div>
+      <h2 id="welcome-title">Welcome to NakliOS</h2>
+      <p id="welcome-copy">Your private browser desktop: create first, and connect a Folder or encrypted Crate only when an app needs it.</p>
+      <div class="nw-welcome-actions">
+        <button class="nw-welcome-primary" id="welcome-create-note" type="button">Create a note</button>
+        <button class="nw-welcome-secondary" id="welcome-explore" type="button">Explore the desktop</button>
+      </div>
+    </section>`;
+  root.appendChild(wrap);
+
+  const dismiss = () => {
+    localStorage.setItem(WELCOME_KEY, '1');
+    document.removeEventListener('keydown', onKey);
+    wrap.remove();
+  };
+  const onKey = event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    dismiss();
+  };
+  document.addEventListener('keydown', onKey);
+  wrap.querySelector('#welcome-explore').addEventListener('click', dismiss);
+  wrap.querySelector('#welcome-create-note').addEventListener('click', () => {
+    dismiss();
+    const notes = APPS.find(app => app.id === 'notes');
+    if (notes) openApp(notes, { action:'new-note' });
+  });
+  setTimeout(() => wrap.querySelector('#welcome-create-note')?.focus(), 0);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -4643,8 +4820,10 @@ function openSpotlight(){
   wrap.className = 'nw-backdrop';
   wrap.innerHTML = `
     <div class="nw-spotlight" role="dialog" aria-label="Search apps">
-      <input type="text" id="spot-input" placeholder="Search apps by name, tag, or description…" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <div class="nw-spot-list" id="spot-list"></div>
+      <input type="text" id="spot-input" role="combobox" aria-autocomplete="list"
+        aria-controls="spot-list" aria-expanded="true"
+        placeholder="Search apps by name, tag, or description…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="nw-spot-list" id="spot-list" role="listbox" aria-label="Matching apps"></div>
     </div>
   `;
   root.appendChild(wrap);
@@ -4680,7 +4859,8 @@ function openSpotlight(){
     const items = rank(input.value.trim());
     if (active >= items.length) active = 0;
     list.innerHTML = items.map((app, i) => `
-      <div class="nw-spot-item ${i === active ? 'is-active' : ''}" data-idx="${i}">
+      <div class="nw-spot-item ${i === active ? 'is-active' : ''}" id="spot-option-${i}"
+        role="option" aria-selected="${i === active}" data-idx="${i}">
         <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : (app.glyph || app.name.charAt(0))}</div>
         <div style="flex:1; min-width:0;">
           <div class="nw-spot-name">${app.name}</div>
@@ -4688,8 +4868,11 @@ function openSpotlight(){
         </div>
         <div class="nw-spot-meta">${app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || ''}</div>
       </div>
-    `).join('') || `<div class="nw-spot-item"><span class="nw-spot-desc">No matches.</span></div>`;
-    list.querySelectorAll('.nw-spot-item').forEach(el => {
+    `).join('') || `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">No matches.</span></div>`;
+    const activeOption = items.length ? `spot-option-${active}` : '';
+    if (activeOption) input.setAttribute('aria-activedescendant', activeOption);
+    else input.removeAttribute('aria-activedescendant');
+    list.querySelectorAll('.nw-spot-item[data-idx]').forEach(el => {
       el.addEventListener('click', () => {
         const idx = +el.dataset.idx;
         const items2 = rank(input.value.trim());
@@ -4722,19 +4905,39 @@ function openSpotlight(){
 // SETTINGS
 // ════════════════════════════════════════════════════════════════════
 let settingsOpen = false;
+let settingsReturnFocus = null;
 
-function openSettings(){
-  if (settingsOpen) { closeSettings(); return; }
+function focusSettingsSection(section){
+  const pop = document.getElementById('settings-pop');
+  if (!pop || section !== 'storage') return;
+  const heading = pop.querySelector('#settings-storage-heading');
+  heading?.scrollIntoView({ block:'start' });
+  pop.querySelector('#fs-connect, #fs-regrant, #crate-unlock, #crate-connect-file, #crate-connect-manual, #fs-disconnect, #crate-lock')?.focus();
+}
+
+function openSettings(section){
+  const requestedSection = typeof section === 'string' ? section : null;
+  if (settingsOpen) {
+    if (requestedSection) focusSettingsSection(requestedSection);
+    else closeSettings();
+    return;
+  }
   settingsOpen = true;
+  settingsReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
   const root = document.getElementById('overlay-root');
   const wrap = document.createElement('div');
   wrap.className = 'nw-settings';
   wrap.id = 'settings-pop';
+  wrap.setAttribute('role', 'dialog');
+  wrap.setAttribute('aria-labelledby', 'settings-title');
+  wrap.tabIndex = -1;
 
   const curMode = getMode();
   const modes = [
-    { id:'basic', name:'Basic', desc:'Built-in classics open as draggable windows. New tab for the rest.' },
-    { id:'immersive', name:'Immersive', desc:'NakliTechie apps open in windowed iframes. Bigger apps still tab out.', badge:'EXPERIMENTAL' },
+    { id:'basic', name:'Basic', desc:'Built-ins stay in NakliOS; web apps open in new tabs.' },
+    { id:'immersive', name:'Immersive', desc:'Compatible apps open in NakliOS windows. Apps that cannot embed still open in a tab.', badge:'RECOMMENDED' },
   ];
   const modeHTML = modes.map(m => `
     <label class="nw-mode-opt ${m.id === curMode ? 'is-active' : ''}">
@@ -4750,11 +4953,12 @@ function openSettings(){
     const order = ['BRAND','ACT','OK','INK'];
     const stripes = order.map(k => `<span style="background:${t.colors[k]}"></span>`).join('');
     return `
-      <div class="nw-wp ${t.id === state.theme ? 'is-active' : ''}" data-tid="${t.id}" title="${t.name} — ${t.sub}">
+      <button type="button" class="nw-wp ${t.id === state.theme ? 'is-active' : ''}"
+        data-tid="${t.id}" aria-pressed="${t.id === state.theme}" title="${t.name} — ${t.sub}">
         <div class="nw-wp-preview" style="background:${t.wallpaper};"></div>
         <div class="nw-pal-swatch" style="height:8px">${stripes}</div>
         <div class="nw-wp-label">${t.name}</div>
-      </div>`;
+      </button>`;
   }).join('');
 
   const connected = !!state.fsHandle;
@@ -4821,15 +5025,15 @@ function openSettings(){
   `;
 
   wrap.innerHTML = `
-    <h4>Mode</h4>
-    ${modeHTML}
-    ${isMobile() ? `<div style="font-size:11px; color:var(--faint); margin-top:4px;">On mobile, Basic mode is always used.</div>` : ''}
-    <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
-    <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
-    <h4>Folder (local)</h4>
+    <h3 id="settings-title" style="margin:0 0 14px; font-size:15px;">Settings</h3>
+    <h4 id="settings-storage-heading" tabindex="-1">Folder (local)</h4>
     ${fsHTML}
     <h4>Crate (cloud, encrypted)</h4>
     ${crateHTML}
+    <h4>Mode</h4>
+    ${modeHTML}
+    <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
+    <div class="nw-wp-grid" id="theme-grid">${themeHTML}</div>
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
       Single HTML file. No tracking. No data leaves your device.
@@ -4838,6 +5042,10 @@ function openSettings(){
     </div>
   `;
   root.appendChild(wrap);
+  setTimeout(() => {
+    if (requestedSection) focusSettingsSection(requestedSection);
+    else wrap.focus();
+  }, 0);
 
   wrap.querySelectorAll('input[name="nw-mode"]').forEach(r => {
     r.addEventListener('change', () => {
@@ -4849,7 +5057,10 @@ function openSettings(){
     const el = e.target.closest('.nw-wp');
     if (!el) return;
     applyTheme(el.dataset.tid);
-    wrap.querySelectorAll('.nw-wp').forEach(p => p.classList.toggle('is-active', p === el));
+    wrap.querySelectorAll('.nw-wp').forEach(p => {
+      p.classList.toggle('is-active', p === el);
+      p.setAttribute('aria-pressed', String(p === el));
+    });
   });
 
   wrap.querySelector('#fs-connect')?.addEventListener('click', async () => {
@@ -4932,8 +5143,9 @@ function pickFile(accept){
 function outsideHandler(e){
   const pop = document.getElementById('settings-pop');
   const btn = document.getElementById('settings-btn');
+  const mode = document.getElementById('mode-pill');
   if (!pop) return;
-  if (pop.contains(e.target) || btn.contains(e.target)) return;
+  if (pop.contains(e.target) || btn.contains(e.target) || mode.contains(e.target)) return;
   closeSettings();
 }
 
@@ -4942,6 +5154,9 @@ function closeSettings(){
   if (pop) pop.remove();
   settingsOpen = false;
   document.removeEventListener('pointerdown', outsideHandler);
+  const returnFocus = settingsReturnFocus;
+  settingsReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -5775,7 +5990,7 @@ Classics.notepad = (body, win) => {
     renderDocumentList();
     renderTabs();
     status.textContent = storageId === 'local' && !doc.localHandleKey
-      ? 'Recovered · This browser'
+      ? 'Saved · This browser'
       : `Saved · ${storageLabel()}`;
     return true;
   }
@@ -6116,7 +6331,7 @@ Classics.notepad = (body, win) => {
           : storageId === 'local'
             ? activeDocument()?.fileName
               ? `Ready · ${activeDocument().fileName}`
-              : 'Recovered · This browser'
+              : 'Saved · This browser'
             : `Saved · ${storageLabel()}`;
     } catch (err){
       documents = [];
@@ -7183,7 +7398,7 @@ Classics.solitaire = (body, win) => {
 async function init(){
   applyTheme(state.theme);
   updateDock();
-  document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
+  renderModePill();
 
   // Topbar backend chips — wire click handlers once, then paint based on
   // whatever the boot reconnects below land at.
@@ -7200,7 +7415,7 @@ async function init(){
     const hydrated = await fsHydrateIfNewer();
     if (hydrated){
       applyTheme(state.theme);
-      document.getElementById('mode-pill').textContent = getMode() === 'immersive' ? 'Immersive' : 'Basic';
+      renderModePill();
       renderIcons();
       updateDock();
     } else {
@@ -7246,6 +7461,7 @@ async function init(){
   document.getElementById('spotlight-btn').addEventListener('click', openSpotlight);
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('mode-pill').addEventListener('click', e => { e.stopPropagation(); openSettings(); });
+  setTimeout(openWelcome, 0);
 
   // Right-click on empty desktop → "New sticky note"
   document.getElementById('icon-area').addEventListener('contextmenu', e => {
@@ -7287,6 +7503,7 @@ async function init(){
 
   window.addEventListener('resize', () => {
     document.body.classList.toggle('is-mobile', isMobile());
+    Object.values(openWindows).forEach(fitWindowToViewport);
     renderIcons();
   });
 }

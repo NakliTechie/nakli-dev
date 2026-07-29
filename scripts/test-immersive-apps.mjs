@@ -17,7 +17,7 @@ for (const id of ['slate', 'bofh']){
 
 assert.match(
   html,
-  /if \(m === 'immersive'\)[\s\S]*?return spawnIframeWindow\(app\);/,
+  /if \(m === 'immersive'\)[\s\S]*?return spawnIframeWindow\(app, options\);/,
   'Immersive apps must launch in NakliOS iframe windows',
 );
 assert.match(

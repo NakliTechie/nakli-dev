@@ -22,7 +22,7 @@ assert.match(
 );
 assert.match(
   hostSource,
-  /if \(app\.kind === 'system'\) return spawnIframeWindow\(app\);/,
+  /if \(app\.kind === 'system'\) return spawnIframeWindow\(app, options\);/,
   "system apps must stay inside NakliOS in Basic mode",
 );
 assert.match(
@@ -43,5 +43,9 @@ assert.doesNotMatch(
   /host\.nakliOS|state\.fsHandle|walkToFile/,
   "Files must not bypass the backend abstraction or depend on an FSA handle",
 );
+assert.match(filesSource, /id="delete-dialog"/,
+  "Files deletion must use an app-styled confirmation dialog");
+assert.doesNotMatch(filesSource, /\bconfirm\s*\(/,
+  "Files deletion must not use the browser confirm popup");
 
 console.log("OK: Files stays hosted and uses the Crate-capable naklios.fs bridge");

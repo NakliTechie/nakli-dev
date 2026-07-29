@@ -137,6 +137,9 @@
     },
     title: function (s) { send('naklios:title', { title: String(s) }); },
     close: function () { send('naklios:close'); },
+    openSettings: function (section) {
+      send('naklios:open-settings', { section: String(section || '') });
+    },
     beforeClose: function (cb) { beforeCloseCb = typeof cb === 'function' ? cb : null; },
     theme: {
       get current() { return currentTheme; },

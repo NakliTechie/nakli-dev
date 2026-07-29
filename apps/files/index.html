@@ -9,8 +9,8 @@
 :root{
   --body:#15100c; --panel:#1e1813; --ink:#f5e6c8;
   --brand:#c8512a; --row:#221a13;
-  --muted:color-mix(in srgb, var(--ink) 60%, var(--body));
-  --faint:color-mix(in srgb, var(--ink) 30%, var(--body));
+  --muted:color-mix(in srgb, var(--ink) 70%, var(--body));
+  --faint:color-mix(in srgb, var(--ink) 62%, var(--body));
   --line:color-mix(in srgb, var(--ink) 14%, transparent);
   --line-strong:color-mix(in srgb, var(--ink) 30%, transparent);
 }
@@ -95,6 +95,7 @@ button.danger:hover{background:color-mix(in srgb, #d94545 30%, var(--row)); colo
   padding:8px 16px; background:var(--brand); color:var(--panel);
   border-radius:8px; cursor:pointer; font-weight:600; font-size:12px;
 }
+button:disabled{opacity:.45; cursor:not-allowed;}
 .context-menu{
   position:fixed; z-index:1000;
   background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
@@ -115,6 +116,18 @@ footer{
   display:flex; gap:12px;
 }
 footer .spacer{flex:1;}
+dialog{
+  width:min(420px, calc(100vw - 32px)); padding:0;
+  color:var(--ink); background:var(--panel);
+  border:1px solid var(--line-strong); border-radius:12px;
+  box-shadow:0 18px 60px rgba(0,0,0,.5);
+}
+dialog::backdrop{background:rgba(0,0,0,.58);}
+.dialog-body{padding:18px 18px 8px;}
+.dialog-body h2{margin:0 0 8px; font-size:16px;}
+.dialog-body p{margin:0; color:var(--muted); line-height:1.5; overflow-wrap:anywhere;}
+.dialog-actions{display:flex; justify-content:flex-end; gap:8px; padding:12px 18px 18px;}
+.dialog-actions .danger{background:#b43c3c; border-color:#b43c3c; color:#fff;}
 </style>
 </head>
 <body>
@@ -142,6 +155,19 @@ footer .spacer{flex:1;}
   <span class="spacer"></span>
   <span>NakliOS · Files</span>
 </footer>
+
+<dialog id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-copy">
+  <form method="dialog">
+    <div class="dialog-body">
+      <h2 id="delete-dialog-title">Delete file?</h2>
+      <p id="delete-dialog-copy"></p>
+    </div>
+    <div class="dialog-actions">
+      <button value="cancel" id="delete-dialog-cancel">Cancel</button>
+      <button value="delete" class="danger">Delete</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (function(){
@@ -183,14 +209,19 @@ function parent(p){
 }
 
 function notConnected(detail){
+  $('new-text').disabled = true;
   $('list').innerHTML = `
     <div class="empty">
       <div>
-        Files needs to run inside NakliOS with a Folder or Crate connected.
-        ${detail ? `<br><br>${escapeHtml(detail)}` : ''}
+        <strong>Connect storage to browse Files</strong><br><br>
+        Files uses the Folder or encrypted Crate selected in NakliOS.
+        ${detail && !/permission denied|backend disconnected/i.test(detail) ? `<br><br>${escapeHtml(detail)}` : ''}
+        <br>
+        <button class="btn-cta" id="open-storage-settings" type="button">Open Storage settings…</button>
       </div>
     </div>
   `;
+  $('open-storage-settings').addEventListener('click', () => naklios.openSettings?.('storage'));
   $('preview').hidden = true;
   $('tree').innerHTML = '';
   $('status').textContent = 'Not connected';
@@ -201,6 +232,7 @@ async function refresh(){
     notConnected();
     return;
   }
+  $('new-text').disabled = false;
   try {
     // The first SDK operation asks the host to bind Files to an available
     // backend and show the normal per-app permission prompt.
@@ -412,6 +444,17 @@ function escapeHtml(s){
   return s.replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
 }
 
+function askToDelete(path){
+  const dialog = $('delete-dialog');
+  $('delete-dialog-copy').textContent = `${fmtPath(path)} will be permanently removed from this storage location.`;
+  dialog.returnValue = 'cancel';
+  dialog.showModal();
+  $('delete-dialog-cancel').focus();
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'delete'), { once:true });
+  });
+}
+
 function showContextMenu(x, y, path, isDir){
   closeContextMenu();
   const menu = document.createElement('div');
@@ -445,7 +488,7 @@ function showContextMenu(x, y, path, isDir){
   });
   menu.querySelector('#ctx-delete')?.addEventListener('click', async () => {
     closeContextMenu();
-    if (!confirm(`Delete ${fmtPath(path)}?\n\nThis cannot be undone.`)) return;
+    if (!await askToDelete(path)) return;
     try {
       await fs.delete(path);
       if (selectedFile === path){
@@ -493,8 +536,21 @@ $('new-text').addEventListener('click', async () => {
 $('refresh').addEventListener('click', () => refresh());
 
 // Boot
+let storageWasAvailable = false;
+let filesBootComplete = false;
+naklios.onCapabilitiesChange(capabilities => {
+  const available = !!capabilities.fs;
+  if (available && !storageWasAvailable && filesBootComplete) void refresh();
+  if (!available && storageWasAvailable) notConnected();
+  storageWasAvailable = available;
+});
 naklios.requestCapabilities();
-refresh().catch(e => setStatus('Error: ' + e.message)).then(() => naklios.ready());
+refresh()
+  .catch(e => setStatus('Error: ' + e.message))
+  .finally(() => {
+    filesBootComplete = true;
+    naklios.ready();
+  });
 
 })();
 </script>

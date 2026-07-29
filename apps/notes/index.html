@@ -52,7 +52,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 }
 .location-switch button:hover{color:var(--ink);background:var(--row)}
 .location-switch button.active{background:var(--panel);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.13)}
-.location-switch button[disabled]{opacity:.42;cursor:not-allowed}
+.location-switch button.needs-connection{opacity:.72}
 .search-wrap{position:relative;flex:1;max-width:390px;margin-left:auto}
 .search-wrap::before{
   content:"⌕";position:absolute;left:10px;top:50%;transform:translateY(-52%);
@@ -299,6 +299,7 @@ const LIBRARY_FILE = 'library.json';
 const DEFAULT_NOTEBOOK_ID = 'inbox';
 const LOCATION_KEY = 'naklios.notes.location';
 const SELECTION_PREFIX = 'naklios.notes.selection.';
+const LAUNCH_ACTION = new URLSearchParams(location.search).get('naklios-action');
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -320,6 +321,7 @@ let capabilitiesReady = false;
 let unsubscribeFs = null;
 let remoteReloadTimer = null;
 let handlingDisconnect = false;
+let launchActionConsumed = false;
 const ownWrites = new Map();
 
 function now(){ return Date.now(); }
@@ -484,15 +486,18 @@ function renderLocations(){
   for (const location of locations){
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = location.label;
+    button.textContent = location.enabled ? location.label : `Connect ${location.label}`;
     button.dataset.location = location.id;
-    button.disabled = !location.enabled;
+    button.classList.toggle('needs-connection', !location.enabled);
     button.classList.toggle('active', activeLocation === location.id);
     button.setAttribute('aria-pressed', String(activeLocation === location.id));
     button.title = location.enabled
       ? `Open the separate ${location.label} library`
       : `${location.label} is not connected in NakliOS`;
-    button.addEventListener('click', () => switchLocation(location.id));
+    button.addEventListener('click', () => {
+      if (location.enabled) void switchLocation(location.id);
+      else naklios.openSettings?.('storage');
+    });
     root.appendChild(button);
   }
   $('storage-note').replaceChildren();
@@ -579,6 +584,10 @@ async function chooseInitialLocation(){
   } catch (_) {
     await activateLocation('browser', { initial:true });
     if (preferred !== 'browser') showToast(`${locationLabel(preferred)} was not opened. Using Browser instead.`);
+  }
+  if (!launchActionConsumed && LAUNCH_ACTION === 'new-note'){
+    launchActionConsumed = true;
+    await createNote();
   }
 }
 
