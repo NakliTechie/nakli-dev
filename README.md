@@ -48,7 +48,28 @@ Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'c
 First-party stateful and cooperative apps should follow the
 [`NakliOS app contract`](docs/app-contract.md), including backend-affine
 filesystem calls, separate Browser/Folder/Crate libraries, async close
-durability, and explicit remote-conflict handling.
+durability, explicit remote-conflict handling, and the optional streamed
+`naklios.ai` capability.
+
+## Local AI
+
+NakliOS has one host-owned, on-device inference service backed by a pinned
+LocalMind runtime. The first approved use downloads and caches the compact
+LFM2.5 230M model (about 140 MB); later cooperative apps share that loaded
+runtime rather than each downloading or holding a model. Requests are bounded,
+queued fairly, reset between apps, streamed, and cancellable.
+
+Consent is per app and per browser. Apps receive only their own text stream:
+they never receive the model worker, another app's prompts, filesystem
+capabilities, Crate credentials, or host tools. Third-party manifests must
+declare `inference`, followed by a separate first-use prompt. Notepad stages
+summaries and rewrites for explicit Replace/Insert review; Books explains or
+summarizes only the current selection or passage.
+
+LocalMind remains the source repository for inference runtime work. NakliOS
+checks in the tested worker and engine under
+[`vendor/localmind/`](vendor/localmind/) with an upstream commit and SHA-256
+lock, so the full LocalMind workbench and the shared OS service cannot drift.
 
 ## Mirroring an app for same-origin embedding
 
@@ -109,9 +130,9 @@ The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and lo
 
 ## Base utilities
 
-**Notepad v2** is a practical multi-document editor with horizontal open-document tabs, autosave, search/replace (including case-sensitive and regular-expression modes), go-to-line, Markdown edit/split/preview modes, local file open/Save As, import/download, word wrap, font and tab-size controls, and keyboard shortcuts. Persistence follows a deliberate order: an app-scoped NakliOS Folder or Crate whenever one is connected, durable local file handles when working from this device, then an IndexedDB recovery/session journal (with the former localStorage registry retained only as a compatibility fallback). The journal restores open tabs and newer unsaved text after a crash, reload, or shutdown. Switching locations never migrates data implicitly, and the original v1 scratch value is preserved after one-time migration.
+**Notepad v2** is a practical multi-document editor with horizontal open-document tabs, autosave, search/replace (including case-sensitive and regular-expression modes), go-to-line, Markdown edit/split/preview modes, local file open/Save As, import/download, word wrap, font and tab-size controls, keyboard shortcuts, and reviewed Local AI summarize/improve/proofread actions. Persistence follows a deliberate order: an app-scoped NakliOS Folder or Crate whenever one is connected, durable local file handles when working from this device, then an IndexedDB recovery/session journal (with the former localStorage registry retained only as a compatibility fallback). The journal restores open tabs and newer unsaved text after a crash, reload, or shutdown. Switching locations never migrates data implicitly, and the original v1 scratch value is preserved after one-time migration.
 
-**Books v1.1** remains hosted in both desktop modes. It uses the current storage SDK, keeps Folder and Crate libraries isolated, and adds filtering, sorting, duplicate protection, modal-confirmed removal, and reader appearance preferences. Local development loads the sibling `Books/` checkout; production keeps the cross-origin published app.
+**Books v1.1** remains hosted in both desktop modes. It uses the current storage SDK, keeps Folder and Crate libraries isolated, and adds filtering, sorting, duplicate protection, modal-confirmed removal, reader appearance preferences, and a Local AI reading companion scoped to the visible selection, page, or passage. Local development loads the sibling `Books/` checkout; production keeps the cross-origin published app.
 
 **Notes v1** is a bundled three-pane notebook app that stays hosted in both
 desktop modes. Browser, Folder, and encrypted Crate are visibly separate

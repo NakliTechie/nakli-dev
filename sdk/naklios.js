@@ -18,6 +18,17 @@
  *       const data = await naklios.fs.read('vault.json');
  *       const stop = await naklios.fs.subscribe('', event => refresh(event));
  *     }
+ *
+ *     // Shared on-device inference (when the user grants this app access):
+ *     if (naklios.capabilities.ai) {
+ *       const stream = await naklios.ai.chat.completions.create({
+ *         messages: [{ role: 'user', content: 'Summarise this note.' }],
+ *         stream: true,
+ *       });
+ *       for await (const chunk of stream) {
+ *         render(chunk.choices[0].delta.content || '');
+ *       }
+ *     }
  *   </script>
  *
  * naklios.capabilities.hosted is true only when running inside NakliOS.
@@ -48,12 +59,16 @@
     fs: false,
     fsBackends: [],
     fsBackend: null,
+    ai: false,
+    aiModel: null,
+    aiState: 'idle',
   };
 
   // Request/reply correlation for fs RPCs
   var pendingRpc = new Map();   // requestId → { resolve, reject }
   var rpcCounter = 0;
   var fsSubscriptions = new Map(); // subscriptionId → callback
+  var aiRequests = new Map(); // requestId → streamed request state
 
   function send(type, data) {
     if (!inNakliOS) return;
@@ -86,7 +101,87 @@
     return Object.assign({ backend: capabilities.fsBackend }, data || {});
   }
 
+  function makeAiStream(options) {
+    if (!inNakliOS) throw new Error('Not hosted — naklios.ai unavailable standalone');
+    if (!capabilities.ai) throw new Error('NakliOS Local AI is unavailable or not permitted');
+    options = options || {};
+    var requestId = 'a' + (++rpcCounter) + '_' + Date.now();
+    var queued = [];
+    var waiters = [];
+    var complete = false;
+    var failure = null;
+
+    function deliver(item) {
+      if (waiters.length) waiters.shift().resolve({ value: item, done: false });
+      else queued.push(item);
+    }
+    function finish() {
+      complete = true;
+      while (waiters.length) waiters.shift().resolve({ value: undefined, done: true });
+    }
+    function fail(error) {
+      failure = error;
+      complete = true;
+      while (waiters.length) waiters.shift().reject(error);
+    }
+
+    var stream = {
+      next: function () {
+        if (queued.length) return Promise.resolve({ value: queued.shift(), done: false });
+        if (failure) return Promise.reject(failure);
+        if (complete) return Promise.resolve({ value: undefined, done: true });
+        return new Promise(function (resolve, reject) {
+          waiters.push({ resolve: resolve, reject: reject });
+        });
+      },
+      cancel: function () {
+        send('naklios:ai:cancel', { requestId: requestId });
+      },
+    };
+    stream[Symbol.asyncIterator] = function () { return stream; };
+    aiRequests.set(requestId, {
+      deliver: deliver,
+      finish: finish,
+      fail: fail,
+      onStatus: typeof options.onStatus === 'function' ? options.onStatus : null,
+    });
+    send('naklios:ai:chat', {
+      requestId: requestId,
+      messages: Array.isArray(options.messages) ? options.messages : [],
+      maxTokens: options.max_tokens || options.maxTokens,
+    });
+    if (options.signal) {
+      if (options.signal.aborted) stream.cancel();
+      else options.signal.addEventListener('abort', function () { stream.cancel(); }, { once: true });
+    }
+    return stream;
+  }
+
+  async function createAiCompletion(options) {
+    options = options || {};
+    var stream = makeAiStream(options);
+    if (options.stream === true) return stream;
+    var content = '';
+    var finishReason = 'stop';
+    for await (var chunk of stream) {
+      var choice = chunk.choices && chunk.choices[0];
+      if (choice && choice.delta && choice.delta.content) content += choice.delta.content;
+      if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+    }
+    return {
+      id: 'naklios-local',
+      object: 'chat.completion',
+      model: capabilities.aiModel || 'localmind',
+      choices: [{
+        index: 0,
+        message: { role: 'assistant', content: content },
+        finish_reason: finishReason,
+      }],
+    };
+  }
+
   window.addEventListener('message', function (e) {
+    if (inNakliOS && e.source !== window.parent) return;
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'naklios:theme') {
@@ -104,9 +199,45 @@
       if (typeof msg.fs === 'boolean') capabilities.fs = msg.fs;
       if (Array.isArray(msg.fsBackends)) capabilities.fsBackends = msg.fsBackends;
       capabilities.fsBackend = typeof msg.fsBackend === 'string' ? msg.fsBackend : null;
+      if (typeof msg.ai === 'boolean') capabilities.ai = msg.ai;
+      capabilities.aiModel = typeof msg.aiModel === 'string' ? msg.aiModel : null;
+      capabilities.aiState = typeof msg.aiState === 'string' ? msg.aiState : 'idle';
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}
       });
+    } else if (msg.type === 'naklios:ai:event' && msg.requestId) {
+      var aiRequest = aiRequests.get(msg.requestId);
+      if (!aiRequest) return;
+      if (msg.event === 'status') {
+        try { aiRequest.onStatus && aiRequest.onStatus(msg.status, msg.progress || null); } catch (_) {}
+      } else if (msg.event === 'token') {
+        aiRequest.deliver({
+          id: msg.requestId,
+          object: 'chat.completion.chunk',
+          model: msg.model || capabilities.aiModel || 'localmind',
+          choices: [{
+            index: 0,
+            delta: { content: String(msg.token || '') },
+            finish_reason: null,
+          }],
+        });
+      } else if (msg.event === 'done') {
+        aiRequest.deliver({
+          id: msg.requestId,
+          object: 'chat.completion.chunk',
+          model: msg.model || capabilities.aiModel || 'localmind',
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: msg.finishReason || 'stop',
+          }],
+        });
+        aiRequests.delete(msg.requestId);
+        aiRequest.finish();
+      } else if (msg.event === 'error') {
+        aiRequests.delete(msg.requestId);
+        aiRequest.fail(new Error(msg.error || 'NakliOS Local AI failed'));
+      }
     } else if (msg.type === 'naklios:fs:reply' && msg.requestId) {
       var p = pendingRpc.get(msg.requestId);
       if (!p) return;
@@ -132,7 +263,7 @@
     capabilities: capabilities,   // mutated in place; read fields directly
     ready: function () {
       send('naklios:ready', {
-        features: { beforeCloseAck: true, fsSubscribe: true },
+        features: { beforeCloseAck: true, fsSubscribe: true, aiStream: true },
       });
     },
     title: function (s) { send('naklios:title', { title: String(s) }); },
@@ -190,6 +321,18 @@
       // Explicit backend changes are always confirmed by the NakliOS host.
       // Switching changes the app-scoped view; it never copies or deletes data.
       useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },
+    },
+    ai: {
+      chat: {
+        completions: {
+          create: createAiCompletion,
+        },
+      },
+      cancelAll: function () {
+        aiRequests.forEach(function (_, requestId) {
+          send('naklios:ai:cancel', { requestId: requestId });
+        });
+      },
     },
   };
 })();

@@ -1253,6 +1253,15 @@ body.is-mobile .nw-dock{display:none;}
 .cl-pad-preview hr{border:0; border-top:1px solid var(--line); margin:10px 0;}
 .cl-pad-preview p{margin:6px 0;}
 .cl-pad-preview p:first-child{margin-top:0;}
+.cl-pad-ai-dialog{width:min(620px,94vw);}
+.cl-pad-ai-dialog .nw-dlg-form{gap:10px;}
+.cl-pad-ai-output{
+  width:100%; min-height:180px; max-height:42vh; resize:vertical;
+  padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+  background:var(--row); color:var(--ink);
+  font:12px/1.55 -apple-system,system-ui,sans-serif;
+}
+.cl-pad-ai-status{min-height:17px; color:var(--muted); font-size:11px;}
 @media (max-width:700px){
   .cl-pad-docs{display:none;}
   .cl-pad-find{grid-template-columns:1fr 1fr auto auto;}
@@ -1522,7 +1531,7 @@ const APPS = [
 const THIRD_PARTY_SCHEMA = 'https://naklios.dev/app-manifest/v1';
 const THIRD_PARTY_APPS_KEY = 'nakliOS.thirdPartyApps.v1';
 const THIRD_PARTY_MANIFEST_MAX_BYTES = 32768;
-const THIRD_PARTY_PERMISSIONS = new Set(['storage']);
+const THIRD_PARTY_PERMISSIONS = new Set(['storage', 'inference']);
 
 function isPlainRecord(value){
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -1586,14 +1595,14 @@ function normalizeThirdPartyManifest(raw){
   const permissions = raw.permissions == null ? [] : raw.permissions;
   if (!Array.isArray(permissions) || new Set(permissions).size !== permissions.length ||
       permissions.some(permission => !THIRD_PARTY_PERMISSIONS.has(permission))) {
-    throw new Error('permissions may contain only the unique value "storage"');
+    throw new Error('permissions may contain only the unique values "storage" and "inference"');
   }
   const display = raw.display == null ? 'window' : raw.display;
   if (display !== 'window' && display !== 'tab') {
     throw new Error('display must be "window" or "tab"');
   }
-  if (display === 'tab' && permissions.includes('storage')) {
-    throw new Error('storage permission requires display "window"; top-level tabs have no NakliOS storage bridge');
+  if (display === 'tab' && permissions.some(permission => permission === 'storage' || permission === 'inference')) {
+    throw new Error('host permissions require display "window"; top-level tabs have no NakliOS bridge');
   }
   return Object.freeze({
     schema: THIRD_PARTY_SCHEMA,
@@ -1858,6 +1867,9 @@ const state = {
   //   legacy: 'granted' | 'denied'            (FSA-only era; migrated on first read)
   //   v2.x:   { backend: 'fsa'|'crate', granted: true } | { granted: false }
   appPermissions: JSON.parse(localStorage.getItem('nakliOS.appPermissions') || '{}'),
+  // Inference consent is device-local. It is deliberately never copied into
+  // state.json or a Crate: one browser cannot grant GPU/model use for another.
+  aiPermissions: JSON.parse(localStorage.getItem('nakliOS.aiPermissions.v1') || '{}'),
   fsHandle: null,        // populated after fsReconnect() succeeds
   fsFolderName: null,    // display name from the handle
   // --- Crate backend (v2.19) — encrypted, multi-device, BYOK cloud folder ---
@@ -1899,6 +1911,9 @@ function saveLayout(){
 function saveAppPermissions(){
   localStorage.setItem('nakliOS.appPermissions', JSON.stringify(state.appPermissions));
   fsScheduleStateWrite();
+}
+function saveAiPermissions(){
+  localStorage.setItem('nakliOS.aiPermissions.v1', JSON.stringify(state.aiPermissions));
 }
 
 // New profiles start with the everyday file-backed tools in the dock.
@@ -3909,6 +3924,9 @@ function appDiagnosticRows(win, mirrorManifest, mirrorError){
     { label:'Storage capability', value:caps?.fs ? 'Available to this app' : 'Unavailable or denied' },
     { label:'Connected locations', value:backendLabels.length ? backendLabels.join(', ') : 'None' },
     { label:'App storage binding', value:bound },
+    { label:'Local AI capability', value:caps?.ai
+      ? `${AI_MODEL_LABEL} (${caps.aiState || 'idle'})`
+      : 'Unavailable, undeclared, or denied' },
     ...appProvenanceRows(win, mirrorManifest, mirrorError),
   );
   return rows;
@@ -4289,6 +4307,7 @@ function finalizeCloseWindow(win){
       try { iframe.contentWindow.postMessage({ type:'naklios:beforeclose' }, '*'); } catch(_){}
     }
     fsHostUnsubscribeSource(iframe.contentWindow);
+    aiHostCancelSource(iframe.contentWindow);
     knownIframes.delete(iframe.contentWindow);
   }
   win.remove();
@@ -4716,6 +4735,368 @@ async function fsHostList(msg, appId){
   return all.map(p => p.startsWith(stripPrefix) ? p.slice(stripPrefix.length) : p);
 }
 
+// ════════════════════════════════════════════════════════════════════
+// LOCAL INFERENCE BROKER
+// ════════════════════════════════════════════════════════════════════
+// NakliOS owns the single LocalMind worker and presents a narrow, streamed
+// chat capability to apps. Apps never receive a worker, model object, another
+// app's queue entry, filesystem capability, or host credentials.
+const AI_PROTOCOL = 'localmind.inference.v1';
+const AI_MODEL_ID = 'LiquidAI/LFM2.5-230M-GGUF';
+const AI_MODEL_LABEL = 'LocalMind · LFM2.5 230M';
+const AI_MAX_QUEUE = 12;
+const AI_MAX_QUEUE_PER_APP = 3;
+const AI_MAX_INPUT_CHARS = 24000;
+const AI_MAX_MESSAGES = 32;
+const AI_MAX_OUTPUT_TOKENS = 768;
+const AI_LOAD_REQUEST_ID = 'naklios-model-load-v1';
+
+const aiHost = {
+  worker:null,
+  state:'idle',
+  error:null,
+  loadPromise:null,
+  loadResolve:null,
+  loadReject:null,
+  loadListeners:new Set(),
+  queue:[],
+  active:null,
+  activeResolve:null,
+  activeReject:null,
+  requestCounter:0,
+  lastAppId:null,
+  permissionPrompts:new Map(),
+};
+
+function aiWebGpuAvailable(){
+  return !!navigator.gpu && typeof Worker !== 'undefined';
+}
+
+function aiManifestAllows(appId){
+  const app = APPS.find(item => item.id === appId);
+  return !app?.thirdParty || (app.permissions || []).includes('inference');
+}
+
+function aiCapabilityForApp(appId){
+  return aiWebGpuAvailable() &&
+    aiManifestAllows(appId) &&
+    state.aiPermissions[appId]?.granted !== false;
+}
+
+function aiSetState(next, error = null){
+  aiHost.state = next;
+  aiHost.error = error ? String(error?.message || error) : null;
+  try { broadcastCapabilities(); } catch(_){}
+}
+
+async function aiEnsurePermission(appId){
+  if (!aiManifestAllows(appId) || !aiWebGpuAvailable()) return false;
+  const saved = state.aiPermissions[appId];
+  if (saved?.granted === true) return true;
+  if (saved?.granted === false) return false;
+  if (aiHost.permissionPrompts.has(appId)) return aiHost.permissionPrompts.get(appId);
+
+  const prompt = (async () => {
+    const app = APPS.find(item => item.id === appId);
+    const name = app?.name || appId;
+    const granted = await nakliosConfirm(
+      `${name} wants to use NakliOS Local AI.\n\n` +
+      `The shared ${AI_MODEL_LABEL} model runs on this device. Its first use downloads about 140 MB and caches it in this browser. ` +
+      `Prompts and replies stay in this tab and are not shared with other apps.`,
+      {
+        title:'Allow Local AI?',
+        okLabel:'Allow',
+        cancelLabel:'Not now',
+      }
+    );
+    state.aiPermissions[appId] = { granted, decidedAt:Date.now() };
+    saveAiPermissions();
+    broadcastCapabilities();
+    return granted;
+  })().finally(() => aiHost.permissionPrompts.delete(appId));
+  aiHost.permissionPrompts.set(appId, prompt);
+  return prompt;
+}
+
+function aiEmit(request, event){
+  try {
+    request.source.postMessage({
+      type:'naklios:ai:event',
+      requestId:request.requestId,
+      model:AI_MODEL_ID,
+      ...event,
+    }, '*');
+  } catch(_){}
+}
+
+function aiFailWorker(error){
+  const failure = error instanceof Error ? error : new Error(String(error || 'Local AI worker failed'));
+  if (aiHost.loadReject) aiHost.loadReject(failure);
+  if (aiHost.activeReject) aiHost.activeReject(failure);
+  aiHost.loadResolve = null;
+  aiHost.loadReject = null;
+  aiHost.activeResolve = null;
+  aiHost.activeReject = null;
+  aiHost.loadPromise = null;
+  try { aiHost.worker?.terminate(); } catch(_){}
+  aiHost.worker = null;
+  aiSetState('error', failure);
+}
+
+function aiCreateWorker(){
+  if (aiHost.worker) return aiHost.worker;
+  const url = new URL('vendor/localmind/inference-worker.js', document.baseURI);
+  const worker = new Worker(url, { type:'module', name:'naklios-localmind-v1' });
+  worker.addEventListener('message', event => {
+    const msg = event.data || {};
+    if (msg.protocol && msg.protocol !== AI_PROTOCOL) return;
+    if (msg.id === AI_LOAD_REQUEST_ID){
+      if (msg.type === 'progress'){
+        aiHost.loadListeners.forEach(listener => {
+          try { listener(msg.data || {}); } catch(_){}
+        });
+      } else if (msg.type === 'ready'){
+        const resolve = aiHost.loadResolve;
+        aiHost.loadResolve = null;
+        aiHost.loadReject = null;
+        aiSetState('ready');
+        resolve?.();
+      } else if (msg.type === 'error'){
+        aiFailWorker(new Error(msg.message || 'Local AI model failed to load'));
+      }
+      return;
+    }
+    const request = aiHost.active;
+    if (!request || msg.id !== request.workerRequestId) return;
+    if (msg.type === 'token'){
+      aiEmit(request, { event:'token', token:String(msg.token || '') });
+    } else if (msg.type === 'complete'){
+      const resolve = aiHost.activeResolve;
+      aiHost.activeResolve = null;
+      aiHost.activeReject = null;
+      resolve?.(msg.finishReason || 'stop');
+    } else if (msg.type === 'error'){
+      const reject = aiHost.activeReject;
+      aiHost.activeResolve = null;
+      aiHost.activeReject = null;
+      reject?.(new Error(msg.message || 'Local AI generation failed'));
+    }
+  });
+  worker.addEventListener('error', event => {
+    aiFailWorker(new Error(event.message || 'Local AI worker crashed'));
+  });
+  aiHost.worker = worker;
+  return worker;
+}
+
+async function aiEnsureLoaded(onProgress){
+  if (aiHost.state === 'ready' && aiHost.worker) return;
+  if (typeof onProgress === 'function') aiHost.loadListeners.add(onProgress);
+  try {
+    if (!aiHost.loadPromise){
+      aiSetState('loading');
+      const worker = aiCreateWorker();
+      aiHost.loadPromise = new Promise((resolve, reject) => {
+        aiHost.loadResolve = resolve;
+        aiHost.loadReject = reject;
+      });
+      worker.postMessage({
+        type:'load',
+        id:AI_LOAD_REQUEST_ID,
+        modelId:AI_MODEL_ID,
+      });
+    }
+    await aiHost.loadPromise;
+  } finally {
+    if (typeof onProgress === 'function') aiHost.loadListeners.delete(onProgress);
+  }
+}
+
+function aiNormaliseMessages(messages){
+  if (!Array.isArray(messages) || messages.length === 0 || messages.length > AI_MAX_MESSAGES) {
+    throw new Error(`Local AI requires 1–${AI_MAX_MESSAGES} messages`);
+  }
+  let total = 0;
+  return messages.map(message => {
+    const role = message?.role === 'system' || message?.role === 'assistant'
+      ? message.role
+      : 'user';
+    if (typeof message?.content !== 'string') throw new Error('Local AI message content must be text');
+    total += message.content.length;
+    if (total > AI_MAX_INPUT_CHARS) throw new Error('Local AI input is too large');
+    return { role, content:message.content };
+  });
+}
+
+function aiNextRequest(){
+  if (!aiHost.queue.length) return null;
+  let index = aiHost.queue.findIndex(request => request.appId !== aiHost.lastAppId);
+  if (index < 0) index = 0;
+  const [request] = aiHost.queue.splice(index, 1);
+  aiHost.lastAppId = request.appId;
+  return request;
+}
+
+function aiGenerate(request){
+  return new Promise((resolve, reject) => {
+    aiHost.activeResolve = resolve;
+    aiHost.activeReject = reject;
+    aiHost.worker.postMessage({
+      type:'generate',
+      id:request.workerRequestId,
+      messages:request.messages,
+      generationConfig:{ max_tokens:request.maxTokens, reset:true },
+    });
+  });
+}
+
+async function aiProcessQueue(){
+  if (aiHost.active) return;
+  const request = aiNextRequest();
+  if (!request) return;
+  aiHost.active = request;
+  try {
+    aiEmit(request, { event:'status', status:'loading' });
+    await aiEnsureLoaded(progress => {
+      aiEmit(request, { event:'status', status:'loading', progress });
+    });
+    if (request.cancelled){
+      aiEmit(request, { event:'done', finishReason:'cancelled' });
+      return;
+    }
+    aiEmit(request, { event:'status', status:'generating' });
+    const finishReason = await aiGenerate(request);
+    aiEmit(request, {
+      event:'done',
+      finishReason:request.cancelled ? 'cancelled' : finishReason,
+    });
+  } catch (error){
+    aiEmit(request, { event:'error', error:String(error?.message || error) });
+  } finally {
+    aiHost.active = null;
+    aiHost.activeResolve = null;
+    aiHost.activeReject = null;
+    queueMicrotask(() => { void aiProcessQueue(); });
+  }
+}
+
+async function aiHostSubmit(source, msg, appId){
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 160) : '';
+  const provisional = { source, appId, requestId:requestId || 'invalid' };
+  try {
+    if (!requestId) throw new Error('Local AI requestId is required');
+    if (!aiWebGpuAvailable()) throw new Error('Local AI requires WebGPU in a recent Chrome or Edge browser');
+    if (!aiManifestAllows(appId)) throw new Error('This app did not declare the inference permission');
+    const duplicate = aiHost.active?.source === source && aiHost.active.requestId === requestId ||
+      aiHost.queue.some(request => request.source === source && request.requestId === requestId);
+    if (duplicate) throw new Error('Duplicate Local AI requestId');
+    if (aiHost.queue.length >= AI_MAX_QUEUE) throw new Error('Local AI queue is full');
+    const appQueued = aiHost.queue.filter(request => request.appId === appId).length +
+      (aiHost.active?.appId === appId ? 1 : 0);
+    if (appQueued >= AI_MAX_QUEUE_PER_APP) throw new Error('This app already has too many Local AI requests');
+    const messages = aiNormaliseMessages(msg.messages);
+    if (source._aiCancelled === true) throw new Error('Local AI request was cancelled');
+    const granted = await aiEnsurePermission(appId);
+    if (!granted) throw new Error('Local AI permission was not granted');
+    if (source._aiCancelled === true) throw new Error('Local AI request was cancelled');
+    const becameDuplicate = aiHost.active?.source === source && aiHost.active.requestId === requestId ||
+      aiHost.queue.some(request => request.source === source && request.requestId === requestId);
+    if (becameDuplicate) throw new Error('Duplicate Local AI requestId');
+    if (aiHost.queue.length >= AI_MAX_QUEUE) throw new Error('Local AI queue is full');
+
+    const request = {
+      source,
+      appId,
+      requestId,
+      workerRequestId:`naklios-ai-${++aiHost.requestCounter}`,
+      messages,
+      maxTokens:Math.max(16, Math.min(AI_MAX_OUTPUT_TOKENS, Number(msg.maxTokens) || 384)),
+      cancelled:false,
+    };
+    aiHost.queue.push(request);
+    aiEmit(request, { event:'status', status:'queued', position:aiHost.queue.length });
+    void aiProcessQueue();
+  } catch (error){
+    aiEmit(provisional, { event:'error', error:String(error?.message || error) });
+  }
+}
+
+function aiHostCancel(source, requestId){
+  const queuedIndex = aiHost.queue.findIndex(request =>
+    request.source === source && request.requestId === requestId
+  );
+  if (queuedIndex >= 0){
+    const [request] = aiHost.queue.splice(queuedIndex, 1);
+    request.cancelled = true;
+    aiEmit(request, { event:'done', finishReason:'cancelled' });
+    return true;
+  }
+  if (aiHost.active?.source === source && aiHost.active.requestId === requestId){
+    aiHost.active.cancelled = true;
+    if (aiHost.state === 'ready') {
+      aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
+    }
+    return true;
+  }
+  return false;
+}
+
+function aiHostCancelSource(source){
+  for (let index = aiHost.queue.length - 1; index >= 0; index--){
+    if (aiHost.queue[index].source !== source) continue;
+    const [request] = aiHost.queue.splice(index, 1);
+    request.cancelled = true;
+  }
+  if (aiHost.active?.source === source){
+    aiHost.active.cancelled = true;
+    if (aiHost.state === 'ready') {
+      aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
+    }
+  }
+}
+
+function aiHostChatNative(appId, messages, options = {}){
+  const requestId = `native-${++aiHost.requestCounter}-${Date.now()}`;
+  let text = '';
+  let settled = false;
+  let abortHandler = null;
+  return new Promise((resolve, reject) => {
+    const source = {
+      _aiCancelled:false,
+      postMessage(message){
+        if (message.requestId !== requestId || settled) return;
+        if (message.event === 'status'){
+          try { options.onStatus?.(message.status, message.progress); } catch(_){}
+        } else if (message.event === 'token'){
+          text += message.token || '';
+          try { options.onToken?.(message.token || '', text); } catch(_){}
+        } else if (message.event === 'done'){
+          settled = true;
+          if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
+          resolve({ content:text, finishReason:message.finishReason || 'stop' });
+        } else if (message.event === 'error'){
+          settled = true;
+          if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
+          reject(new Error(message.error || 'Local AI failed'));
+        }
+      },
+    };
+    abortHandler = () => {
+      source._aiCancelled = true;
+      aiHostCancel(source, requestId);
+    };
+    if (options.signal){
+      if (options.signal.aborted) abortHandler();
+      else options.signal.addEventListener('abort', abortHandler, { once:true });
+    }
+    void aiHostSubmit(source, {
+      requestId,
+      messages,
+      maxTokens:options.maxTokens,
+    }, appId);
+  });
+}
+
 function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
@@ -4732,6 +5113,9 @@ function capabilitySnapshot(appId){
     fs: fsCap,
     fsBackends,
     fsBackend,
+    ai: aiCapabilityForApp(appId),
+    aiModel: AI_MODEL_ID,
+    aiState: aiHost.state,
   };
 }
 
@@ -4760,6 +5144,7 @@ function broadcastCapabilities(){
     if (!win._app?.hostStorage) return;
     win._capabilities = capabilitySnapshot(win._app.id);
     refreshOpenAppInfo(win);
+    try { win._onCapabilitiesChange?.(win._capabilities); } catch(_){}
   });
   // Re-paint the topbar chips on every backend state change. Defensive
   // try — chips might not be in DOM yet during early boot.
@@ -5102,6 +5487,7 @@ window.addEventListener('message', async e => {
       win._sdkFeatures = {
         beforeCloseAck:msg.features.beforeCloseAck === true,
         fsSubscribe:msg.features.fsSubscribe === true,
+        aiStream:msg.features.aiStream === true,
       };
     }
     markIframeLaunchPhase(win, 'ready');
@@ -5123,6 +5509,11 @@ window.addEventListener('message', async e => {
     if (iframe && appId) postCapabilities(iframe, appId);
   } else if (msg.type === 'naklios:open-settings'){
     openSettings(typeof msg.section === 'string' ? msg.section : 'storage');
+  } else if (msg.type === 'naklios:ai:chat'){
+    const appId = getAppId();
+    if (appId) void aiHostSubmit(e.source, msg, appId);
+  } else if (msg.type === 'naklios:ai:cancel'){
+    aiHostCancel(e.source, msg.requestId);
   } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:fs:')){
     const reply = { type: 'naklios:fs:reply', requestId: msg.requestId };
     try {
@@ -5631,7 +6022,7 @@ async function consentThirdPartyInstall(manifest, manifestSource){
     `<strong>Origin changed:</strong> <code>${_dlgEscape(existing.manifest.origin)}</code> → <code>${_dlgEscape(manifest.origin)}</code>. The replacement receives a new storage namespace.`
   );
   if (permissionsChanged) changes.push(
-    `<strong>Permissions changed:</strong> ${(existing.manifest.permissions || []).join(', ') || 'none'} → ${manifest.permissions.join(', ') || 'none'}. Any earlier storage grant is revoked.`
+    `<strong>Permissions changed:</strong> ${(existing.manifest.permissions || []).join(', ') || 'none'} → ${manifest.permissions.join(', ') || 'none'}. Earlier host grants are revoked.`
   );
   if (sourceChanged) changes.push('<strong>Manifest source changed.</strong> Future update checks will use the new source shown here.');
   const storageLine = manifest.permissions.includes('storage')
@@ -5639,6 +6030,9 @@ async function consentThirdPartyInstall(manifest, manifestSource){
       ? 'Requested for its hosted window. Basic mode currently opens it in a top-level tab, so NakliOS storage stays unavailable until the app is opened in Immersive; NakliOS then asks again on first use.'
       : 'May ask for app-scoped Folder or Crate storage. NakliOS asks again on first use.'
     : 'No NakliOS storage access requested.';
+  const inferenceLine = manifest.permissions.includes('inference')
+    ? 'May ask to use the shared on-device LocalMind model. NakliOS asks again on first use and never shares prompts between apps.'
+    : 'No NakliOS Local AI access requested.';
   const answer = await _nakliosDialog({
     title: existing ? `Review update for ${manifest.name}` : `Install ${manifest.name}?`,
     body:
@@ -5650,7 +6044,8 @@ async function consentThirdPartyInstall(manifest, manifestSource){
       `${changes.length ? `${changes.join('<br>')}<br><br>` : ''}` +
       `<strong>Isolation</strong> · Windowed apps always run in an opaque-origin sandbox. ` +
       `They never become a same-origin system app or mirror.<br>` +
-      `<strong>Storage</strong> · ${_dlgEscape(storageLine)}<br><br>` +
+      `<strong>Storage</strong> · ${_dlgEscape(storageLine)}<br>` +
+      `<strong>Local AI</strong> · ${_dlgEscape(inferenceLine)}<br><br>` +
       `Installation is local to this browser profile. Uninstalling later removes the registration, not app data.`,
     buttons: [
       { value:'cancel', label:'Cancel' },
@@ -5692,14 +6087,19 @@ async function installThirdPartyManifest(manifest, manifestSource = null){
     if (review.originChanged){
       purgeLayoutAppId(review.existing.appId);
       delete state.appPermissions[review.existing.appId];
+      delete state.aiPermissions[review.existing.appId];
     } else if (review.permissionsChanged){
       delete state.appPermissions[review.existing.appId];
+      delete state.aiPermissions[review.existing.appId];
     }
   }
   // Registrations are profile-local while appPermissions can be present in a
   // restored NakliOS state snapshot. A genuinely new random install identity
   // must never inherit even a coincidentally stale runtime decision.
-  if (!review.existing || review.originChanged) delete state.appPermissions[appId];
+  if (!review.existing || review.originChanged){
+    delete state.appPermissions[appId];
+    delete state.aiPermissions[appId];
+  }
   THIRD_PARTY_APP_RECORDS.push({
     appId,
     manifest,
@@ -5709,6 +6109,7 @@ async function installThirdPartyManifest(manifest, manifestSource = null){
   persistThirdPartyAppRecords();
   refreshThirdPartyCatalog();
   saveAppPermissions();
+  saveAiPermissions();
   saveLayout();
   renderIcons();
   updateDock();
@@ -5758,10 +6159,12 @@ async function uninstallThirdPartyApp(appId){
   if (!ok) return false;
   THIRD_PARTY_APP_RECORDS = THIRD_PARTY_APP_RECORDS.filter(item => item !== record);
   delete state.appPermissions[appId];
+  delete state.aiPermissions[appId];
   purgeLayoutAppId(appId);
   persistThirdPartyAppRecords();
   refreshThirdPartyCatalog();
   saveAppPermissions();
+  saveAiPermissions();
   saveLayout();
   renderIcons();
   updateDock();
@@ -5776,12 +6179,18 @@ let settingsReturnFocus = null;
 
 function focusSettingsSection(section){
   const pop = document.getElementById('settings-pop');
-  if (!pop || (section !== 'storage' && section !== 'apps')) return;
-  const heading = pop.querySelector(section === 'apps' ? '#settings-apps-heading' : '#settings-storage-heading');
+  if (!pop || (section !== 'storage' && section !== 'apps' && section !== 'ai')) return;
+  const heading = pop.querySelector(
+    section === 'apps' ? '#settings-apps-heading'
+      : section === 'ai' ? '#settings-ai-heading'
+        : '#settings-storage-heading'
+  );
   heading?.scrollIntoView({ block:'start' });
   const selector = section === 'apps'
     ? '#third-party-add, .third-party-open, .third-party-update, .third-party-uninstall'
-    : '#fs-connect, #fs-regrant, #crate-unlock, #crate-connect-file, #crate-connect-manual, #fs-disconnect, #crate-lock';
+    : section === 'ai'
+      ? '#ai-forget-permissions'
+      : '#fs-connect, #fs-regrant, #crate-unlock, #crate-connect-file, #crate-connect-manual, #fs-disconnect, #crate-lock';
   pop.querySelector(selector)?.focus();
 }
 
@@ -5895,6 +6304,29 @@ function openSettings(section){
     </label>
   `;
 
+  const aiDecisionCount = Object.keys(state.aiPermissions).length;
+  const aiHTML = aiWebGpuAvailable() ? `
+    <div class="nw-fs-connected">
+      <span>✦</span>
+      <span class="nw-fs-connected-name">${AI_MODEL_LABEL}</span>
+      <span style="color:var(--muted);">${aiHost.state}</span>
+    </div>
+    <div class="nw-fs-blurb">
+      One shared on-device model for cooperative apps. The first approved use
+      downloads about 140 MB; prompts and replies stay in this tab. Apps queue
+      fairly and receive only their own streamed reply.
+    </div>
+    <button class="nw-fs-btn-secondary" id="ai-forget-permissions" type="button"
+      ${aiDecisionCount ? '' : 'disabled'}>
+      Reset app AI decisions${aiDecisionCount ? ` (${aiDecisionCount})` : ''}
+    </button>
+  ` : `
+    <div class="nw-fs-blurb">
+      Local AI is unavailable because this browser does not expose WebGPU.
+      Use a recent Chrome or Edge browser with compatible graphics hardware.
+    </div>
+  `;
+
   const installedAppsHTML = THIRD_PARTY_APP_RECORDS.length
     ? `<div class="nw-installed-apps">${THIRD_PARTY_APP_RECORDS.map(record => `
         <div class="nw-installed-app">
@@ -5916,6 +6348,8 @@ function openSettings(section){
     ${fsHTML}
     <h4>Crate (cloud, encrypted)</h4>
     ${crateHTML}
+    <h4 id="settings-ai-heading" tabindex="-1">Local AI</h4>
+    ${aiHTML}
     <h4>Mode</h4>
     ${modeHTML}
     <h4>Theme <span style="color:var(--faint); font-weight:400; text-transform:none; letter-spacing:0;">— wallpaper, tile tints, app chrome</span></h4>
@@ -6012,6 +6446,13 @@ function openSettings(section){
   });
   wrap.querySelector('#crate-stay')?.addEventListener('change', (e) => {
     setCrateStayUnlocked(e.target.checked);
+  });
+  wrap.querySelector('#ai-forget-permissions')?.addEventListener('click', () => {
+    state.aiPermissions = {};
+    saveAiPermissions();
+    broadcastCapabilities();
+    closeSettings();
+    openSettings('ai');
   });
 
   wrap.querySelector('#third-party-add')?.addEventListener('click', async () => {
@@ -6523,6 +6964,7 @@ Classics.notepad = (body, win) => {
         <button class="cl-pad-btn" id="pad-wrap" aria-pressed="${settings.wrap ? 'true' : 'false'}" title="Toggle word wrap">Wrap</button>
         <button class="cl-pad-btn" id="pad-font-down" title="Smaller text">A−</button>
         <button class="cl-pad-btn" id="pad-font-up" title="Larger text">A＋</button>
+        <button class="cl-pad-btn" id="pad-ai" title="Use NakliOS Local AI on the selection or document">✦ AI</button>
         <span class="grow"></span>
         <button class="cl-pad-btn cl-pad-storage" id="pad-storage" title="Choose Local, NakliOS Folder, or Crate">Local</button>
       </div>
@@ -6599,6 +7041,7 @@ Classics.notepad = (body, win) => {
   const caseInput = body.querySelector('#pad-find-case');
   const regexInput = body.querySelector('#pad-find-regex');
   const wrapBtn = body.querySelector('#pad-wrap');
+  const aiBtn = body.querySelector('#pad-ai');
 
   function freshId(){
     return (crypto.randomUUID?.() || ('doc-' + Date.now() + '-' + Math.random().toString(16).slice(2)))
@@ -6962,8 +7405,191 @@ Classics.notepad = (body, win) => {
   }
   function setEditorEnabled(on){
     [ta, titleInput, formatSelect, body.querySelector('#pad-delete'),
-      body.querySelector('#pad-save'), body.querySelector('#pad-save-as'), body.querySelector('#pad-download')]
+      body.querySelector('#pad-save'), body.querySelector('#pad-save-as'), body.querySelector('#pad-download'),
+      aiBtn]
       .forEach(el => { if (el) el.disabled = !on; });
+    if (on) refreshAiButton();
+  }
+  function refreshAiButton(){
+    const available = aiCapabilityForApp(APP_ID);
+    aiBtn.disabled = !activeDocument() || !available;
+    aiBtn.title = available
+      ? 'Use NakliOS Local AI on the selection or document'
+      : 'Local AI is unavailable or denied; reset it in Settings → Local AI';
+  }
+  function aiProgressLabel(statusName, progress){
+    if (statusName === 'queued') return 'Waiting for the shared Local AI…';
+    if (statusName === 'generating') return 'Writing locally…';
+    if (progress?.total && Number.isFinite(progress.loaded)){
+      return `Loading Local AI · ${Math.round(progress.loaded / progress.total * 100)}%`;
+    }
+    return 'Loading Local AI for first use…';
+  }
+  function showPadAiResult({ action, sourceText, selectionStart, selectionEnd, documentId }){
+    const dlg = document.createElement('dialog');
+    dlg.className = 'nw-dlg cl-pad-ai-dialog';
+    const titleId = `pad-ai-title-${++_nakliosDialogCounter}`;
+    dlg.setAttribute('aria-labelledby', titleId);
+    dlg.innerHTML = `
+      <form method="dialog" class="nw-dlg-form">
+        <h3 class="nw-dlg-title" id="${titleId}">Local AI · ${_dlgEscape(action.label)}</h3>
+        <div class="nw-dlg-body">Review the result before changing your document.</div>
+        <textarea class="cl-pad-ai-output" readonly aria-label="Local AI result"></textarea>
+        <div class="cl-pad-ai-status" role="status" aria-live="polite">Queued…</div>
+        <menu class="nw-dlg-actions">
+          <button value="cancel" class="nw-dlg-btn pad-ai-stop">Stop</button>
+          <button value="copy" class="nw-dlg-btn pad-ai-copy" disabled>Copy</button>
+          <button value="insert" class="nw-dlg-btn pad-ai-insert" disabled>Insert below</button>
+          <button value="replace" class="nw-dlg-btn primary pad-ai-replace" disabled>Replace source</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dlg);
+    const output = dlg.querySelector('.cl-pad-ai-output');
+    const live = dlg.querySelector('.cl-pad-ai-status');
+    const stop = dlg.querySelector('.pad-ai-stop');
+    const copy = dlg.querySelector('.pad-ai-copy');
+    const insert = dlg.querySelector('.pad-ai-insert');
+    const replace = dlg.querySelector('.pad-ai-replace');
+    const controller = new AbortController();
+    let result = '';
+    let finished = false;
+
+    function enableResultActions(){
+      const ready = finished && !!result.trim();
+      copy.disabled = !ready;
+      insert.disabled = !ready;
+      replace.disabled = !ready;
+    }
+    function applyResult(mode){
+      if (!finished || !result.trim()) return;
+      if (activeId !== documentId){
+        live.textContent = 'Return to the original tab before applying this result.';
+        return;
+      }
+      if (mode === 'replace'){
+        ta.setRangeText(result, selectionStart, selectionEnd, 'end');
+      } else {
+        const separator = sourceText.endsWith('\n') ? '\n' : '\n\n';
+        ta.setRangeText(separator + result, selectionEnd, selectionEnd, 'end');
+      }
+      ta.dispatchEvent(new Event('input'));
+      dlg.close(mode);
+    }
+
+    dlg.addEventListener('close', () => {
+      if (!finished) controller.abort();
+      dlg.remove();
+      ta.focus();
+    }, { once:true });
+    stop.addEventListener('click', event => {
+      event.preventDefault();
+      if (!finished){
+        controller.abort();
+        live.textContent = 'Stopping…';
+      } else {
+        dlg.close('cancel');
+      }
+    });
+    copy.addEventListener('click', async event => {
+      event.preventDefault();
+      try {
+        await navigator.clipboard.writeText(result);
+        live.textContent = 'Copied.';
+      } catch (_) {
+        output.focus();
+        output.select();
+        live.textContent = 'Select and copy the result.';
+      }
+    });
+    insert.addEventListener('click', event => { event.preventDefault(); applyResult('insert'); });
+    replace.addEventListener('click', event => { event.preventDefault(); applyResult('replace'); });
+    dlg.showModal();
+
+    void aiHostChatNative(APP_ID, [
+      {
+        role:'system',
+        content:'You are the private writing assistant inside NakliOS Notepad. Follow the requested editing task. Return only the useful result, without preamble or commentary.',
+      },
+      { role:'user', content:`${action.prompt}\n\nTEXT:\n${sourceText}` },
+    ], {
+      maxTokens:512,
+      signal:controller.signal,
+      onStatus:(statusName, progress) => {
+        if (dlg.isConnected) live.textContent = aiProgressLabel(statusName, progress);
+      },
+      onToken:(_token, full) => {
+        result = full;
+        if (dlg.isConnected){
+          output.value = full;
+          output.scrollTop = output.scrollHeight;
+        }
+      },
+    }).then(response => {
+      result = response.content;
+      finished = true;
+      if (!dlg.isConnected) return;
+      output.value = result;
+      live.textContent = response.finishReason === 'cancelled' ? 'Stopped.' : 'Ready to review.';
+      stop.textContent = 'Close';
+      enableResultActions();
+    }).catch(error => {
+      finished = true;
+      if (!dlg.isConnected) return;
+      live.textContent = error.message || String(error);
+      stop.textContent = 'Close';
+      enableResultActions();
+      refreshAiButton();
+    });
+  }
+  async function openPadAi(){
+    const doc = activeDocument();
+    if (!doc || !aiCapabilityForApp(APP_ID)) {
+      openSettings('ai');
+      return;
+    }
+    const selectionStart = ta.selectionStart;
+    const selectionEnd = ta.selectionEnd;
+    const hasSelection = selectionEnd > selectionStart;
+    const rawSourceText = hasSelection
+      ? ta.value.slice(selectionStart, selectionEnd)
+      : ta.value;
+    if (rawSourceText.length > AI_MAX_INPUT_CHARS - 800){
+      await nakliosAlert(
+        'That text is too long for the compact local model. Select a passage under about 23,000 characters and try again.',
+        { title:'Select a shorter passage' }
+      );
+      return;
+    }
+    const sourceText = rawSourceText;
+    if (!sourceText.trim()){
+      await nakliosAlert('Select some text or write something first.', { title:'Nothing to send' });
+      return;
+    }
+    const actionValue = await _nakliosDialog({
+      title:'Local AI in Notepad',
+      body:`Use the ${hasSelection ? 'selected text' : 'whole document'} as context. Nothing changes until you choose Replace or Insert.`,
+      buttons:[
+        { value:'cancel', label:'Cancel' },
+        { value:'proofread', label:'Proofread' },
+        { value:'improve', label:'Improve writing' },
+        { value:'summarize', label:'Summarize', primary:true },
+      ],
+    });
+    const actions = {
+      summarize:{ label:'Summarize', prompt:'Summarize the text clearly and concisely.' },
+      improve:{ label:'Improve writing', prompt:'Rewrite the text for clarity and flow while preserving its meaning and tone.' },
+      proofread:{ label:'Proofread', prompt:'Correct spelling, grammar, and punctuation while changing as little as possible.' },
+    };
+    const action = actions[actionValue];
+    if (!action) return;
+    showPadAiResult({
+      action,
+      sourceText,
+      selectionStart:hasSelection ? selectionStart : 0,
+      selectionEnd:hasSelection ? selectionEnd : ta.value.length,
+      documentId:doc.id,
+    });
   }
   function updateCount(){
     const text = ta.value;
@@ -7603,6 +8229,7 @@ Classics.notepad = (body, win) => {
   body.querySelector('#pad-save').addEventListener('click', saveActiveInteractive);
   body.querySelector('#pad-save-as').addEventListener('click', () => saveAsLocalFile());
   body.querySelector('#pad-download').addEventListener('click', downloadActive);
+  aiBtn.addEventListener('click', openPadAi);
   body.querySelector('#pad-delete').addEventListener('click', deleteActiveDocument);
   body.querySelector('#pad-storage').addEventListener('click', chooseStorage);
   body.querySelector('#pad-import').addEventListener('click', () => {
@@ -7679,6 +8306,7 @@ Classics.notepad = (body, win) => {
     document.removeEventListener('visibilitychange', persistWhenHidden);
     persistSession();
   };
+  win._onCapabilitiesChange = refreshAiButton;
   initialiseStorage().catch(err => {
     status.textContent = 'Could not initialise · ' + String(err?.message || err);
     storageId = 'local';

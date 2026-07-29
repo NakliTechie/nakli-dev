@@ -72,23 +72,27 @@ app origin or under Folder/Crate.
 
 ## Permissions
 
-v1 supports one optional permission:
+v1 supports two optional permissions:
 
 - `storage` — the app may ask for its own `apps/<installed-id>/` namespace in
   the user's currently connected NakliOS Folder or Crate. The manifest request
   does not grant access: NakliOS asks again on first use. Apps that omit this
   permission receive `naklios.capabilities.fs === false`, even when storage is
   connected.
+- `inference` — the app may ask to use the shared on-device LocalMind text
+  model. The manifest request does not grant access: NakliOS asks again on
+  first use. The app receives streamed text only, never the worker, model
+  memory, another app's prompts, host tools, files, or credentials.
 
-`storage` requires `display:"window"` because a normal top-level tab has no
-NakliOS bridge. Basic mode routes even a window manifest to its canonical tab,
-so host storage remains unavailable there; switching to Immersive opens the
-opaque hosted window and allows the separate first-use grant.
+Both permissions require `display:"window"` because a normal top-level tab has
+no NakliOS bridge. Basic mode routes even a window manifest to its canonical
+tab, so host services remain unavailable there; switching to Immersive opens
+the opaque hosted window and allows the separate first-use grants.
 
 No permission grants access to another app, NakliOS state, credentials, the
 parent DOM, arbitrary local files, or a same-origin execution context.
 
-## Lifecycle, theme, and storage API
+## Lifecycle, theme, storage, and inference API
 
 For cooperative behavior, load the current SDK from NakliOS:
 
@@ -107,6 +111,9 @@ An app should:
    `naklios.capabilities.fs`;
 6. keep Browser, Folder, and Crate visibly separate, with no implicit copy,
    deletion, rebind, or migration.
+7. call `naklios.ai.chat.completions.create(...)` only after checking
+   `naklios.capabilities.ai`, show queued/loading/generating state, provide
+   cancellation, and require an explicit user action before replacing content.
 
 See the full [cooperative app contract](app-contract.md) for message shapes,
 backend-affine filesystem operations, remote-change subscriptions, and
@@ -132,7 +139,7 @@ Before publishing a manifest, verify:
 - the standalone URL still works without NakliOS;
 - the hosted app emits `ready`, handles a theme change, and completes or
   acknowledges pending save work before close;
-- no-storage and denied-storage paths are usable and honest;
+- no-storage, no-inference, and denied-permission paths are usable and honest;
 - reconnect and backend-switch flows do not silently merge locations.
 
 For installation conformance, test that malformed/oversized manifests fail,

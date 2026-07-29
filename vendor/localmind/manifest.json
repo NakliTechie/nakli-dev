@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/NakliTechie/LocalMind",
+  "upstreamCommit": "a1ab06ecd8d91fb8ee20babac378cde25adbc9aa",
+  "protocol": "localmind.inference.v1",
+  "model": {
+    "id": "LiquidAI/LFM2.5-230M-GGUF",
+    "file": "LFM2.5-230M-Q4_0.gguf"
+  },
+  "files": {
+    "inference-worker.js": "538277d108577f35acfb1548d83c996567d97a62516e0b29cc63c4a7588965b3",
+    "lfm2_5.js": "ee6c540df308055347d2c720ec7642ce44c4a8f2fb0328c866fcd52a434d7b39"
+  }
+}

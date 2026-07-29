@@ -45,7 +45,12 @@ invalid({ icon:'<svg>' }, /icon/);
 invalid({ permissions:['storage', 'storage'] }, /permissions/);
 invalid({ permissions:['host-native'] }, /permissions/);
 invalid({ display:'system' }, /display/);
-invalid({ display:'tab', permissions:['storage'] }, /storage permission requires display "window"/);
+invalid({ display:'tab', permissions:['storage'] }, /host permissions require display "window"/);
+invalid({ display:'tab', permissions:['inference'] }, /host permissions require display "window"/);
+assert.deepEqual(
+  [...validator.normalizeThirdPartyManifest({ ...example, permissions:['inference', 'storage'] }).permissions],
+  ['inference', 'storage'],
+);
 assert.equal(
   validator.normalizeThirdPartyManifest({ ...example, url:'http://localhost:4173/' }).origin,
   'http://localhost:4173',
@@ -78,6 +83,11 @@ assert.match(
 );
 assert.match(
   html,
+  /return !app\?\.thirdParty \|\| \(app\.permissions \|\| \[\]\)\.includes\('inference'\)/,
+  'inference capability advertisements honor the installed manifest',
+);
+assert.match(
+  html,
   /credentials:'omit'[\s\S]*?cache:'no-store'[\s\S]*?redirect:'error'[\s\S]*?referrerPolicy:'no-referrer'/,
   'remote manifest checks do not send ambient credentials or follow redirects',
 );
@@ -106,9 +116,11 @@ assert.match(
 );
 assert.match(
   html,
-  /if \(!review\.existing \|\| review\.originChanged\) delete state\.appPermissions\[appId\]/,
+  /if \(!review\.existing \|\| review\.originChanged\)\{[\s\S]*?delete state\.appPermissions\[appId\]/,
   'a new profile-local registration cannot inherit a restored permission decision',
 );
+assert.match(html, /delete state\.aiPermissions\[review\.existing\.appId\]/);
+assert.match(html, /delete state\.aiPermissions\[appId\]/);
 assert.match(
   html,
   /getMode\(\) === 'basic'[\s\S]*?NakliOS storage stays unavailable until the app is opened in Immersive/,
@@ -139,6 +151,7 @@ for (const phrase of [
   'naklios.ready()',
   'naklios.beforeClose',
   'no implicit copy',
+  '`inference`',
   'lacks `allow-same-origin`',
 ]) {
   assert.match(standard, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));

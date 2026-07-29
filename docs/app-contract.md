@@ -2,7 +2,8 @@
 
 This is the stable integration boundary between NakliOS and a cooperative app.
 Apps remain ordinary browser applications. When hosted in a NakliOS window,
-`sdk/naklios.js` adds lifecycle, theme, and app-scoped filesystem services.
+`sdk/naklios.js` adds lifecycle, theme, app-scoped filesystem services, and
+optional shared on-device inference.
 The same source may continue to run standalone.
 
 ## Product spelling
@@ -83,12 +84,51 @@ dark or that `BRAND` has sufficient contrast as body text.
     { id: "fsa", label: "Folder", name: "NakliOS" },
     { id: "crate", label: "Crate", name: "personal" }
   ],
-  fsBackend: "crate"
+  fsBackend: "crate",
+  ai: true,
+  aiModel: "LiquidAI/LFM2.5-230M-GGUF",
+  aiState: "ready"
 }
 ```
 
 Use `naklios.onCapabilitiesChange(callback)` rather than reading it only once.
 Folder permissions can expire and a Crate can be locked while the app is open.
+Local AI also changes from `idle` to `loading`, `ready`, or `error`.
+
+## Local AI
+
+NakliOS owns one shared LocalMind model worker. Apps receive a streamed text
+completion API, not the worker, model memory, another app's queue, histories,
+tools, filesystem, or credentials.
+
+```js
+const stream = await naklios.ai.chat.completions.create({
+  messages: [
+    { role: "system", content: "Answer clearly and briefly." },
+    { role: "user", content: "Explain this passage." }
+  ],
+  max_tokens: 384,
+  stream: true,
+  onStatus(status, progress) {
+    // queued | loading | generating
+  }
+});
+
+for await (const chunk of stream) {
+  output.append(chunk.choices[0].delta.content || "");
+}
+```
+
+Omit `stream:true` for an OpenAI-shaped final response. An `AbortSignal` may be
+passed as `signal`, or call `stream.cancel()`. The host serializes generation,
+applies per-app queue limits, and asks for device-local consent on first use.
+The first approved request may download and cache roughly 140 MB of model
+weights.
+
+Check `naklios.capabilities.ai` before exposing an AI action. The app must remain
+useful when it is false. Third-party apps must also declare `inference` in their
+manifest. Prompts are request-scoped; an app that wants chat history must own
+and display that history itself.
 
 ## Filesystem
 
@@ -188,7 +228,8 @@ apps/notes/
 ## Security boundary
 
 The app never receives Folder handles, Crate credentials, bucket configuration,
-or the encryption key. It receives only the scoped RPC surface.
+the encryption key, inference worker, or model memory. It receives only the
+scoped RPC surfaces.
 
 The host derives the app identity from the iframe window it created, not from
 an app-supplied ID. Apps cannot escape `apps/<app-id>/` through filesystem
@@ -213,3 +254,5 @@ A stateful cooperative app should prove:
 6. Paths remain inside the app namespace.
 7. Styled dialogs replace native `alert`, `confirm`, and `prompt`.
 8. Theme changes and reduced-motion preferences remain usable.
+9. AI actions remain optional, show progress, are cancellable, and never
+   silently overwrite authored content.
