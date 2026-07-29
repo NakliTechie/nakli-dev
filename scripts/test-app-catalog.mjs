@@ -3,7 +3,20 @@ import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
-for (const retiredId of ['bahi', 'fretlocal']) {
+for (const retiredId of [
+  'bahi',
+  'fretlocal',
+  'clacker',
+  'mechanikon',
+  'antikythera',
+  'calendars',
+  'karkhana',
+  'tapasya',
+  'dotspin',
+  'hueandcry',
+  'predmkt',
+  'callib',
+]) {
   assert.doesNotMatch(
     html,
     new RegExp(`id:'${retiredId}'`),
@@ -15,6 +28,17 @@ for (const retiredId of ['bahi', 'fretlocal']) {
     `${retiredId} must not remain in a NakliOS desktop folder`,
   );
 }
+
+assert.match(
+  html,
+  /id:'fld-utilities'[\s\S]*?apps:\[[^\]]*'rangrez'/,
+  'Rangrez remains available as a practical Utilities app',
+);
+assert.doesNotMatch(
+  html,
+  /id:'fld-fun'/,
+  'the portfolio-style Fun folder must not return',
+);
 
 assert.match(
   html,
