@@ -11,6 +11,10 @@ Dozens of privacy-first tools, games, and utilities — each a single HTML file 
 - **Immersive** — the default for new profiles. Compatible apps open in responsive NakliOS windows on desktop and mobile; apps that cannot embed still open in a tab.
 - **Basic** — built-ins and storage-dependent system apps stay hosted; other web apps open in new tabs. An existing explicit Basic preference is preserved.
 
+Basic is a compatibility and user-choice fallback, not a second desktop
+generation. The [`Experience mode policy`](docs/experience-modes.md) records
+the keep decision, invariants, and historical-key migration.
+
 Every NakliOS window has an **App Info** button in its titlebar. It shows the
 actual loaded URL and origin, iframe sandbox tokens, load/SDK-ready timings,
 the storage capabilities currently offered to that app, and whether the
@@ -30,7 +34,7 @@ One line in the `APPS` array at the top of `index.html`:
 
 Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`, `embedUrl:'https://naklios.dev/apps/<id>/'` (same-origin mirror for FSA-needing apps; see `apps/manifest.json`).
 
-Stateful and cooperative apps should follow the
+First-party stateful and cooperative apps should follow the
 [`NakliOS app contract`](docs/app-contract.md), including backend-affine
 filesystem calls, separate Browser/Folder/Crate libraries, async close
 durability, and explicit remote-conflict handling.
