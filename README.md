@@ -55,7 +55,8 @@ chat and image-generation surfaces under `naklios.ai`.
 
 NakliOS has one host-owned inference broker backed by pinned LocalMind
 runtimes. LFM2.5 230M remains the fast ~140 MB default. Settings also offers
-Gemma 4 E2B, Gemma 4 E4B, and Qwen3 4B through WebGPU, or an
+Gemma 4 E2B, Gemma 4 E4B, and Qwen3.5 4B through pinned Transformers.js
+4.2.0/WebGPU, or an
 OpenAI-compatible endpoint: Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter,
 Groq, or a custom provider. Cooperative apps keep one SDK regardless of which
 runtime the user chooses. Requests are bounded, queued fairly, reset between

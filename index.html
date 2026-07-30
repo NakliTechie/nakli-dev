@@ -5449,6 +5449,7 @@ async function aiEnsureLoaded(model, onProgress){
         modelId:model.id,
         dtype:model.dtype,
         modelType:model.modelType,
+        modelClass:model.modelClass,
       });
     }
     await aiHost.loadPromise;

@@ -25,10 +25,13 @@ const catalog = await readFile(new URL('vendor/localmind/host-model-catalog.js',
 assert.match(worker, /new URL\('\.\/lfm2_5\.js', import\.meta\.url\)/);
 assert.match(worker, /localmind\.inference\.v1/);
 assert.match(onnxWorker, /Gemma4ForConditionalGeneration/);
+assert.match(onnxWorker, /Qwen3_5ForConditionalGeneration/);
+assert.match(onnxWorker, /@huggingface\/transformers@4\.2\.0/);
 assert.match(onnxWorker, /AutoModelForCausalLM/);
 assert.match(catalog, /gemma4-e2b/);
 assert.match(catalog, /gemma4-e4b/);
-assert.match(catalog, /qwen3-4b/);
+assert.match(catalog, /qwen35-4b/);
+assert.match(catalog, /onnx-community\/Qwen3\.5-4B-ONNX-OPT/);
 assert.match(catalog, /flux2-klein-4b-webgpu/);
 assert.match(imageWorker, /localmind\.image\.v1/);
 assert.match(imageWorker, /prism-ml\/bonsai-image-ternary-4B-mlx-2bit/);

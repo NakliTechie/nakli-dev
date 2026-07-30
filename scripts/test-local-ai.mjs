@@ -57,8 +57,11 @@ const modelKeys = Array.from(
 );
 assert.deepEqual(
   modelKeys,
-  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen3-4b'],
+  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen35-4b'],
 );
+const qwen35 = catalogContext.LocalMindHostCatalog.get('qwen35-4b');
+assert.equal(qwen35.id, 'onnx-community/Qwen3.5-4B-ONNX-OPT');
+assert.equal(qwen35.modelClass, 'qwen3_5');
 assert.equal(catalogContext.LocalMindHostCatalog.defaultKey, 'lfm2-230m-webgpu');
 assert.equal(
   catalogContext.LocalMindHostCatalog.defaultImageKey,
