@@ -3949,6 +3949,9 @@ function appDiagnosticRows(win, mirrorManifest, mirrorError){
     { label:'AI capability', value:caps?.ai
       ? `${AI_MODEL_LABEL} (${caps.aiState || 'idle'})`
       : 'Unavailable, undeclared, or denied' },
+    { label:'Image generation', value:caps?.aiImages
+      ? `${AI_IMAGE_MODEL_LABEL} (${caps.aiImageState || 'idle'})`
+      : 'Unavailable, undeclared, or denied' },
     ...appProvenanceRows(win, mirrorManifest, mirrorError),
   );
   return rows;
@@ -4760,11 +4763,12 @@ async function fsHostList(msg, appId){
 // ════════════════════════════════════════════════════════════════════
 // INFERENCE BROKER
 // ════════════════════════════════════════════════════════════════════
-// NakliOS presents one narrow, streamed chat capability to apps. The selected
-// runtime can be a vendored LocalMind worker, a local OpenAI-compatible server,
-// or a cloud BYOK endpoint. Apps never receive a worker, model object, another
-// app's queue entry, filesystem capability, endpoint URL, or API key.
+// NakliOS presents narrow chat and image-generation capabilities to apps. The
+// selected runtime can be a vendored LocalMind worker, a local compatible
+// server, or a cloud BYOK endpoint. Apps never receive a worker, model object,
+// another app's queue entry, filesystem capability, endpoint URL, or API key.
 const AI_PROTOCOL = 'localmind.inference.v1';
+const AI_IMAGE_PROTOCOL = 'localmind.image.v1';
 const AI_SETTINGS_KEY = 'nakliOS.aiSettings.v1';
 const AI_SESSION_KEY = 'nakliOS.aiEndpointKey.session.v1';
 const AI_REMEMBERED_KEY = 'nakliOS.aiEndpointKey.remembered.v1';
@@ -4773,7 +4777,9 @@ const AI_MAX_QUEUE_PER_APP = 3;
 const AI_MAX_INPUT_CHARS = 24000;
 const AI_MAX_MESSAGES = 32;
 const AI_MAX_OUTPUT_TOKENS = 768;
+const AI_MAX_IMAGE_PROMPT_CHARS = 8000;
 const AI_LOAD_REQUEST_ID = 'naklios-model-load-v1';
+const AI_IMAGE_LOAD_REQUEST_ID = 'naklios-image-model-load-v1';
 const AI_ENDPOINT_PRESETS = Object.freeze({
   ollama: Object.freeze({
     label:'Ollama',
@@ -4811,12 +4817,33 @@ const AI_ENDPOINT_PRESETS = Object.freeze({
     keyRequired:false,
   }),
 });
+const AI_IMAGE_ENDPOINT_PRESETS = Object.freeze({
+  openai: Object.freeze({
+    label:'OpenAI',
+    baseUrl:'https://api.openai.com/v1',
+    model:'gpt-image-2',
+    keyRequired:true,
+  }),
+  custom: Object.freeze({
+    label:'OpenAI-compatible image API',
+    baseUrl:'',
+    model:'',
+    keyRequired:false,
+  }),
+});
 const AI_DEFAULT_SETTINGS = Object.freeze({
   modelKey:globalThis.LocalMindHostCatalog.defaultKey,
   endpoint:Object.freeze({
     preset:'ollama',
     baseUrl:AI_ENDPOINT_PRESETS.ollama.baseUrl,
     model:'',
+    rememberKey:false,
+  }),
+  imageModelKey:globalThis.LocalMindHostCatalog.defaultImageKey,
+  imageEndpoint:Object.freeze({
+    preset:'openai',
+    baseUrl:AI_IMAGE_ENDPOINT_PRESETS.openai.baseUrl,
+    model:AI_IMAGE_ENDPOINT_PRESETS.openai.model,
     rememberKey:false,
   }),
 });
@@ -4829,6 +4856,13 @@ function aiReadSettings(){
   const preset = AI_ENDPOINT_PRESETS[saved.endpoint?.preset]
     ? saved.endpoint.preset
     : AI_DEFAULT_SETTINGS.endpoint.preset;
+  const validImageModel = saved.imageModelKey === 'endpoint' ||
+    globalThis.LocalMindHostCatalog.imageModels.some(
+      model => model.key === saved.imageModelKey
+    );
+  const imagePreset = AI_IMAGE_ENDPOINT_PRESETS[saved.imageEndpoint?.preset]
+    ? saved.imageEndpoint.preset
+    : AI_DEFAULT_SETTINGS.imageEndpoint.preset;
   return {
     modelKey:validModel ? saved.modelKey : AI_DEFAULT_SETTINGS.modelKey,
     endpoint:{
@@ -4837,12 +4871,31 @@ function aiReadSettings(){
       model:String(saved.endpoint?.model || ''),
       rememberKey:saved.endpoint?.rememberKey === true,
     },
+    imageModelKey:validImageModel
+      ? saved.imageModelKey
+      : AI_DEFAULT_SETTINGS.imageModelKey,
+    imageEndpoint:{
+      preset:imagePreset,
+      baseUrl:String(
+        saved.imageEndpoint?.baseUrl ||
+        AI_IMAGE_ENDPOINT_PRESETS[imagePreset].baseUrl ||
+        ''
+      ),
+      model:String(
+        saved.imageEndpoint?.model ||
+        AI_IMAGE_ENDPOINT_PRESETS[imagePreset].model ||
+        ''
+      ),
+      rememberKey:saved.imageEndpoint?.rememberKey === true,
+    },
   };
 }
 
 let aiSettings = aiReadSettings();
 let AI_MODEL_ID = '';
 let AI_MODEL_LABEL = '';
+let AI_IMAGE_MODEL_ID = '';
+let AI_IMAGE_MODEL_LABEL = '';
 
 function aiNormaliseEndpointBase(value){
   const raw = String(value || '').trim().replace(/\/+$/, '');
@@ -4898,12 +4951,47 @@ function aiSelectedModel(){
   };
 }
 
+function aiSelectedImageModel(){
+  if (aiSettings.imageModelKey === 'endpoint'){
+    let baseUrl = '';
+    try { baseUrl = aiNormaliseEndpointBase(aiSettings.imageEndpoint.baseUrl); } catch(_){}
+    const preset = AI_IMAGE_ENDPOINT_PRESETS[aiSettings.imageEndpoint.preset] ||
+      AI_IMAGE_ENDPOINT_PRESETS.custom;
+    const model = String(aiSettings.imageEndpoint.model || '').trim();
+    const local = aiEndpointIsLocal(baseUrl);
+    return {
+      key:'endpoint',
+      id:model || 'image-endpoint',
+      label:model ? `${preset.label} · ${model}` : `${preset.label} endpoint`,
+      description:local
+        ? 'Generates through an image service on this device or local network.'
+        : 'Generates through an external image provider using your API key.',
+      runtime:'endpoint-image',
+      scope:local ? 'local-endpoint' : 'external',
+      baseUrl,
+      model,
+      preset:aiSettings.imageEndpoint.preset,
+      defaultSize:'1024x1024',
+      outputFormat:'png',
+    };
+  }
+  return {
+    ...globalThis.LocalMindHostCatalog.getImage(aiSettings.imageModelKey),
+    scope:'device',
+  };
+}
+
 function aiRefreshSelectedModel(){
   const selected = aiSelectedModel();
   AI_MODEL_ID = selected.id;
   AI_MODEL_LABEL = selected.runtime === 'endpoint'
     ? selected.label
     : `LocalMind · ${selected.label}`;
+  const imageSelected = aiSelectedImageModel();
+  AI_IMAGE_MODEL_ID = imageSelected.id;
+  AI_IMAGE_MODEL_LABEL = imageSelected.runtime === 'endpoint-image'
+    ? imageSelected.label
+    : `LocalMind · ${imageSelected.label}`;
 }
 aiRefreshSelectedModel();
 
@@ -4945,13 +5033,13 @@ function aiForgetEndpointKey(baseUrl){
   aiWriteCredentialStore(localStorage, AI_REMEMBERED_KEY, rememberedKeys);
 }
 
-function aiPersistSettings(next, apiKey = null){
-  const credentialId = aiCredentialId(next.endpoint.baseUrl);
+function aiPersistCredential(baseUrl, rememberKey, apiKey = null){
+  const credentialId = aiCredentialId(baseUrl);
   const sessionKeys = aiReadCredentialStore(sessionStorage, AI_SESSION_KEY);
   const rememberedKeys = aiReadCredentialStore(localStorage, AI_REMEMBERED_KEY);
   const clean = apiKey === null ? '' : String(apiKey || '').trim();
   if (credentialId && clean) sessionKeys[credentialId] = clean;
-  if (credentialId && next.endpoint.rememberKey){
+  if (credentialId && rememberKey){
     const keyToRemember = clean || sessionKeys[credentialId] || rememberedKeys[credentialId];
     if (keyToRemember) rememberedKeys[credentialId] = keyToRemember;
   } else if (credentialId) {
@@ -4959,6 +5047,31 @@ function aiPersistSettings(next, apiKey = null){
   }
   aiWriteCredentialStore(sessionStorage, AI_SESSION_KEY, sessionKeys);
   aiWriteCredentialStore(localStorage, AI_REMEMBERED_KEY, rememberedKeys);
+}
+
+function aiPersistSettings(next, apiKey = null){
+  const sharedImageCredential = next.imageEndpoint?.rememberKey === true &&
+    aiCredentialId(next.imageEndpoint.baseUrl) ===
+      aiCredentialId(next.endpoint.baseUrl);
+  aiPersistCredential(
+    next.endpoint.baseUrl,
+    next.endpoint.rememberKey || sharedImageCredential,
+    apiKey,
+  );
+  aiSettings = next;
+  localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings));
+  aiRefreshSelectedModel();
+}
+
+function aiPersistImageSettings(next, apiKey = null){
+  const sharedChatCredential = next.endpoint?.rememberKey === true &&
+    aiCredentialId(next.endpoint.baseUrl) ===
+      aiCredentialId(next.imageEndpoint.baseUrl);
+  aiPersistCredential(
+    next.imageEndpoint.baseUrl,
+    next.imageEndpoint.rememberKey || sharedChatCredential,
+    apiKey,
+  );
   aiSettings = next;
   localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings));
   aiRefreshSelectedModel();
@@ -4969,6 +5082,10 @@ function aiPermissionScope(model = aiSelectedModel()){
   let origin = model.baseUrl;
   try { origin = new URL(model.baseUrl).origin; } catch(_){}
   return `${model.scope}:${origin}`;
+}
+
+function aiImagePermissionScope(model = aiSelectedImageModel()){
+  return `image:${aiPermissionScope(model)}`;
 }
 
 function aiPermissionDecision(appId, scope = aiPermissionScope()){
@@ -4997,12 +5114,32 @@ const aiHost = {
   endpointAbort:null,
 };
 
+const aiImageHost = {
+  worker:null,
+  workerModelKey:null,
+  state:'idle',
+  error:null,
+  loadPromise:null,
+  loadResolve:null,
+  loadReject:null,
+  loadListeners:new Set(),
+  activeResolve:null,
+  activeReject:null,
+};
+
 function aiWebGpuAvailable(){
   return !!navigator.gpu && typeof Worker !== 'undefined';
 }
 
 function aiRuntimeAvailable(model = aiSelectedModel()){
   if (model.runtime === 'endpoint') {
+    return !!model.baseUrl && !!model.model && typeof fetch === 'function';
+  }
+  return aiWebGpuAvailable();
+}
+
+function aiImageRuntimeAvailable(model = aiSelectedImageModel()){
+  if (model.runtime === 'endpoint-image') {
     return !!model.baseUrl && !!model.model && typeof fetch === 'function';
   }
   return aiWebGpuAvailable();
@@ -5020,16 +5157,33 @@ function aiCapabilityForApp(appId){
     decision?.granted !== false;
 }
 
+function aiImageCapabilityForApp(appId){
+  const decision = aiPermissionDecision(appId, aiImagePermissionScope());
+  return aiImageRuntimeAvailable() &&
+    aiManifestAllows(appId) &&
+    decision?.granted !== false;
+}
+
 function aiSetState(next, error = null){
   aiHost.state = next;
   aiHost.error = error ? String(error?.message || error) : null;
   try { broadcastCapabilities(); } catch(_){}
 }
 
-async function aiEnsurePermission(appId){
-  const model = aiSelectedModel();
-  if (!aiManifestAllows(appId) || !aiRuntimeAvailable(model)) return false;
-  const scope = aiPermissionScope(model);
+function aiSetImageState(next, error = null){
+  aiImageHost.state = next;
+  aiImageHost.error = error ? String(error?.message || error) : null;
+  try { broadcastCapabilities(); } catch(_){}
+}
+
+async function aiEnsurePermission(appId, capability = 'chat'){
+  const image = capability === 'image';
+  const model = image ? aiSelectedImageModel() : aiSelectedModel();
+  const available = image
+    ? aiImageRuntimeAvailable(model)
+    : aiRuntimeAvailable(model);
+  if (!aiManifestAllows(appId) || !available) return false;
+  const scope = image ? aiImagePermissionScope(model) : aiPermissionScope(model);
   const saved = aiPermissionDecision(appId, scope);
   if (saved?.granted === true) return true;
   if (saved?.granted === false) return false;
@@ -5039,24 +5193,29 @@ async function aiEnsurePermission(appId){
   const prompt = (async () => {
     const app = APPS.find(item => item.id === appId);
     const name = app?.name || appId;
+    const action = image ? 'generate images with NakliOS AI' : 'use NakliOS AI';
+    const contentName = image ? 'Image prompts and generated images' : 'Prompts and replies';
     let boundary;
     if (model.scope === 'device'){
       boundary =
-        `The shared ${AI_MODEL_LABEL} model runs in this browser. Its first use downloads ${model.size} and caches it on this device. ` +
-        `Prompts and replies stay in this tab and are not shared with other apps.`;
+        `The shared ${image ? AI_IMAGE_MODEL_LABEL : AI_MODEL_LABEL} model runs in this browser. ` +
+        `Its first use downloads ${model.size} and caches it on this device. ` +
+        `${contentName} stay in this tab and are not shared with other apps.`;
     } else if (model.scope === 'local-endpoint'){
       boundary =
-        `Prompts and replies will be sent to the configured ${AI_MODEL_LABEL} service at ${model.baseUrl}. ` +
+        `${contentName} will be sent to the configured ` +
+        `${image ? AI_IMAGE_MODEL_LABEL : AI_MODEL_LABEL} service at ${model.baseUrl}. ` +
         `NakliOS keeps the endpoint and any credential hidden from apps.`;
     } else {
       boundary =
-        `Prompts and replies will leave this device and be sent to ${AI_MODEL_LABEL} at ${model.baseUrl}. ` +
+        `${contentName} will leave this device and be sent to ` +
+        `${image ? AI_IMAGE_MODEL_LABEL : AI_MODEL_LABEL} at ${model.baseUrl}. ` +
         `NakliOS keeps your API key hidden from apps.`;
     }
     const granted = await nakliosConfirm(
-      `${name} wants to use NakliOS AI.\n\n${boundary}`,
+      `${name} wants to ${action}.\n\n${boundary}`,
       {
-        title:'Allow AI?',
+        title:image ? 'Allow image generation?' : 'Allow AI?',
         okLabel:'Allow',
         cancelLabel:'Not now',
       }
@@ -5080,9 +5239,12 @@ async function aiEnsurePermission(appId){
 function aiEmit(request, event){
   try {
     request.source.postMessage({
-      type:'naklios:ai:event',
+      type:request.kind === 'image'
+        ? 'naklios:ai:image:event'
+        : 'naklios:ai:event',
       requestId:request.requestId,
-      model:request.model?.id || AI_MODEL_ID,
+      model:request.model?.id ||
+        (request.kind === 'image' ? AI_IMAGE_MODEL_ID : AI_MODEL_ID),
       ...event,
     }, '*');
   } catch(_){}
@@ -5159,7 +5321,113 @@ function aiCreateWorker(model){
   return worker;
 }
 
+function aiReleaseChatWorker(){
+  try { aiHost.worker?.postMessage({ type:'unload' }); } catch(_){}
+  try { aiHost.worker?.terminate(); } catch(_){}
+  aiHost.worker = null;
+  aiHost.workerModelKey = null;
+  aiHost.loadPromise = null;
+  aiHost.loadResolve = null;
+  aiHost.loadReject = null;
+  aiSetState('idle');
+}
+
+function aiFailImageWorker(error){
+  const failure = error instanceof Error
+    ? error
+    : new Error(String(error || 'Local image worker failed'));
+  if (aiImageHost.loadReject) aiImageHost.loadReject(failure);
+  if (aiImageHost.activeReject) aiImageHost.activeReject(failure);
+  aiImageHost.loadResolve = null;
+  aiImageHost.loadReject = null;
+  aiImageHost.activeResolve = null;
+  aiImageHost.activeReject = null;
+  aiImageHost.loadPromise = null;
+  try { aiImageHost.worker?.terminate(); } catch(_){}
+  aiImageHost.worker = null;
+  aiImageHost.workerModelKey = null;
+  aiSetImageState('error', failure);
+}
+
+function aiDestroyImageWorker(){
+  try { aiImageHost.worker?.postMessage({ type:'destroy' }); } catch(_){}
+  try { aiImageHost.worker?.terminate(); } catch(_){}
+  aiImageHost.worker = null;
+  aiImageHost.workerModelKey = null;
+  aiImageHost.loadPromise = null;
+  aiImageHost.loadResolve = null;
+  aiImageHost.loadReject = null;
+  aiImageHost.activeResolve = null;
+  aiImageHost.activeReject = null;
+  aiSetImageState('idle');
+}
+
+function aiCreateImageWorker(model){
+  if (aiImageHost.worker && aiImageHost.workerModelKey === model.key) {
+    return aiImageHost.worker;
+  }
+  if (aiImageHost.worker) aiDestroyImageWorker();
+  const url = new URL(`vendor/localmind/${model.worker}`, document.baseURI);
+  const worker = new Worker(url, {
+    type:'module',
+    name:`naklios-localmind-image-${model.key}`,
+  });
+  worker.addEventListener('message', event => {
+    const msg = event.data || {};
+    if (msg.protocol && msg.protocol !== AI_IMAGE_PROTOCOL) return;
+    if (msg.id === AI_IMAGE_LOAD_REQUEST_ID){
+      if (msg.type === 'progress'){
+        aiImageHost.loadListeners.forEach(listener => {
+          try { listener(msg); } catch(_){}
+        });
+      } else if (msg.type === 'loaded'){
+        const resolve = aiImageHost.loadResolve;
+        aiImageHost.loadResolve = null;
+        aiImageHost.loadReject = null;
+        aiSetImageState('ready');
+        resolve?.();
+      } else if (msg.type === 'error'){
+        aiFailImageWorker(new Error(msg.message || 'Local image model failed to load'));
+      }
+      return;
+    }
+    const request = aiHost.active;
+    if (!request || request.kind !== 'image' ||
+        msg.id !== request.workerRequestId) return;
+    if (msg.type === 'step'){
+      aiEmit(request, {
+        event:'status',
+        status:'generating',
+        progress:{ step:Number(msg.step) || 0, total:Number(msg.total) || 0 },
+      });
+    } else if (msg.type === 'log'){
+      aiEmit(request, {
+        event:'status',
+        status:'generating',
+        progress:{ message:String(msg.message || '') },
+      });
+    } else if (msg.type === 'image'){
+      const resolve = aiImageHost.activeResolve;
+      aiImageHost.activeResolve = null;
+      aiImageHost.activeReject = null;
+      resolve?.(msg);
+    } else if (msg.type === 'error'){
+      const reject = aiImageHost.activeReject;
+      aiImageHost.activeResolve = null;
+      aiImageHost.activeReject = null;
+      reject?.(new Error(msg.message || 'Local image generation failed'));
+    }
+  });
+  worker.addEventListener('error', event => {
+    aiFailImageWorker(new Error(event.message || 'Local image worker crashed'));
+  });
+  aiImageHost.worker = worker;
+  aiImageHost.workerModelKey = model.key;
+  return worker;
+}
+
 async function aiEnsureLoaded(model, onProgress){
+  if (aiImageHost.worker) aiDestroyImageWorker();
   if (model.runtime === 'endpoint'){
     aiSetState('ready');
     return;
@@ -5186,6 +5454,37 @@ async function aiEnsureLoaded(model, onProgress){
     await aiHost.loadPromise;
   } finally {
     if (typeof onProgress === 'function') aiHost.loadListeners.delete(onProgress);
+  }
+}
+
+async function aiEnsureImageLoaded(model, onProgress){
+  if (model.runtime === 'endpoint-image'){
+    aiSetImageState('ready');
+    return;
+  }
+  if (aiHost.worker) aiReleaseChatWorker();
+  if (aiImageHost.state === 'ready' && aiImageHost.worker &&
+      aiImageHost.workerModelKey === model.key) return;
+  if (typeof onProgress === 'function') aiImageHost.loadListeners.add(onProgress);
+  try {
+    if (!aiImageHost.loadPromise){
+      aiSetImageState('loading');
+      const worker = aiCreateImageWorker(model);
+      aiImageHost.loadPromise = new Promise((resolve, reject) => {
+        aiImageHost.loadResolve = resolve;
+        aiImageHost.loadReject = reject;
+      });
+      worker.postMessage({
+        type:'load',
+        id:AI_IMAGE_LOAD_REQUEST_ID,
+        modelId:model.id,
+      });
+    }
+    await aiImageHost.loadPromise;
+  } finally {
+    if (typeof onProgress === 'function') {
+      aiImageHost.loadListeners.delete(onProgress);
+    }
   }
 }
 
@@ -5234,13 +5533,114 @@ function aiGenerateWorker(request){
 
 function aiEndpointHeaders(model){
   const headers = { 'Content-Type':'application/json' };
-  const apiKey = aiEndpointApiKey();
+  const apiKey = aiEndpointApiKey(model.baseUrl);
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   if (model.preset === 'openrouter'){
     headers['HTTP-Referer'] = location.origin;
     headers['X-Title'] = 'NakliOS';
   }
   return headers;
+}
+
+function aiEndpointImageUrl(baseUrl){
+  const base = aiNormaliseEndpointBase(baseUrl);
+  if (/\/images\/generations$/i.test(base)) return base;
+  return `${base}/images/generations`;
+}
+
+function aiBytesToBase64(bytes){
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < view.length; offset += chunkSize){
+    binary += String.fromCharCode(...view.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function aiGenerateImageWorker(request){
+  return new Promise((resolve, reject) => {
+    aiImageHost.activeResolve = resolve;
+    aiImageHost.activeReject = reject;
+    aiImageHost.worker.postMessage({
+      type:'generate',
+      id:request.workerRequestId,
+      prompt:request.prompt,
+      width:request.width,
+      height:request.height,
+      steps:request.steps,
+      seed:request.seed,
+    });
+  });
+}
+
+async function aiGenerateEndpointImage(request){
+  const controller = new AbortController();
+  aiHost.endpointAbort = controller;
+  try {
+    const body = {
+      model:request.model.model,
+      prompt:request.prompt,
+      n:1,
+      size:request.size,
+      output_format:'png',
+    };
+    if (request.quality !== 'auto') body.quality = request.quality;
+    const response = await fetch(aiEndpointImageUrl(request.model.baseUrl), {
+      method:'POST',
+      headers:aiEndpointHeaders(request.model),
+      signal:controller.signal,
+      body:JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await aiReadEndpointError(response));
+    const data = await response.json();
+    const image = data?.data?.[0];
+    if (!image || (typeof image.b64_json !== 'string' &&
+        typeof image.url !== 'string')) {
+      throw new Error('Image endpoint returned no image');
+    }
+    let base64 = typeof image.b64_json === 'string' ? image.b64_json : null;
+    let mimeType = 'image/png';
+    if (!base64 && image.url){
+      const imageResponse = await fetch(image.url, { signal:controller.signal });
+      if (!imageResponse.ok) {
+        throw new Error(`Could not retrieve the generated image (${imageResponse.status})`);
+      }
+      mimeType = imageResponse.headers.get('content-type') || mimeType;
+      base64 = aiBytesToBase64(await imageResponse.arrayBuffer());
+    }
+    return {
+      b64_json:base64,
+      url:null,
+      revised_prompt:typeof image.revised_prompt === 'string'
+        ? image.revised_prompt
+        : null,
+      mime_type:mimeType,
+      width:request.width,
+      height:request.height,
+      seed:null,
+      created:Number(data?.created) || Math.floor(Date.now() / 1000),
+    };
+  } finally {
+    aiHost.endpointAbort = null;
+  }
+}
+
+async function aiGenerateImage(request){
+  if (request.model.runtime === 'endpoint-image'){
+    return aiGenerateEndpointImage(request);
+  }
+  const result = await aiGenerateImageWorker(request);
+  return {
+    b64_json:aiBytesToBase64(result.bytes),
+    url:null,
+    revised_prompt:null,
+    mime_type:'image/png',
+    width:Number(result.width) || request.width,
+    height:Number(result.height) || request.height,
+    seed:Number.isFinite(Number(result.seed)) ? Number(result.seed) : request.seed,
+    created:Math.floor(Date.now() / 1000),
+  };
 }
 
 async function aiReadEndpointError(response){
@@ -5379,21 +5779,40 @@ async function aiProcessQueue(){
   aiHost.active = request;
   try {
     aiEmit(request, { event:'status', status:'loading' });
-    await aiEnsureLoaded(request.model, progress => {
-      aiEmit(request, { event:'status', status:'loading', progress });
-    });
+    if (request.kind === 'image'){
+      await aiEnsureImageLoaded(request.model, progress => {
+        aiEmit(request, { event:'status', status:'loading', progress });
+      });
+    } else {
+      await aiEnsureLoaded(request.model, progress => {
+        aiEmit(request, { event:'status', status:'loading', progress });
+      });
+    }
     if (request.cancelled){
       aiEmit(request, { event:'done', finishReason:'cancelled' });
       return;
     }
     aiEmit(request, { event:'status', status:'generating' });
-    const finishReason = await aiGenerate(request);
-    aiEmit(request, {
-      event:'done',
-      finishReason:request.cancelled ? 'cancelled' : finishReason,
-    });
+    if (request.kind === 'image'){
+      const image = await aiGenerateImage(request);
+      if (!request.cancelled) aiEmit(request, { event:'result', image });
+      aiEmit(request, {
+        event:'done',
+        finishReason:request.cancelled ? 'cancelled' : 'stop',
+      });
+    } else {
+      const finishReason = await aiGenerate(request);
+      aiEmit(request, {
+        event:'done',
+        finishReason:request.cancelled ? 'cancelled' : finishReason,
+      });
+    }
   } catch (error){
-    aiEmit(request, { event:'error', error:String(error?.message || error) });
+    if (request.cancelled){
+      aiEmit(request, { event:'done', finishReason:'cancelled' });
+    } else {
+      aiEmit(request, { event:'error', error:String(error?.message || error) });
+    }
   } finally {
     aiHost.active = null;
     aiHost.activeResolve = null;
@@ -5404,7 +5823,12 @@ async function aiProcessQueue(){
 
 async function aiHostSubmit(source, msg, appId){
   const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 160) : '';
-  const provisional = { source, appId, requestId:requestId || 'invalid' };
+  const provisional = {
+    source,
+    appId,
+    requestId:requestId || 'invalid',
+    kind:'chat',
+  };
   try {
     const model = aiSelectedModel();
     if (!requestId) throw new Error('Local AI requestId is required');
@@ -5436,6 +5860,7 @@ async function aiHostSubmit(source, msg, appId){
       source,
       appId,
       requestId,
+      kind:'chat',
       workerRequestId:`naklios-ai-${++aiHost.requestCounter}`,
       messages,
       maxTokens:Math.max(16, Math.min(AI_MAX_OUTPUT_TOKENS, Number(msg.maxTokens) || 384)),
@@ -5444,6 +5869,106 @@ async function aiHostSubmit(source, msg, appId){
     };
     aiHost.queue.push(request);
     aiEmit(request, { event:'status', status:'queued', position:aiHost.queue.length });
+    void aiProcessQueue();
+  } catch (error){
+    aiEmit(provisional, { event:'error', error:String(error?.message || error) });
+  }
+}
+
+function aiNormaliseImageRequest(msg, model){
+  const prompt = String(msg.prompt || '').trim();
+  if (!prompt) throw new Error('Image generation requires a prompt');
+  if (prompt.length > AI_MAX_IMAGE_PROMPT_CHARS) {
+    throw new Error('Image prompt is too large');
+  }
+  if (Number(msg.n || 1) !== 1) {
+    throw new Error('NakliOS image generation currently returns one image per request');
+  }
+  const size = String(msg.size || model.defaultSize || '512x512');
+  const match = size.match(/^(\d{2,4})x(\d{2,4})$/);
+  if (!match) throw new Error('Image size must use WIDTHxHEIGHT');
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width < 128 || height < 128 || width > 4096 || height > 4096) {
+    throw new Error('Image dimensions must be between 128 and 4096 pixels');
+  }
+  if (model.scope === 'device' &&
+      Array.isArray(model.supportedSizes) &&
+      !model.supportedSizes.includes(size)) {
+    throw new Error(
+      `${model.label} supports ${model.supportedSizes.join(', ')}`
+    );
+  }
+  const quality = ['auto', 'low', 'medium', 'high'].includes(msg.quality)
+    ? msg.quality
+    : 'auto';
+  const steps = Math.max(
+    1,
+    Math.min(8, Number(msg.steps) || Number(model.defaultSteps) || 4),
+  );
+  const suppliedSeed = Number(msg.seed);
+  const seed = Number.isFinite(suppliedSeed)
+    ? Math.max(0, Math.floor(suppliedSeed))
+    : Math.floor(Math.random() * 2_147_483_647);
+  return { prompt, size, width, height, quality, steps, seed };
+}
+
+async function aiHostSubmitImage(source, msg, appId, hostOptions = {}){
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 160) : '';
+  const provisional = {
+    source,
+    appId,
+    requestId:requestId || 'invalid',
+    kind:'image',
+  };
+  try {
+    const model = aiSelectedImageModel();
+    if (!requestId) throw new Error('Image generation requestId is required');
+    if (!aiImageRuntimeAvailable(model)){
+      if (model.runtime === 'endpoint-image') {
+        throw new Error('Configure an image endpoint URL and model in Settings → AI');
+      }
+      throw new Error('The on-device image model requires WebGPU in a recent Chrome or Edge browser');
+    }
+    if (!aiManifestAllows(appId)) {
+      throw new Error('This app did not declare the inference permission');
+    }
+    const duplicate = aiHost.active?.source === source &&
+      aiHost.active.requestId === requestId ||
+      aiHost.queue.some(request =>
+        request.source === source && request.requestId === requestId
+      );
+    if (duplicate) throw new Error('Duplicate image generation requestId');
+    if (aiHost.queue.length >= AI_MAX_QUEUE) throw new Error('Local AI queue is full');
+    const appQueued = aiHost.queue.filter(request => request.appId === appId).length +
+      (aiHost.active?.appId === appId ? 1 : 0);
+    if (appQueued >= AI_MAX_QUEUE_PER_APP) {
+      throw new Error('This app already has too many Local AI requests');
+    }
+    const imageOptions = aiNormaliseImageRequest(msg, model);
+    if (source._aiCancelled === true) throw new Error('Image generation was cancelled');
+    const granted = hostOptions.trustedHost === true
+      ? true
+      : await aiEnsurePermission(appId, 'image');
+    if (!granted) throw new Error('Image generation permission was not granted');
+    if (source._aiCancelled === true) throw new Error('Image generation was cancelled');
+
+    const request = {
+      source,
+      appId,
+      requestId,
+      kind:'image',
+      workerRequestId:`naklios-image-${++aiHost.requestCounter}`,
+      model,
+      cancelled:false,
+      ...imageOptions,
+    };
+    aiHost.queue.push(request);
+    aiEmit(request, {
+      event:'status',
+      status:'queued',
+      position:aiHost.queue.length,
+    });
     void aiProcessQueue();
   } catch (error){
     aiEmit(provisional, { event:'error', error:String(error?.message || error) });
@@ -5462,8 +5987,13 @@ function aiHostCancel(source, requestId){
   }
   if (aiHost.active?.source === source && aiHost.active.requestId === requestId){
     aiHost.active.cancelled = true;
-    if (aiHost.active.model?.runtime === 'endpoint'){
+    if (aiHost.active.model?.runtime === 'endpoint' ||
+        aiHost.active.model?.runtime === 'endpoint-image'){
       aiHost.endpointAbort?.abort();
+    } else if (aiHost.active.kind === 'image'){
+      const reject = aiImageHost.activeReject || aiImageHost.loadReject;
+      aiDestroyImageWorker();
+      reject?.(new Error('Image generation cancelled'));
     } else if (aiHost.state === 'ready') {
       aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
     }
@@ -5480,8 +6010,13 @@ function aiHostCancelSource(source){
   }
   if (aiHost.active?.source === source){
     aiHost.active.cancelled = true;
-    if (aiHost.active.model?.runtime === 'endpoint'){
+    if (aiHost.active.model?.runtime === 'endpoint' ||
+        aiHost.active.model?.runtime === 'endpoint-image'){
       aiHost.endpointAbort?.abort();
+    } else if (aiHost.active.kind === 'image'){
+      const reject = aiImageHost.activeReject || aiImageHost.loadReject;
+      aiDestroyImageWorker();
+      reject?.(new Error('Image generation cancelled'));
     } else if (aiHost.state === 'ready') {
       aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
     }
@@ -5504,6 +6039,14 @@ function aiResetRuntime(){
   aiHost.loadReject = null;
   aiHost.endpointAbort = null;
   aiSetState('idle');
+}
+
+function aiResetImageRuntime(){
+  if (aiHost.active?.kind === 'image' ||
+      aiHost.queue.some(request => request.kind === 'image')) {
+    throw new Error('Wait for the current image request to finish before changing image models');
+  }
+  aiDestroyImageWorker();
 }
 
 function aiHostChatNative(appId, messages, options = {}){
@@ -5548,6 +6091,58 @@ function aiHostChatNative(appId, messages, options = {}){
   });
 }
 
+function aiHostImageNative(prompt, options = {}){
+  const requestId = `native-image-${++aiHost.requestCounter}-${Date.now()}`;
+  let settled = false;
+  let abortHandler = null;
+  return new Promise((resolve, reject) => {
+    const source = {
+      _aiCancelled:false,
+      postMessage(message){
+        if (message.requestId !== requestId || settled) return;
+        if (message.event === 'status'){
+          try { options.onStatus?.(message.status, message.progress); } catch(_){}
+        } else if (message.event === 'result'){
+          settled = true;
+          if (options.signal && abortHandler) {
+            options.signal.removeEventListener('abort', abortHandler);
+          }
+          resolve(message.image);
+        } else if (message.event === 'done' &&
+            message.finishReason === 'cancelled'){
+          settled = true;
+          const error = new Error('Image generation cancelled');
+          error.name = 'AbortError';
+          reject(error);
+        } else if (message.event === 'error'){
+          settled = true;
+          if (options.signal && abortHandler) {
+            options.signal.removeEventListener('abort', abortHandler);
+          }
+          reject(new Error(message.error || 'Image generation failed'));
+        }
+      },
+    };
+    abortHandler = () => {
+      source._aiCancelled = true;
+      aiHostCancel(source, requestId);
+    };
+    if (options.signal){
+      if (options.signal.aborted) abortHandler();
+      else options.signal.addEventListener('abort', abortHandler, { once:true });
+    }
+    void aiHostSubmitImage(source, {
+      requestId,
+      prompt,
+      size:options.size,
+      quality:options.quality,
+      seed:options.seed,
+      steps:options.steps,
+      n:1,
+    }, 'naklios-settings', { trustedHost:true });
+  });
+}
+
 function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
@@ -5561,6 +6156,7 @@ function capabilitySnapshot(appId){
   const fsBackends = available.map(backendDescriptor).filter(Boolean);
   const fsBackend = appBoundBackend(appId);
   const aiModel = aiSelectedModel();
+  const aiImageModel = aiSelectedImageModel();
   return {
     fs: fsCap,
     fsBackends,
@@ -5571,6 +6167,12 @@ function capabilitySnapshot(appId){
     aiProvider: aiModel.runtime,
     aiLocal: aiModel.scope !== 'external',
     aiState: aiHost.state,
+    aiImages: aiImageCapabilityForApp(appId),
+    aiImageModel:aiImageModel.id,
+    aiImageModelLabel:aiImageModel.label,
+    aiImageProvider:aiImageModel.runtime,
+    aiImageLocal:aiImageModel.scope !== 'external',
+    aiImageState:aiImageHost.state,
   };
 }
 
@@ -5943,6 +6545,7 @@ window.addEventListener('message', async e => {
         beforeCloseAck:msg.features.beforeCloseAck === true,
         fsSubscribe:msg.features.fsSubscribe === true,
         aiStream:msg.features.aiStream === true,
+        aiImages:msg.features.aiImages === true,
       };
     }
     markIframeLaunchPhase(win, 'ready');
@@ -5967,6 +6570,9 @@ window.addEventListener('message', async e => {
   } else if (msg.type === 'naklios:ai:chat'){
     const appId = getAppId();
     if (appId) void aiHostSubmit(e.source, msg, appId);
+  } else if (msg.type === 'naklios:ai:image'){
+    const appId = getAppId();
+    if (appId) void aiHostSubmitImage(e.source, msg, appId);
   } else if (msg.type === 'naklios:ai:cancel'){
     aiHostCancel(e.source, msg.requestId);
   } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:fs:')){
@@ -6773,6 +7379,25 @@ function openSettings(section){
   `).join('');
   const endpointHidden = aiSettings.modelKey === 'endpoint' ? '' : 'hidden';
   const endpointKeySaved = !!aiEndpointApiKey();
+  const selectedEndpointPreset = AI_ENDPOINT_PRESETS[aiSettings.endpoint.preset] ||
+    AI_ENDPOINT_PRESETS.custom;
+  const selectedImageModel = aiSelectedImageModel();
+  const aiImageModelOptions = globalThis.LocalMindHostCatalog.imageModels.map(model => `
+    <option value="${_dlgEscape(model.key)}" ${aiSettings.imageModelKey === model.key ? 'selected' : ''}>
+      ${_dlgEscape(model.label)} · ${_dlgEscape(model.size)}
+    </option>
+  `).join('');
+  const aiImagePresetOptions = Object.entries(AI_IMAGE_ENDPOINT_PRESETS)
+    .map(([key, preset]) => `
+      <option value="${_dlgEscape(key)}" ${aiSettings.imageEndpoint.preset === key ? 'selected' : ''}>
+        ${_dlgEscape(preset.label)}
+      </option>
+    `).join('');
+  const imageEndpointHidden = aiSettings.imageModelKey === 'endpoint' ? '' : 'hidden';
+  const imageEndpointKeySaved = !!aiEndpointApiKey(aiSettings.imageEndpoint.baseUrl);
+  const selectedImageEndpointPreset =
+    AI_IMAGE_ENDPOINT_PRESETS[aiSettings.imageEndpoint.preset] ||
+    AI_IMAGE_ENDPOINT_PRESETS.custom;
   const aiAvailabilityNote = selectedAiModel.runtime !== 'endpoint' && !aiWebGpuAvailable()
     ? `<div class="nw-fs-blurb" style="color:var(--brand);">
         This built-in model needs WebGPU. You can still connect Ollama, LM Studio,
@@ -6787,7 +7412,7 @@ function openSettings(section){
     </div>
     <div class="nw-fs-blurb">
       One broker for cooperative apps. NakliOS owns the selected runtime,
-      permissions, queue, and credentials; apps receive only their own stream.
+      permissions, queue, and credentials; apps receive only their own responses.
     </div>
     ${aiAvailabilityNote}
     <div class="nw-ai-form">
@@ -6828,7 +7453,9 @@ function openSettings(section){
           <label>
             API key
             <input id="ai-endpoint-key" type="password" autocomplete="off"
-              placeholder="${endpointKeySaved ? 'Key already available — leave blank to keep it' : 'Optional for local endpoints'}">
+              placeholder="${endpointKeySaved
+                ? 'Key already available — leave blank to keep it'
+                : selectedEndpointPreset.keyRequired ? 'Required' : 'Optional for local endpoints'}">
           </label>
         </div>
         <label class="nw-fs-blurb" style="display:flex; grid-template-columns:auto 1fr; gap:6px; align-items:center; margin:8px 0 0;">
@@ -6844,6 +7471,104 @@ function openSettings(section){
       </div>
       <div class="nw-fs-connect-actions">
         <button class="nw-fs-btn-primary" id="ai-apply-model" type="button">Use this model</button>
+      </div>
+      <div style="border-top:1px solid var(--line); margin:14px 0 10px; padding-top:12px;">
+        <div class="nw-fs-connected" style="margin-bottom:8px;">
+          <span>▧</span>
+          <strong>Image generation</strong>
+          <span class="nw-fs-connected-name" id="ai-image-active-model">
+            ${_dlgEscape(AI_IMAGE_MODEL_LABEL)}
+          </span>
+          <span id="ai-image-active-state" style="color:var(--muted);">
+            ${_dlgEscape(aiImageHost.state)}
+          </span>
+        </div>
+        <label>
+          Image model / provider
+          <select id="ai-image-model-select">
+            ${aiImageModelOptions}
+            <option value="endpoint" ${aiSettings.imageModelKey === 'endpoint' ? 'selected' : ''}>
+              Connect an image endpoint…
+            </option>
+          </select>
+        </label>
+        <div class="nw-fs-blurb" id="ai-image-model-detail" style="margin:6px 0 0;">
+          ${_dlgEscape(selectedImageModel.description || '')}
+          ${selectedImageModel.size ? ` First use: ${_dlgEscape(selectedImageModel.size)}.` : ''}
+        </div>
+        <div id="ai-image-endpoint-fields" ${imageEndpointHidden} style="margin-top:8px;">
+          <div class="nw-ai-endpoint-grid">
+            <label>
+              Provider
+              <select id="ai-image-endpoint-preset">${aiImagePresetOptions}</select>
+            </label>
+            <label>
+              Base URL
+              <input id="ai-image-endpoint-url" inputmode="url" autocomplete="url"
+                value="${_dlgEscape(aiSettings.imageEndpoint.baseUrl)}"
+                placeholder="https://api.openai.com/v1">
+            </label>
+          </div>
+          <div class="nw-ai-endpoint-grid" style="margin-top:8px;">
+            <label>
+              Image model
+              <input id="ai-image-endpoint-model" list="ai-image-endpoint-models"
+                value="${_dlgEscape(aiSettings.imageEndpoint.model)}"
+                placeholder="gpt-image-2">
+              <datalist id="ai-image-endpoint-models"></datalist>
+            </label>
+            <label>
+              API key
+              <input id="ai-image-endpoint-key" type="password" autocomplete="off"
+                placeholder="${imageEndpointKeySaved
+                  ? 'Key already available — leave blank to keep it'
+                  : selectedImageEndpointPreset.keyRequired ? 'Required' : 'Optional'}">
+            </label>
+          </div>
+          <label class="nw-fs-blurb" style="display:flex; grid-template-columns:auto 1fr; gap:6px; align-items:center; margin:8px 0 0;">
+            <input type="checkbox" id="ai-image-remember-key" style="width:auto;"
+              ${aiSettings.imageEndpoint.rememberKey ? 'checked' : ''}>
+            <span>Remember image API key on this device (otherwise it lasts only for this tab)</span>
+          </label>
+          <div class="nw-fs-connect-actions" style="margin-top:8px;">
+            <button class="nw-fs-btn-secondary" id="ai-image-discover-models" type="button">
+              Discover models
+            </button>
+            <button class="nw-fs-btn-secondary" id="ai-image-forget-key" type="button"
+              ${imageEndpointKeySaved ? '' : 'disabled'}>Forget key</button>
+          </div>
+        </div>
+        <div class="nw-fs-connect-actions">
+          <button class="nw-fs-btn-primary" id="ai-image-apply-model" type="button">
+            Use this image model
+          </button>
+        </div>
+        <div class="nw-ai-endpoint-grid" style="margin-top:10px;">
+          <label>
+            Try a prompt
+            <input id="ai-image-test-prompt"
+              placeholder="A paper-cut city after monsoon rain">
+          </label>
+          <label>
+            Preview size
+            <select id="ai-image-test-size">
+              <option value="512x512">512 × 512</option>
+              <option value="768x768">768 × 768</option>
+              <option value="1024x1024">1024 × 1024</option>
+            </select>
+          </label>
+        </div>
+        <div class="nw-fs-connect-actions" style="margin-top:8px;">
+          <button class="nw-fs-btn-secondary" id="ai-image-test" type="button">
+            Generate preview
+          </button>
+        </div>
+        <div class="nw-fs-blurb" style="margin-top:4px;">
+          Uses the active image model. External providers may charge for this request.
+        </div>
+        <div id="ai-image-test-result" style="margin-top:8px;"></div>
+      </div>
+      <div class="nw-fs-connect-actions">
         <button class="nw-fs-btn-secondary" id="ai-forget-permissions" type="button"
           ${aiDecisionCount ? '' : 'disabled'}>
           Reset app decisions${aiDecisionCount ? ` (${aiDecisionCount})` : ''}
@@ -6984,7 +7709,16 @@ function openSettings(section){
   const aiRememberKey = wrap.querySelector('#ai-remember-key');
   const aiSettingsResult = wrap.querySelector('#ai-settings-result');
   const aiModelDetail = wrap.querySelector('#ai-model-detail');
+  const aiImageModelSelect = wrap.querySelector('#ai-image-model-select');
+  const aiImageEndpointFields = wrap.querySelector('#ai-image-endpoint-fields');
+  const aiImageEndpointPreset = wrap.querySelector('#ai-image-endpoint-preset');
+  const aiImageEndpointUrl = wrap.querySelector('#ai-image-endpoint-url');
+  const aiImageEndpointModel = wrap.querySelector('#ai-image-endpoint-model');
+  const aiImageEndpointKey = wrap.querySelector('#ai-image-endpoint-key');
+  const aiImageRememberKey = wrap.querySelector('#ai-image-remember-key');
+  const aiImageModelDetail = wrap.querySelector('#ai-image-model-detail');
   let aiDraftPreset = aiEndpointPreset?.value || 'custom';
+  let aiImageDraftPreset = aiImageEndpointPreset?.value || 'custom';
 
   const paintAiDraft = () => {
     const key = aiModelSelect?.value || AI_DEFAULT_SETTINGS.modelKey;
@@ -7002,6 +7736,23 @@ function openSettings(section){
   aiModelSelect?.addEventListener('change', paintAiDraft);
   paintAiDraft();
 
+  const paintAiImageDraft = () => {
+    const key = aiImageModelSelect?.value || AI_DEFAULT_SETTINGS.imageModelKey;
+    const endpoint = key === 'endpoint';
+    if (aiImageEndpointFields) aiImageEndpointFields.hidden = !endpoint;
+    if (!aiImageModelDetail) return;
+    if (endpoint){
+      aiImageModelDetail.textContent =
+        'Connect OpenAI or an OpenAI-compatible /images/generations endpoint. Credentials remain host-only.';
+      return;
+    }
+    const model = globalThis.LocalMindHostCatalog.getImage(key);
+    aiImageModelDetail.textContent =
+      `${model.description} First use: ${model.size}.`;
+  };
+  aiImageModelSelect?.addEventListener('change', paintAiImageDraft);
+  paintAiImageDraft();
+
   const paintEndpointKeyState = () => {
     const preset = AI_ENDPOINT_PRESETS[aiEndpointPreset.value] || AI_ENDPOINT_PRESETS.custom;
     const hasKey = !!aiEndpointApiKey(aiEndpointUrl.value);
@@ -7009,6 +7760,16 @@ function openSettings(section){
       ? (hasKey ? 'Key already available — leave blank to keep it' : 'Required')
       : (hasKey ? 'Key already available — leave blank to keep it' : 'Optional for local endpoints');
     wrap.querySelector('#ai-forget-key').disabled = !hasKey;
+  };
+
+  const paintImageEndpointKeyState = () => {
+    const preset = AI_IMAGE_ENDPOINT_PRESETS[aiImageEndpointPreset.value] ||
+      AI_IMAGE_ENDPOINT_PRESETS.custom;
+    const hasKey = !!aiEndpointApiKey(aiImageEndpointUrl.value);
+    aiImageEndpointKey.placeholder = preset.keyRequired
+      ? (hasKey ? 'Key already available — leave blank to keep it' : 'Required')
+      : (hasKey ? 'Key already available — leave blank to keep it' : 'Optional');
+    wrap.querySelector('#ai-image-forget-key').disabled = !hasKey;
   };
 
   aiEndpointPreset?.addEventListener('change', () => {
@@ -7020,6 +7781,22 @@ function openSettings(section){
     paintEndpointKeyState();
   });
   aiEndpointUrl?.addEventListener('input', paintEndpointKeyState);
+  aiImageEndpointPreset?.addEventListener('change', () => {
+    const previous = AI_IMAGE_ENDPOINT_PRESETS[aiImageDraftPreset];
+    const next = AI_IMAGE_ENDPOINT_PRESETS[aiImageEndpointPreset.value] ||
+      AI_IMAGE_ENDPOINT_PRESETS.custom;
+    const currentUrl = aiImageEndpointUrl.value.trim();
+    const currentModel = aiImageEndpointModel.value.trim();
+    if (!currentUrl || currentUrl === previous?.baseUrl) {
+      aiImageEndpointUrl.value = next.baseUrl;
+    }
+    if (!currentModel || currentModel === previous?.model) {
+      aiImageEndpointModel.value = next.model;
+    }
+    aiImageDraftPreset = aiImageEndpointPreset.value;
+    paintImageEndpointKeyState();
+  });
+  aiImageEndpointUrl?.addEventListener('input', paintImageEndpointKeyState);
 
   wrap.querySelector('#ai-discover-models')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
@@ -7060,9 +7837,53 @@ function openSettings(section){
     }
   });
 
+  wrap.querySelector('#ai-image-discover-models')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const suppliedKey = aiImageEndpointKey.value.trim();
+    const apiKey = suppliedKey || aiEndpointApiKey(aiImageEndpointUrl.value);
+    button.disabled = true;
+    aiSettingsResult.textContent = 'Looking for image models…';
+    try {
+      const models = await aiDiscoverEndpointModels({
+        baseUrl:aiImageEndpointUrl.value,
+      }, apiKey);
+      const datalist = wrap.querySelector('#ai-image-endpoint-models');
+      datalist.replaceChildren(...models.map(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        return option;
+      }));
+      if (!aiImageEndpointModel.value.trim()) {
+        aiImageEndpointModel.value = models[0];
+      }
+      aiSettingsResult.textContent =
+        `Found ${models.length} endpoint model${models.length === 1 ? '' : 's'}. ` +
+        `Choose one that supports image generation.`;
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  wrap.querySelector('#ai-image-forget-key')?.addEventListener('click', event => {
+    try {
+      aiForgetEndpointKey(aiImageEndpointUrl.value);
+      aiImageEndpointKey.value = '';
+      event.currentTarget.disabled = true;
+      const preset = AI_IMAGE_ENDPOINT_PRESETS[aiImageEndpointPreset.value] ||
+        AI_IMAGE_ENDPOINT_PRESETS.custom;
+      aiImageEndpointKey.placeholder = preset.keyRequired ? 'Required' : 'Optional';
+      aiSettingsResult.textContent = 'The key for this image endpoint was forgotten.';
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    }
+  });
+
   wrap.querySelector('#ai-apply-model')?.addEventListener('click', async () => {
     const modelKey = aiModelSelect.value;
     let next = {
+      ...aiSettings,
       modelKey,
       endpoint:{
         preset:aiEndpointPreset.value,
@@ -7104,6 +7925,119 @@ function openSettings(section){
       aiSettingsResult.textContent = `Using ${AI_MODEL_LABEL}.`;
     } catch (error){
       aiSettingsResult.textContent = error?.message || String(error);
+    }
+  });
+
+  wrap.querySelector('#ai-image-apply-model')?.addEventListener('click', async () => {
+    const imageModelKey = aiImageModelSelect.value;
+    let next = {
+      ...aiSettings,
+      imageModelKey,
+      imageEndpoint:{
+        preset:aiImageEndpointPreset.value,
+        baseUrl:aiImageEndpointUrl.value.trim(),
+        model:aiImageEndpointModel.value.trim(),
+        rememberKey:aiImageRememberKey.checked,
+      },
+    };
+    try {
+      if (imageModelKey === 'endpoint'){
+        next.imageEndpoint.baseUrl =
+          aiNormaliseEndpointBase(next.imageEndpoint.baseUrl);
+        if (!next.imageEndpoint.model) {
+          throw new Error('Choose or enter an image endpoint model');
+        }
+        const preset = AI_IMAGE_ENDPOINT_PRESETS[next.imageEndpoint.preset] ||
+          AI_IMAGE_ENDPOINT_PRESETS.custom;
+        if (preset.keyRequired && !aiImageEndpointKey.value.trim() &&
+            !aiEndpointApiKey(next.imageEndpoint.baseUrl)) {
+          throw new Error(`${preset.label} requires an API key`);
+        }
+      } else {
+        const model = globalThis.LocalMindHostCatalog.getImage(imageModelKey);
+        if (model.sizeBytes >= 1_000_000_000 &&
+            imageModelKey !== aiSettings.imageModelKey){
+          const proceed = await nakliosConfirm(
+            `${model.label} downloads ${model.size} and needs substantial GPU memory. ` +
+            `The browser cache keeps its weights for later use.`,
+            {
+              title:`Use ${model.label}?`,
+              okLabel:'Use image model',
+              cancelLabel:'Not now',
+            },
+          );
+          if (!proceed) return;
+        }
+      }
+      aiResetImageRuntime();
+      const suppliedKey = aiImageEndpointKey.value.trim();
+      aiPersistImageSettings(next, suppliedKey ? suppliedKey : null);
+      broadcastCapabilities();
+      wrap.querySelector('#ai-image-active-model').textContent =
+        AI_IMAGE_MODEL_LABEL;
+      wrap.querySelector('#ai-image-active-state').textContent =
+        aiImageHost.state;
+      aiSettingsResult.textContent = `Using ${AI_IMAGE_MODEL_LABEL} for images.`;
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    }
+  });
+
+  wrap.querySelector('#ai-image-test')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const prompt = wrap.querySelector('#ai-image-test-prompt').value.trim();
+    const size = wrap.querySelector('#ai-image-test-size').value;
+    const result = wrap.querySelector('#ai-image-test-result');
+    result.replaceChildren();
+    if (!prompt){
+      aiSettingsResult.textContent = 'Describe an image before generating a preview.';
+      return;
+    }
+    button.disabled = true;
+    aiSettingsResult.textContent = 'Preparing image model…';
+    try {
+      const image = await aiHostImageNative(prompt, {
+        size,
+        quality:'medium',
+        steps:4,
+        onStatus(status, progress){
+          if (status === 'loading' && progress?.total){
+            const pct = Math.round(100 * Number(progress.loaded || 0) /
+              Number(progress.total));
+            aiSettingsResult.textContent = `Loading image model… ${pct}%`;
+          } else if (status === 'generating' && progress?.total){
+            aiSettingsResult.textContent =
+              `Generating preview… ${progress.step || 0}/${progress.total}`;
+          } else {
+            aiSettingsResult.textContent =
+              status === 'queued' ? 'Image request queued…' : 'Generating preview…';
+          }
+        },
+      });
+      const source = image.b64_json
+        ? `data:${image.mime_type || 'image/png'};base64,${image.b64_json}`
+        : image.url;
+      if (!source) throw new Error('Image model returned no preview');
+      const preview = document.createElement('img');
+      preview.src = source;
+      preview.alt = prompt;
+      preview.style.cssText =
+        'display:block; width:min(100%, 360px); aspect-ratio:1; object-fit:contain; ' +
+        'border:1px solid var(--line); border-radius:8px; background:var(--row);';
+      const download = document.createElement('a');
+      download.href = source;
+      download.download = `naklios-image-${Date.now()}.png`;
+      download.className = 'nw-foot-link';
+      download.textContent = 'Download PNG';
+      download.style.display = 'inline-block';
+      download.style.marginTop = '6px';
+      result.append(preview, download);
+      aiSettingsResult.textContent =
+        `Preview generated with ${AI_IMAGE_MODEL_LABEL}.`;
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    } finally {
+      button.disabled = false;
     }
   });
 

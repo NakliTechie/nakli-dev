@@ -21,17 +21,32 @@ assert.match(html, /aiPermissions: JSON\.parse\(localStorage\.getItem\('nakliOS\
 assert.match(html, /const AI_SETTINGS_KEY = 'nakliOS\.aiSettings\.v1'/);
 assert.match(html, /const AI_SESSION_KEY = 'nakliOS\.aiEndpointKey\.session\.v1'/);
 assert.match(html, /const AI_REMEMBERED_KEY = 'nakliOS\.aiEndpointKey\.remembered\.v1'/);
+assert.match(html, /const AI_IMAGE_PROTOCOL = 'localmind\.image\.v1'/);
+assert.match(html, /const AI_MAX_IMAGE_PROMPT_CHARS = 8000/);
 assert.match(html, /function aiCredentialId\(baseUrl\)/);
 assert.match(html, /function aiReadCredentialStore\(storage, key\)/);
 assert.match(html, /function aiForgetEndpointKey\(baseUrl\)/);
 assert.match(html, /function aiDiscoverEndpointModels\(config, apiKey = ''\)/);
 assert.match(html, /function aiGenerateEndpoint\(request\)/);
+assert.match(html, /function aiGenerateEndpointImage\(request\)/);
+assert.match(
+  html,
+  /function aiHostSubmitImage\(source, msg, appId, hostOptions = \{\}\)/,
+);
+assert.match(html, /hostOptions\.trustedHost === true/);
+assert.match(html, /function aiCreateImageWorker\(model\)/);
+assert.match(html, /function aiImagePermissionScope\(model = aiSelectedImageModel\(\)\)/);
+assert.match(html, /function aiHostImageNative\(prompt, options = \{\}\)/);
 assert.match(html, /function aiPermissionScope\(model = aiSelectedModel\(\)\)/);
 assert.match(html, /local-endpoint/);
 assert.match(html, /external/);
 assert.match(html, /id="ai-model-select"/);
 assert.match(html, /id="ai-endpoint-key" type="password"/);
 assert.match(html, /id="ai-forget-key"/);
+assert.match(html, /id="ai-image-model-select"/);
+assert.match(html, /id="ai-image-endpoint-key" type="password"/);
+assert.match(html, /id="ai-image-apply-model"/);
+assert.match(html, /id="ai-image-test"/);
 assert.match(html, /Remember API key on this device/);
 
 const catalogContext = vm.createContext({});
@@ -45,6 +60,17 @@ assert.deepEqual(
   ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen3-4b'],
 );
 assert.equal(catalogContext.LocalMindHostCatalog.defaultKey, 'lfm2-230m-webgpu');
+assert.equal(
+  catalogContext.LocalMindHostCatalog.defaultImageKey,
+  'flux2-klein-4b-webgpu',
+);
+assert.deepEqual(
+  Array.from(
+    catalogContext.LocalMindHostCatalog.imageModels,
+    model => model.key,
+  ),
+  ['flux2-klein-4b-webgpu'],
+);
 
 const serializeStart = html.indexOf('function serializeState()');
 const serializeEnd = html.indexOf('async function fsWriteState', serializeStart);
@@ -56,14 +82,15 @@ assert.doesNotMatch(
 );
 assert.match(
   html,
-  /The shared \$\{AI_MODEL_LABEL\} model runs in this browser[\s\S]*?Prompts and replies stay in this tab/,
+  /The shared \$\{image \? AI_IMAGE_MODEL_LABEL : AI_MODEL_LABEL\} model runs in this browser[\s\S]*?\$\{contentName\} stay in this tab/,
   'first use explains the model download and prompt boundary',
 );
 assert.match(
   html,
-  /Prompts and replies will leave this device[\s\S]*?NakliOS keeps your API key hidden from apps/,
+  /\$\{contentName\} will leave this device[\s\S]*?NakliOS keeps your API key hidden from apps/,
   'external providers get a distinct disclosure',
 );
+assert.match(html, /Image prompts and generated images/);
 assert.match(html, /This app did not declare the inference permission/);
 assert.match(html, /event:'token'/);
 assert.match(html, /event:'done'/);
@@ -113,11 +140,22 @@ dispatch({
   aiProvider:'custom-webgpu',
   aiLocal:true,
   aiState:'idle',
+  aiImages:true,
+  aiImageModel:'prism-ml/bonsai-image-ternary-4B-mlx-2bit',
+  aiImageModelLabel:'Bonsai Image · FLUX.2-Klein 4B',
+  aiImageProvider:'custom-webgpu-image',
+  aiImageLocal:true,
+  aiImageState:'idle',
 });
 assert.equal(windowObject.naklios.capabilities.ai, true);
 assert.equal(windowObject.naklios.capabilities.aiModelLabel, 'LFM2.5 230M');
 assert.equal(windowObject.naklios.capabilities.aiProvider, 'custom-webgpu');
 assert.equal(windowObject.naklios.capabilities.aiLocal, true);
+assert.equal(windowObject.naklios.capabilities.aiImages, true);
+assert.equal(
+  windowObject.naklios.capabilities.aiImageModelLabel,
+  'Bonsai Image · FLUX.2-Klein 4B',
+);
 
 // A non-parent window cannot forge host capabilities or inference replies.
 dispatch({ type:'naklios:capabilities', ai:false }, { postMessage() {} });
@@ -162,5 +200,49 @@ cancellable.cancel();
 const cancel = posted.at(-1);
 assert.equal(cancel.type, 'naklios:ai:cancel');
 assert.ok(cancel.requestId);
+
+const imageStatuses = [];
+const imagePromise = windowObject.naklios.ai.images.generate({
+  prompt:'A small paper-cut city',
+  size:'512x512',
+  seed:42,
+  steps:4,
+  onStatus(status, progress) {
+    imageStatuses.push([status, progress]);
+  },
+});
+const imageRequest = posted.find(message => message.type === 'naklios:ai:image');
+assert.ok(imageRequest?.requestId, 'SDK posts a correlated image request');
+assert.equal(imageRequest.prompt, 'A small paper-cut city');
+assert.equal(imageRequest.size, '512x512');
+assert.equal(imageRequest.seed, 42);
+
+dispatch({
+  type:'naklios:ai:image:event',
+  requestId:imageRequest.requestId,
+  event:'status',
+  status:'generating',
+  progress:{ step:2, total:4 },
+});
+dispatch({
+  type:'naklios:ai:image:event',
+  requestId:imageRequest.requestId,
+  event:'result',
+  model:'prism-ml/bonsai-image-ternary-4B-mlx-2bit',
+  image:{
+    b64_json:'iVBORw0KGgo=',
+    mime_type:'image/png',
+    width:512,
+    height:512,
+    seed:42,
+    created:123,
+  },
+});
+const imageResult = await imagePromise;
+assert.equal(imageResult.created, 123);
+assert.equal(imageResult.data[0].b64_json, 'iVBORw0KGgo=');
+assert.equal(imageResult.data[0].width, 512);
+assert.equal(imageResult.data[0].seed, 42);
+assert.deepEqual(imageStatuses, [['generating', { step:2, total:4 }]]);
 
 console.log('NakliOS AI broker, providers, model catalog, and SDK contract: PASS');

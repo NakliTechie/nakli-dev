@@ -49,7 +49,7 @@ First-party stateful and cooperative apps should follow the
 [`NakliOS app contract`](docs/app-contract.md), including backend-affine
 filesystem calls, separate Browser/Folder/Crate libraries, async close
 durability, explicit remote-conflict handling, and the optional streamed
-`naklios.ai` capability.
+chat and image-generation surfaces under `naklios.ai`.
 
 ## AI
 
@@ -61,11 +61,19 @@ Groq, or a custom provider. Cooperative apps keep one SDK regardless of which
 runtime the user chooses. Requests are bounded, queued fairly, reset between
 apps, streamed, and cancellable.
 
-Consent is per app, browser, and destination. A grant for a browser-local model
+The same broker exposes image generation through
+`naklios.ai.images.generate(...)`. The default image runtime is LocalMind's
+private, on-device Bonsai FLUX.2-Klein WebGPU engine. Users may instead connect
+OpenAI or a compatible `POST /images/generations` endpoint. Chat and image
+generation share a fair queue but have separate model settings and consent;
+the host does not keep both large WebGPU workers resident at once.
+
+Consent is per app, capability, browser, and destination. A grant for a browser-local model
 does not silently authorize a local server or cloud provider. Endpoint URLs and
 API keys remain host-only; keys last for the tab unless the user explicitly
 chooses to remember one on that device. AI settings and secrets never sync
-through Folder or Crate. Apps receive only their own text stream: never the
+through Folder or Crate. Apps receive only their own text stream or generated
+image: never the
 worker, endpoint credentials, another app's prompts, filesystem capabilities,
 Crate credentials, or host tools. Third-party manifests must declare
 `inference`, followed by a separate first-use prompt.

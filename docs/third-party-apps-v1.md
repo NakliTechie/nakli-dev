@@ -117,6 +117,10 @@ An app should:
    Do not ask for provider keys or assume prompts stay on-device; NakliOS owns
    provider selection and per-destination consent. Read `aiLocal` and
    `aiModelLabel` when the UI needs to describe the active boundary.
+8. call `naklios.ai.images.generate(...)` only after checking
+   `naklios.capabilities.aiImages`. Image generation has its own host consent
+   decision. Read `aiImageLocal` and `aiImageModelLabel` before claiming that an
+   image prompt or output stays on-device.
 
 See the full [cooperative app contract](app-contract.md) for message shapes,
 backend-affine filesystem operations, remote-change subscriptions, and

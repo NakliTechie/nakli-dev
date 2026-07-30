@@ -28,6 +28,15 @@
  *       for await (const chunk of stream) {
  *         render(chunk.choices[0].delta.content || '');
  *       }
+ *
+ *       const image = await naklios.ai.images.generate({
+ *         prompt: 'A risograph poster of a city after monsoon rain',
+ *         size: '1024x1024',
+ *         signal: abortController.signal,
+ *       });
+ *       preview.src = image.data[0].b64_json
+ *         ? 'data:image/png;base64,' + image.data[0].b64_json
+ *         : image.data[0].url;
  *     }
  *   </script>
  *
@@ -65,6 +74,12 @@
     aiProvider: null,
     aiLocal: true,
     aiState: 'idle',
+    aiImages: false,
+    aiImageModel: null,
+    aiImageModelLabel: null,
+    aiImageProvider: null,
+    aiImageLocal: true,
+    aiImageState: 'idle',
   };
 
   // Request/reply correlation for fs RPCs
@@ -72,6 +87,7 @@
   var rpcCounter = 0;
   var fsSubscriptions = new Map(); // subscriptionId → callback
   var aiRequests = new Map(); // requestId → streamed request state
+  var aiImageRequests = new Map(); // requestId → image request state
 
   function send(type, data) {
     if (!inNakliOS) return;
@@ -183,6 +199,53 @@
     };
   }
 
+  function createAiImage(options) {
+    if (!inNakliOS) {
+      return Promise.reject(new Error('Not hosted — naklios.ai unavailable standalone'));
+    }
+    if (!capabilities.aiImages) {
+      return Promise.reject(new Error('NakliOS image generation is unavailable or not permitted'));
+    }
+    options = options || {};
+    var requestId = 'i' + (++rpcCounter) + '_' + Date.now();
+    return new Promise(function (resolve, reject) {
+      var abortHandler = function () {
+        send('naklios:ai:cancel', { requestId: requestId });
+      };
+      aiImageRequests.set(requestId, {
+        resolve: resolve,
+        reject: reject,
+        onStatus: typeof options.onStatus === 'function' ? options.onStatus : null,
+        signal: options.signal || null,
+        abortHandler: abortHandler,
+      });
+      send('naklios:ai:image', {
+        requestId: requestId,
+        prompt: String(options.prompt || ''),
+        size: options.size,
+        quality: options.quality,
+        n: options.n,
+        seed: options.seed,
+        steps: options.steps,
+      });
+      if (options.signal) {
+        if (options.signal.aborted) abortHandler();
+        else options.signal.addEventListener('abort', abortHandler, { once: true });
+      }
+    });
+  }
+
+  function settleAiImage(requestId, callback) {
+    var request = aiImageRequests.get(requestId);
+    if (!request) return null;
+    aiImageRequests.delete(requestId);
+    if (request.signal && request.abortHandler) {
+      request.signal.removeEventListener('abort', request.abortHandler);
+    }
+    callback(request);
+    return request;
+  }
+
   window.addEventListener('message', function (e) {
     if (inNakliOS && e.source !== window.parent) return;
     var msg = e.data;
@@ -208,6 +271,18 @@
       capabilities.aiProvider = typeof msg.aiProvider === 'string' ? msg.aiProvider : null;
       capabilities.aiLocal = msg.aiLocal !== false;
       capabilities.aiState = typeof msg.aiState === 'string' ? msg.aiState : 'idle';
+      capabilities.aiImages = msg.aiImages === true;
+      capabilities.aiImageModel = typeof msg.aiImageModel === 'string' ? msg.aiImageModel : null;
+      capabilities.aiImageModelLabel = typeof msg.aiImageModelLabel === 'string'
+        ? msg.aiImageModelLabel
+        : null;
+      capabilities.aiImageProvider = typeof msg.aiImageProvider === 'string'
+        ? msg.aiImageProvider
+        : null;
+      capabilities.aiImageLocal = msg.aiImageLocal !== false;
+      capabilities.aiImageState = typeof msg.aiImageState === 'string'
+        ? msg.aiImageState
+        : 'idle';
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}
       });
@@ -244,6 +319,40 @@
         aiRequests.delete(msg.requestId);
         aiRequest.fail(new Error(msg.error || 'NakliOS Local AI failed'));
       }
+    } else if (msg.type === 'naklios:ai:image:event' && msg.requestId) {
+      var imageRequest = aiImageRequests.get(msg.requestId);
+      if (!imageRequest) return;
+      if (msg.event === 'status') {
+        try {
+          imageRequest.onStatus && imageRequest.onStatus(msg.status, msg.progress || null);
+        } catch (_) {}
+      } else if (msg.event === 'result' && msg.image) {
+        settleAiImage(msg.requestId, function (request) {
+          request.resolve({
+            created: Number(msg.image.created) || Math.floor(Date.now() / 1000),
+            model: msg.model || capabilities.aiImageModel || 'localmind-image',
+            data: [{
+              b64_json: msg.image.b64_json || null,
+              url: msg.image.url || null,
+              revised_prompt: msg.image.revised_prompt || null,
+              mime_type: msg.image.mime_type || 'image/png',
+              width: Number(msg.image.width) || null,
+              height: Number(msg.image.height) || null,
+              seed: msg.image.seed == null ? null : Number(msg.image.seed),
+            }],
+          });
+        });
+      } else if (msg.event === 'done' && msg.finishReason === 'cancelled') {
+        settleAiImage(msg.requestId, function (request) {
+          var error = new Error('Image generation cancelled');
+          error.name = 'AbortError';
+          request.reject(error);
+        });
+      } else if (msg.event === 'error') {
+        settleAiImage(msg.requestId, function (request) {
+          request.reject(new Error(msg.error || 'NakliOS image generation failed'));
+        });
+      }
     } else if (msg.type === 'naklios:fs:reply' && msg.requestId) {
       var p = pendingRpc.get(msg.requestId);
       if (!p) return;
@@ -269,7 +378,12 @@
     capabilities: capabilities,   // mutated in place; read fields directly
     ready: function () {
       send('naklios:ready', {
-        features: { beforeCloseAck: true, fsSubscribe: true, aiStream: true },
+        features: {
+          beforeCloseAck: true,
+          fsSubscribe: true,
+          aiStream: true,
+          aiImages: true,
+        },
       });
     },
     title: function (s) { send('naklios:title', { title: String(s) }); },
@@ -334,8 +448,14 @@
           create: createAiCompletion,
         },
       },
+      images: {
+        generate: createAiImage,
+      },
       cancelAll: function () {
         aiRequests.forEach(function (_, requestId) {
+          send('naklios:ai:cancel', { requestId: requestId });
+        });
+        aiImageRequests.forEach(function (_, requestId) {
           send('naklios:ai:cancel', { requestId: requestId });
         });
       },

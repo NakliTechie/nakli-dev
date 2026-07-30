@@ -5,10 +5,12 @@ import { readFile } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('vendor/localmind/manifest.json', root), 'utf8'));
 
-assert.equal(manifest.schemaVersion, 2);
+assert.equal(manifest.schemaVersion, 3);
 assert.equal(manifest.protocol, 'localmind.inference.v1');
+assert.equal(manifest.imageProtocol, 'localmind.image.v1');
 assert.match(manifest.upstreamCommit, /^[0-9a-f]{40}$/);
 assert.equal(manifest.defaultModelKey, 'lfm2-230m-webgpu');
+assert.equal(manifest.defaultImageModelKey, 'flux2-klein-4b-webgpu');
 
 for (const [name, expected] of Object.entries(manifest.files)) {
   const bytes = await readFile(new URL(`vendor/localmind/${name}`, root));
@@ -18,6 +20,7 @@ for (const [name, expected] of Object.entries(manifest.files)) {
 
 const worker = await readFile(new URL('vendor/localmind/inference-worker.js', root), 'utf8');
 const onnxWorker = await readFile(new URL('vendor/localmind/onnx-inference-worker.js', root), 'utf8');
+const imageWorker = await readFile(new URL('vendor/localmind/image-inference-worker.js', root), 'utf8');
 const catalog = await readFile(new URL('vendor/localmind/host-model-catalog.js', root), 'utf8');
 assert.match(worker, /new URL\('\.\/lfm2_5\.js', import\.meta\.url\)/);
 assert.match(worker, /localmind\.inference\.v1/);
@@ -26,5 +29,8 @@ assert.match(onnxWorker, /AutoModelForCausalLM/);
 assert.match(catalog, /gemma4-e2b/);
 assert.match(catalog, /gemma4-e4b/);
 assert.match(catalog, /qwen3-4b/);
+assert.match(catalog, /flux2-klein-4b-webgpu/);
+assert.match(imageWorker, /localmind\.image\.v1/);
+assert.match(imageWorker, /prism-ml\/bonsai-image-ternary-4B-mlx-2bit/);
 
 console.log('Vendored LocalMind runtime: ok');

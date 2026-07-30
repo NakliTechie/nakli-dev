@@ -1,9 +1,11 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "upstream": "https://github.com/NakliTechie/LocalMind",
-  "upstreamCommit": "c29ca4612eccfdcbbc629d10147ed6f3c97c9821",
+  "upstreamCommit": "0ef9e7ec4c7a96e5be15c6c7f4879fe699e2bdf1",
   "protocol": "localmind.inference.v1",
+  "imageProtocol": "localmind.image.v1",
   "defaultModelKey": "lfm2-230m-webgpu",
+  "defaultImageModelKey": "flux2-klein-4b-webgpu",
   "model": {
     "id": "LiquidAI/LFM2.5-230M-GGUF",
     "file": "LFM2.5-230M-Q4_0.gguf"
@@ -11,7 +13,8 @@
   "files": {
     "inference-worker.js": "538277d108577f35acfb1548d83c996567d97a62516e0b29cc63c4a7588965b3",
     "lfm2_5.js": "ee6c540df308055347d2c720ec7642ce44c4a8f2fb0328c866fcd52a434d7b39",
-    "host-model-catalog.js": "e868307711b7fd55ebf70cde2d9ba8b41fc1db714ef9409eedbd6346d828777a",
-    "onnx-inference-worker.js": "b6266b75b9822bf3e9f74f6acea264d2c7df51949e540e170fa0b1287357b86e"
+    "host-model-catalog.js": "9b28c61dcd9f727b5bce31b1dd0dc10acd799d8a8e3b851c2983d78de26c0c13",
+    "onnx-inference-worker.js": "b6266b75b9822bf3e9f74f6acea264d2c7df51949e540e170fa0b1287357b86e",
+    "image-inference-worker.js": "5fe31578362065b676b0962021dd8f54e795fbc20f8d55fb56bb3ee1d02f2eff"
   }
 }

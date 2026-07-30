@@ -90,7 +90,13 @@ dark or that `BRAND` has sufficient contrast as body text.
   aiModelLabel: "LFM2.5 230M",
   aiProvider: "custom-webgpu",
   aiLocal: true,
-  aiState: "ready"
+  aiState: "ready",
+  aiImages: true,
+  aiImageModel: "prism-ml/bonsai-image-ternary-4B-mlx-2bit",
+  aiImageModelLabel: "Bonsai Image · FLUX.2-Klein 4B",
+  aiImageProvider: "custom-webgpu-image",
+  aiImageLocal: true,
+  aiImageState: "idle"
 }
 ```
 
@@ -136,6 +142,35 @@ useful when it is false. Third-party apps must also declare `inference` in their
 manifest. Prompts are request-scoped; an app that wants chat history must own
 and display that history itself. Use `aiModel`, `aiModelLabel`, `aiProvider`,
 and `aiLocal` only for honest status copy; model choice remains a host setting.
+
+Image generation is a separate capability and consent decision:
+
+```js
+const result = await naklios.ai.images.generate({
+  prompt: "A hand-cut paper collage of a monsoon city",
+  size: "1024x1024",
+  quality: "medium",
+  seed: 42, // honored by deterministic local runtimes; providers may ignore it
+  steps: 4, // local runtime tuning; providers may ignore it
+  signal: abortController.signal,
+  onStatus(status, progress) {
+    // queued | loading | generating
+  }
+});
+
+const image = result.data[0];
+preview.src = image.b64_json
+  ? `data:${image.mime_type};base64,${image.b64_json}`
+  : image.url;
+```
+
+Check `naklios.capabilities.aiImages` before showing the action. The built-in
+Bonsai FLUX.2-Klein worker returns one PNG and supports `512x512`, `768x768`,
+`1024x1024`, `1024x768`, and `768x1024`. Endpoint capabilities vary; NakliOS
+uses the OpenAI-compatible `POST /images/generations` shape. Apps receive only
+the generated image—not the provider URL, API key, or worker. Use the
+`aiImage*` capability fields for honest boundary copy. Image model selection
+remains a host setting.
 
 ## Filesystem
 
