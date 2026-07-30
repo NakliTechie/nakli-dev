@@ -5,30 +5,64 @@ import { readFile } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const html = await readFile(new URL('index.html', root), 'utf8');
 const sdkSource = await readFile(new URL('sdk/naklios.js', root), 'utf8');
+const catalogSource = await readFile(new URL('vendor/localmind/host-model-catalog.js', root), 'utf8');
 
-assert.match(html, /new URL\('vendor\/localmind\/inference-worker\.js', document\.baseURI\)/);
+assert.match(html, /vendor\/localmind\/host-model-catalog\.js/);
+assert.match(html, /new URL\(`vendor\/localmind\/\$\{model\.worker\}`, document\.baseURI\)/);
 assert.match(html, /const AI_MAX_QUEUE = 12/);
 assert.match(html, /const AI_MAX_QUEUE_PER_APP = 3/);
 assert.match(html, /function aiNextRequest\(\)[\s\S]*?request\.appId !== aiHost\.lastAppId/);
 assert.match(html, /function aiNormaliseMessages\(messages\)/);
 assert.match(html, /function aiHostCancelSource\(source\)/);
 assert.match(html, /aiHostCancelSource\(iframe\.contentWindow\)/);
-assert.match(html, /generationConfig:\{ max_tokens:request\.maxTokens, reset:true \}/,
+assert.match(html, /max_tokens:request\.maxTokens,[\s\S]*?reset:true/,
   'every app request clears model conversation state');
 assert.match(html, /aiPermissions: JSON\.parse\(localStorage\.getItem\('nakliOS\.aiPermissions\.v1'\)/);
+assert.match(html, /const AI_SETTINGS_KEY = 'nakliOS\.aiSettings\.v1'/);
+assert.match(html, /const AI_SESSION_KEY = 'nakliOS\.aiEndpointKey\.session\.v1'/);
+assert.match(html, /const AI_REMEMBERED_KEY = 'nakliOS\.aiEndpointKey\.remembered\.v1'/);
+assert.match(html, /function aiCredentialId\(baseUrl\)/);
+assert.match(html, /function aiReadCredentialStore\(storage, key\)/);
+assert.match(html, /function aiForgetEndpointKey\(baseUrl\)/);
+assert.match(html, /function aiDiscoverEndpointModels\(config, apiKey = ''\)/);
+assert.match(html, /function aiGenerateEndpoint\(request\)/);
+assert.match(html, /function aiPermissionScope\(model = aiSelectedModel\(\)\)/);
+assert.match(html, /local-endpoint/);
+assert.match(html, /external/);
+assert.match(html, /id="ai-model-select"/);
+assert.match(html, /id="ai-endpoint-key" type="password"/);
+assert.match(html, /id="ai-forget-key"/);
+assert.match(html, /Remember API key on this device/);
+
+const catalogContext = vm.createContext({});
+vm.runInContext(catalogSource, catalogContext, { filename:'host-model-catalog.js' });
+const modelKeys = Array.from(
+  catalogContext.LocalMindHostCatalog.models,
+  model => model.key,
+);
+assert.deepEqual(
+  modelKeys,
+  ['lfm2-230m-webgpu', 'gemma4-e2b', 'gemma4-e4b', 'qwen3-4b'],
+);
+assert.equal(catalogContext.LocalMindHostCatalog.defaultKey, 'lfm2-230m-webgpu');
 
 const serializeStart = html.indexOf('function serializeState()');
 const serializeEnd = html.indexOf('async function fsWriteState', serializeStart);
 const serializeSource = html.slice(serializeStart, serializeEnd);
 assert.doesNotMatch(
   serializeSource,
-  /aiPermissions/,
-  'device-local AI grants must not sync through Folder state.json',
+  /aiPermissions|aiSettings|aiEndpointKey/,
+  'AI grants, provider settings, and keys must not sync through Folder state.json',
 );
 assert.match(
   html,
-  /The shared \$\{AI_MODEL_LABEL\} model runs on this device[\s\S]*?Prompts and replies stay in this tab/,
+  /The shared \$\{AI_MODEL_LABEL\} model runs in this browser[\s\S]*?Prompts and replies stay in this tab/,
   'first use explains the model download and prompt boundary',
+);
+assert.match(
+  html,
+  /Prompts and replies will leave this device[\s\S]*?NakliOS keeps your API key hidden from apps/,
+  'external providers get a distinct disclosure',
 );
 assert.match(html, /This app did not declare the inference permission/);
 assert.match(html, /event:'token'/);
@@ -75,9 +109,15 @@ dispatch({
   fs:false,
   ai:true,
   aiModel:'LiquidAI/LFM2.5-230M-GGUF',
+  aiModelLabel:'LFM2.5 230M',
+  aiProvider:'custom-webgpu',
+  aiLocal:true,
   aiState:'idle',
 });
 assert.equal(windowObject.naklios.capabilities.ai, true);
+assert.equal(windowObject.naklios.capabilities.aiModelLabel, 'LFM2.5 230M');
+assert.equal(windowObject.naklios.capabilities.aiProvider, 'custom-webgpu');
+assert.equal(windowObject.naklios.capabilities.aiLocal, true);
 
 // A non-parent window cannot forge host capabilities or inference replies.
 dispatch({ type:'naklios:capabilities', ai:false }, { postMessage() {} });
@@ -123,4 +163,4 @@ const cancel = posted.at(-1);
 assert.equal(cancel.type, 'naklios:ai:cancel');
 assert.ok(cancel.requestId);
 
-console.log('NakliOS Local AI broker and SDK contract: PASS');
+console.log('NakliOS AI broker, providers, model catalog, and SDK contract: PASS');

@@ -87,19 +87,24 @@ dark or that `BRAND` has sufficient contrast as body text.
   fsBackend: "crate",
   ai: true,
   aiModel: "LiquidAI/LFM2.5-230M-GGUF",
+  aiModelLabel: "LFM2.5 230M",
+  aiProvider: "custom-webgpu",
+  aiLocal: true,
   aiState: "ready"
 }
 ```
 
 Use `naklios.onCapabilitiesChange(callback)` rather than reading it only once.
 Folder permissions can expire and a Crate can be locked while the app is open.
-Local AI also changes from `idle` to `loading`, `ready`, or `error`.
+AI also changes from `idle` to `loading`, `ready`, or `error`. The selected
+model/provider may change while the app is open.
 
-## Local AI
+## AI
 
-NakliOS owns one shared LocalMind model worker. Apps receive a streamed text
-completion API, not the worker, model memory, another app's queue, histories,
-tools, filesystem, or credentials.
+NakliOS owns one shared inference broker. The user may select a vendored
+LocalMind browser model or a configured OpenAI-compatible endpoint. Apps receive
+a streamed text completion API, not the worker, model memory, endpoint URL or
+key, another app's queue, histories, tools, filesystem, or credentials.
 
 ```js
 const stream = await naklios.ai.chat.completions.create({
@@ -120,15 +125,17 @@ for await (const chunk of stream) {
 ```
 
 Omit `stream:true` for an OpenAI-shaped final response. An `AbortSignal` may be
-passed as `signal`, or call `stream.cancel()`. The host serializes generation,
-applies per-app queue limits, and asks for device-local consent on first use.
-The first approved request may download and cache roughly 140 MB of model
-weights.
+passed as `signal`, or call `stream.cancel()`. The host serializes generation
+and applies per-app queue limits. Consent is scoped to the selected destination:
+browser-local, a particular local endpoint, or a particular external endpoint.
+Switching destinations may therefore prompt for a new decision on first use.
+Built-in models download and cache their own advertised weight size.
 
 Check `naklios.capabilities.ai` before exposing an AI action. The app must remain
 useful when it is false. Third-party apps must also declare `inference` in their
 manifest. Prompts are request-scoped; an app that wants chat history must own
-and display that history itself.
+and display that history itself. Use `aiModel`, `aiModelLabel`, `aiProvider`,
+and `aiLocal` only for honest status copy; model choice remains a host setting.
 
 ## Filesystem
 

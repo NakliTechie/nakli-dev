@@ -3,9 +3,9 @@ import fs from 'node:fs';
 
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 assert.equal(html.includes('\0'), false, 'NakliOS source must not contain literal NUL bytes');
-const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map(match => match[1]);
-assert.equal(scripts.length, 1, 'expected one NakliOS application script');
+assert.equal(scripts.length, 1, 'expected one inline NakliOS application script');
 new Function(scripts[0]);
 
 const markdownStart = html.indexOf('function mdToHtml(src)');

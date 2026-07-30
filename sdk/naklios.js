@@ -19,7 +19,7 @@
  *       const stop = await naklios.fs.subscribe('', event => refresh(event));
  *     }
  *
- *     // Shared on-device inference (when the user grants this app access):
+ *     // Shared host inference (when the user grants this app access):
  *     if (naklios.capabilities.ai) {
  *       const stream = await naklios.ai.chat.completions.create({
  *         messages: [{ role: 'user', content: 'Summarise this note.' }],
@@ -61,6 +61,9 @@
     fsBackend: null,
     ai: false,
     aiModel: null,
+    aiModelLabel: null,
+    aiProvider: null,
+    aiLocal: true,
     aiState: 'idle',
   };
 
@@ -201,6 +204,9 @@
       capabilities.fsBackend = typeof msg.fsBackend === 'string' ? msg.fsBackend : null;
       if (typeof msg.ai === 'boolean') capabilities.ai = msg.ai;
       capabilities.aiModel = typeof msg.aiModel === 'string' ? msg.aiModel : null;
+      capabilities.aiModelLabel = typeof msg.aiModelLabel === 'string' ? msg.aiModelLabel : null;
+      capabilities.aiProvider = typeof msg.aiProvider === 'string' ? msg.aiProvider : null;
+      capabilities.aiLocal = msg.aiLocal !== false;
       capabilities.aiState = typeof msg.aiState === 'string' ? msg.aiState : 'idle';
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}

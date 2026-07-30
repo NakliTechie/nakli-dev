@@ -568,6 +568,27 @@ input{font:inherit; color:inherit;}
 .nw-fs-blurb{
   font-size:11px; color:var(--muted); line-height:1.4; margin-top:6px;
 }
+.nw-ai-form{
+  display:grid; gap:8px; padding:9px 10px; margin:7px 0;
+  border:1px solid var(--line); border-radius:8px; background:var(--row);
+}
+.nw-ai-form label{
+  display:grid; gap:4px; font-size:10px; color:var(--muted);
+}
+.nw-ai-form input,
+.nw-ai-form select{
+  width:100%; min-width:0; padding:7px 8px;
+  border:1px solid var(--line-strong); border-radius:7px;
+  color:var(--ink); background:var(--panel); font:12px/1.3 inherit;
+}
+.nw-ai-form input:focus,
+.nw-ai-form select:focus{outline:2px solid var(--brand); outline-offset:1px;}
+.nw-ai-endpoint-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+.nw-ai-key-row{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:end;}
+.nw-ai-result{min-height:16px; font-size:10px; color:var(--muted);}
+@media (max-width:600px){
+  .nw-ai-endpoint-grid,.nw-ai-key-row{grid-template-columns:1fr;}
+}
 
 /* ── STICKY NOTES ── */
 .nw-sticky{
@@ -1381,6 +1402,7 @@ body.is-mobile .nw-dock{display:none;}
   <div id="overlay-root"></div>
 </div>
 
+<script src="vendor/localmind/host-model-catalog.js"></script>
 <script>
 'use strict';
 
@@ -3924,7 +3946,7 @@ function appDiagnosticRows(win, mirrorManifest, mirrorError){
     { label:'Storage capability', value:caps?.fs ? 'Available to this app' : 'Unavailable or denied' },
     { label:'Connected locations', value:backendLabels.length ? backendLabels.join(', ') : 'None' },
     { label:'App storage binding', value:bound },
-    { label:'Local AI capability', value:caps?.ai
+    { label:'AI capability', value:caps?.ai
       ? `${AI_MODEL_LABEL} (${caps.aiState || 'idle'})`
       : 'Unavailable, undeclared, or denied' },
     ...appProvenanceRows(win, mirrorManifest, mirrorError),
@@ -4736,23 +4758,229 @@ async function fsHostList(msg, appId){
 }
 
 // ════════════════════════════════════════════════════════════════════
-// LOCAL INFERENCE BROKER
+// INFERENCE BROKER
 // ════════════════════════════════════════════════════════════════════
-// NakliOS owns the single LocalMind worker and presents a narrow, streamed
-// chat capability to apps. Apps never receive a worker, model object, another
-// app's queue entry, filesystem capability, or host credentials.
+// NakliOS presents one narrow, streamed chat capability to apps. The selected
+// runtime can be a vendored LocalMind worker, a local OpenAI-compatible server,
+// or a cloud BYOK endpoint. Apps never receive a worker, model object, another
+// app's queue entry, filesystem capability, endpoint URL, or API key.
 const AI_PROTOCOL = 'localmind.inference.v1';
-const AI_MODEL_ID = 'LiquidAI/LFM2.5-230M-GGUF';
-const AI_MODEL_LABEL = 'LocalMind · LFM2.5 230M';
+const AI_SETTINGS_KEY = 'nakliOS.aiSettings.v1';
+const AI_SESSION_KEY = 'nakliOS.aiEndpointKey.session.v1';
+const AI_REMEMBERED_KEY = 'nakliOS.aiEndpointKey.remembered.v1';
 const AI_MAX_QUEUE = 12;
 const AI_MAX_QUEUE_PER_APP = 3;
 const AI_MAX_INPUT_CHARS = 24000;
 const AI_MAX_MESSAGES = 32;
 const AI_MAX_OUTPUT_TOKENS = 768;
 const AI_LOAD_REQUEST_ID = 'naklios-model-load-v1';
+const AI_ENDPOINT_PRESETS = Object.freeze({
+  ollama: Object.freeze({
+    label:'Ollama',
+    baseUrl:'http://127.0.0.1:11434/v1',
+    keyRequired:false,
+  }),
+  lmstudio: Object.freeze({
+    label:'LM Studio',
+    baseUrl:'http://127.0.0.1:1234/v1',
+    keyRequired:false,
+  }),
+  llamacpp: Object.freeze({
+    label:'llama.cpp',
+    baseUrl:'http://127.0.0.1:8080/v1',
+    keyRequired:false,
+  }),
+  openai: Object.freeze({
+    label:'OpenAI',
+    baseUrl:'https://api.openai.com/v1',
+    keyRequired:true,
+  }),
+  openrouter: Object.freeze({
+    label:'OpenRouter',
+    baseUrl:'https://openrouter.ai/api/v1',
+    keyRequired:true,
+  }),
+  groq: Object.freeze({
+    label:'Groq',
+    baseUrl:'https://api.groq.com/openai/v1',
+    keyRequired:true,
+  }),
+  custom: Object.freeze({
+    label:'OpenAI-compatible',
+    baseUrl:'',
+    keyRequired:false,
+  }),
+});
+const AI_DEFAULT_SETTINGS = Object.freeze({
+  modelKey:globalThis.LocalMindHostCatalog.defaultKey,
+  endpoint:Object.freeze({
+    preset:'ollama',
+    baseUrl:AI_ENDPOINT_PRESETS.ollama.baseUrl,
+    model:'',
+    rememberKey:false,
+  }),
+});
+
+function aiReadSettings(){
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || '{}') || {}; } catch(_){}
+  const validModel = saved.modelKey === 'endpoint' ||
+    globalThis.LocalMindHostCatalog.models.some(model => model.key === saved.modelKey);
+  const preset = AI_ENDPOINT_PRESETS[saved.endpoint?.preset]
+    ? saved.endpoint.preset
+    : AI_DEFAULT_SETTINGS.endpoint.preset;
+  return {
+    modelKey:validModel ? saved.modelKey : AI_DEFAULT_SETTINGS.modelKey,
+    endpoint:{
+      preset,
+      baseUrl:String(saved.endpoint?.baseUrl || AI_ENDPOINT_PRESETS[preset].baseUrl || ''),
+      model:String(saved.endpoint?.model || ''),
+      rememberKey:saved.endpoint?.rememberKey === true,
+    },
+  };
+}
+
+let aiSettings = aiReadSettings();
+let AI_MODEL_ID = '';
+let AI_MODEL_LABEL = '';
+
+function aiNormaliseEndpointBase(value){
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('AI endpoint must use https:// or http://');
+  }
+  if (url.protocol === 'http:' && !aiEndpointIsLocal(url.href)) {
+    throw new Error('External AI endpoints must use HTTPS; HTTP is allowed only for local services');
+  }
+  return url.href.replace(/\/+$/, '');
+}
+
+function aiEndpointIsLocal(baseUrl){
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' ||
+      host === '::1' || host === '[::1]' ||
+      host.endsWith('.local') || host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  } catch(_) {
+    return false;
+  }
+}
+
+function aiSelectedModel(){
+  if (aiSettings.modelKey === 'endpoint'){
+    let baseUrl = '';
+    try { baseUrl = aiNormaliseEndpointBase(aiSettings.endpoint.baseUrl); } catch(_){}
+    const preset = AI_ENDPOINT_PRESETS[aiSettings.endpoint.preset] || AI_ENDPOINT_PRESETS.custom;
+    const model = String(aiSettings.endpoint.model || '').trim();
+    const local = aiEndpointIsLocal(baseUrl);
+    return {
+      key:'endpoint',
+      id:model || 'endpoint',
+      label:model ? `${preset.label} · ${model}` : `${preset.label} endpoint`,
+      description:local
+        ? 'Runs through a service on this device or local network.'
+        : 'Runs through an external provider using your API key.',
+      runtime:'endpoint',
+      scope:local ? 'local-endpoint' : 'external',
+      baseUrl,
+      model,
+      preset:aiSettings.endpoint.preset,
+      generationConfig:{},
+    };
+  }
+  return {
+    ...globalThis.LocalMindHostCatalog.get(aiSettings.modelKey),
+    scope:'device',
+  };
+}
+
+function aiRefreshSelectedModel(){
+  const selected = aiSelectedModel();
+  AI_MODEL_ID = selected.id;
+  AI_MODEL_LABEL = selected.runtime === 'endpoint'
+    ? selected.label
+    : `LocalMind · ${selected.label}`;
+}
+aiRefreshSelectedModel();
+
+function aiCredentialId(baseUrl){
+  try { return new URL(aiNormaliseEndpointBase(baseUrl)).origin; } catch(_) { return ''; }
+}
+
+function aiReadCredentialStore(storage, key){
+  try {
+    const parsed = JSON.parse(storage.getItem(key) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch(_) {
+    return {};
+  }
+}
+
+function aiWriteCredentialStore(storage, key, value){
+  if (Object.keys(value).length) storage.setItem(key, JSON.stringify(value));
+  else storage.removeItem(key);
+}
+
+function aiEndpointApiKey(baseUrl = aiSettings.endpoint.baseUrl){
+  const credentialId = aiCredentialId(baseUrl);
+  if (!credentialId) return '';
+  const sessionKeys = aiReadCredentialStore(sessionStorage, AI_SESSION_KEY);
+  if (sessionKeys[credentialId]) return sessionKeys[credentialId];
+  const rememberedKeys = aiReadCredentialStore(localStorage, AI_REMEMBERED_KEY);
+  return rememberedKeys[credentialId] || '';
+}
+
+function aiForgetEndpointKey(baseUrl){
+  const credentialId = aiCredentialId(baseUrl);
+  if (!credentialId) return;
+  const sessionKeys = aiReadCredentialStore(sessionStorage, AI_SESSION_KEY);
+  const rememberedKeys = aiReadCredentialStore(localStorage, AI_REMEMBERED_KEY);
+  delete sessionKeys[credentialId];
+  delete rememberedKeys[credentialId];
+  aiWriteCredentialStore(sessionStorage, AI_SESSION_KEY, sessionKeys);
+  aiWriteCredentialStore(localStorage, AI_REMEMBERED_KEY, rememberedKeys);
+}
+
+function aiPersistSettings(next, apiKey = null){
+  const credentialId = aiCredentialId(next.endpoint.baseUrl);
+  const sessionKeys = aiReadCredentialStore(sessionStorage, AI_SESSION_KEY);
+  const rememberedKeys = aiReadCredentialStore(localStorage, AI_REMEMBERED_KEY);
+  const clean = apiKey === null ? '' : String(apiKey || '').trim();
+  if (credentialId && clean) sessionKeys[credentialId] = clean;
+  if (credentialId && next.endpoint.rememberKey){
+    const keyToRemember = clean || sessionKeys[credentialId] || rememberedKeys[credentialId];
+    if (keyToRemember) rememberedKeys[credentialId] = keyToRemember;
+  } else if (credentialId) {
+    delete rememberedKeys[credentialId];
+  }
+  aiWriteCredentialStore(sessionStorage, AI_SESSION_KEY, sessionKeys);
+  aiWriteCredentialStore(localStorage, AI_REMEMBERED_KEY, rememberedKeys);
+  aiSettings = next;
+  localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings));
+  aiRefreshSelectedModel();
+}
+
+function aiPermissionScope(model = aiSelectedModel()){
+  if (model.scope === 'device') return 'device';
+  let origin = model.baseUrl;
+  try { origin = new URL(model.baseUrl).origin; } catch(_){}
+  return `${model.scope}:${origin}`;
+}
+
+function aiPermissionDecision(appId, scope = aiPermissionScope()){
+  const saved = state.aiPermissions[appId];
+  if (!saved) return null;
+  if (scope === 'device' && typeof saved.granted === 'boolean') return saved;
+  return saved.scopes?.[scope] || null;
+}
 
 const aiHost = {
   worker:null,
+  workerModelKey:null,
   state:'idle',
   error:null,
   loadPromise:null,
@@ -4766,10 +4994,18 @@ const aiHost = {
   requestCounter:0,
   lastAppId:null,
   permissionPrompts:new Map(),
+  endpointAbort:null,
 };
 
 function aiWebGpuAvailable(){
   return !!navigator.gpu && typeof Worker !== 'undefined';
+}
+
+function aiRuntimeAvailable(model = aiSelectedModel()){
+  if (model.runtime === 'endpoint') {
+    return !!model.baseUrl && !!model.model && typeof fetch === 'function';
+  }
+  return aiWebGpuAvailable();
 }
 
 function aiManifestAllows(appId){
@@ -4778,9 +5014,10 @@ function aiManifestAllows(appId){
 }
 
 function aiCapabilityForApp(appId){
-  return aiWebGpuAvailable() &&
+  const decision = aiPermissionDecision(appId);
+  return aiRuntimeAvailable() &&
     aiManifestAllows(appId) &&
-    state.aiPermissions[appId]?.granted !== false;
+    decision?.granted !== false;
 }
 
 function aiSetState(next, error = null){
@@ -4790,31 +5027,53 @@ function aiSetState(next, error = null){
 }
 
 async function aiEnsurePermission(appId){
-  if (!aiManifestAllows(appId) || !aiWebGpuAvailable()) return false;
-  const saved = state.aiPermissions[appId];
+  const model = aiSelectedModel();
+  if (!aiManifestAllows(appId) || !aiRuntimeAvailable(model)) return false;
+  const scope = aiPermissionScope(model);
+  const saved = aiPermissionDecision(appId, scope);
   if (saved?.granted === true) return true;
   if (saved?.granted === false) return false;
-  if (aiHost.permissionPrompts.has(appId)) return aiHost.permissionPrompts.get(appId);
+  const promptKey = `${appId}:${scope}`;
+  if (aiHost.permissionPrompts.has(promptKey)) return aiHost.permissionPrompts.get(promptKey);
 
   const prompt = (async () => {
     const app = APPS.find(item => item.id === appId);
     const name = app?.name || appId;
+    let boundary;
+    if (model.scope === 'device'){
+      boundary =
+        `The shared ${AI_MODEL_LABEL} model runs in this browser. Its first use downloads ${model.size} and caches it on this device. ` +
+        `Prompts and replies stay in this tab and are not shared with other apps.`;
+    } else if (model.scope === 'local-endpoint'){
+      boundary =
+        `Prompts and replies will be sent to the configured ${AI_MODEL_LABEL} service at ${model.baseUrl}. ` +
+        `NakliOS keeps the endpoint and any credential hidden from apps.`;
+    } else {
+      boundary =
+        `Prompts and replies will leave this device and be sent to ${AI_MODEL_LABEL} at ${model.baseUrl}. ` +
+        `NakliOS keeps your API key hidden from apps.`;
+    }
     const granted = await nakliosConfirm(
-      `${name} wants to use NakliOS Local AI.\n\n` +
-      `The shared ${AI_MODEL_LABEL} model runs on this device. Its first use downloads about 140 MB and caches it in this browser. ` +
-      `Prompts and replies stay in this tab and are not shared with other apps.`,
+      `${name} wants to use NakliOS AI.\n\n${boundary}`,
       {
-        title:'Allow Local AI?',
+        title:'Allow AI?',
         okLabel:'Allow',
         cancelLabel:'Not now',
       }
     );
-    state.aiPermissions[appId] = { granted, decidedAt:Date.now() };
+    const current = state.aiPermissions[appId] || {};
+    state.aiPermissions[appId] = {
+      ...current,
+      scopes:{
+        ...(current.scopes || {}),
+        [scope]:{ granted, decidedAt:Date.now() },
+      },
+    };
     saveAiPermissions();
     broadcastCapabilities();
     return granted;
-  })().finally(() => aiHost.permissionPrompts.delete(appId));
-  aiHost.permissionPrompts.set(appId, prompt);
+  })().finally(() => aiHost.permissionPrompts.delete(promptKey));
+  aiHost.permissionPrompts.set(promptKey, prompt);
   return prompt;
 }
 
@@ -4823,7 +5082,7 @@ function aiEmit(request, event){
     request.source.postMessage({
       type:'naklios:ai:event',
       requestId:request.requestId,
-      model:AI_MODEL_ID,
+      model:request.model?.id || AI_MODEL_ID,
       ...event,
     }, '*');
   } catch(_){}
@@ -4840,13 +5099,23 @@ function aiFailWorker(error){
   aiHost.loadPromise = null;
   try { aiHost.worker?.terminate(); } catch(_){}
   aiHost.worker = null;
+  aiHost.workerModelKey = null;
   aiSetState('error', failure);
 }
 
-function aiCreateWorker(){
-  if (aiHost.worker) return aiHost.worker;
-  const url = new URL('vendor/localmind/inference-worker.js', document.baseURI);
-  const worker = new Worker(url, { type:'module', name:'naklios-localmind-v1' });
+function aiCreateWorker(model){
+  if (aiHost.worker && aiHost.workerModelKey === model.key) return aiHost.worker;
+  if (aiHost.worker){
+    try { aiHost.worker.postMessage({ type:'unload' }); } catch(_){}
+    try { aiHost.worker.terminate(); } catch(_){}
+    aiHost.worker = null;
+    aiHost.workerModelKey = null;
+  }
+  const url = new URL(`vendor/localmind/${model.worker}`, document.baseURI);
+  const worker = new Worker(url, {
+    type:'module',
+    name:`naklios-localmind-${model.key}`,
+  });
   worker.addEventListener('message', event => {
     const msg = event.data || {};
     if (msg.protocol && msg.protocol !== AI_PROTOCOL) return;
@@ -4886,16 +5155,22 @@ function aiCreateWorker(){
     aiFailWorker(new Error(event.message || 'Local AI worker crashed'));
   });
   aiHost.worker = worker;
+  aiHost.workerModelKey = model.key;
   return worker;
 }
 
-async function aiEnsureLoaded(onProgress){
-  if (aiHost.state === 'ready' && aiHost.worker) return;
+async function aiEnsureLoaded(model, onProgress){
+  if (model.runtime === 'endpoint'){
+    aiSetState('ready');
+    return;
+  }
+  if (aiHost.state === 'ready' && aiHost.worker &&
+      aiHost.workerModelKey === model.key) return;
   if (typeof onProgress === 'function') aiHost.loadListeners.add(onProgress);
   try {
     if (!aiHost.loadPromise){
       aiSetState('loading');
-      const worker = aiCreateWorker();
+      const worker = aiCreateWorker(model);
       aiHost.loadPromise = new Promise((resolve, reject) => {
         aiHost.loadResolve = resolve;
         aiHost.loadReject = reject;
@@ -4903,7 +5178,9 @@ async function aiEnsureLoaded(onProgress){
       worker.postMessage({
         type:'load',
         id:AI_LOAD_REQUEST_ID,
-        modelId:AI_MODEL_ID,
+        modelId:model.id,
+        dtype:model.dtype,
+        modelType:model.modelType,
       });
     }
     await aiHost.loadPromise;
@@ -4937,7 +5214,7 @@ function aiNextRequest(){
   return request;
 }
 
-function aiGenerate(request){
+function aiGenerateWorker(request){
   return new Promise((resolve, reject) => {
     aiHost.activeResolve = resolve;
     aiHost.activeReject = reject;
@@ -4945,9 +5222,154 @@ function aiGenerate(request){
       type:'generate',
       id:request.workerRequestId,
       messages:request.messages,
-      generationConfig:{ max_tokens:request.maxTokens, reset:true },
+      generationConfig:{
+        ...(request.model.generationConfig || {}),
+        max_tokens:request.maxTokens,
+        max_new_tokens:request.maxTokens,
+        reset:true,
+      },
     });
   });
+}
+
+function aiEndpointHeaders(model){
+  const headers = { 'Content-Type':'application/json' };
+  const apiKey = aiEndpointApiKey();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  if (model.preset === 'openrouter'){
+    headers['HTTP-Referer'] = location.origin;
+    headers['X-Title'] = 'NakliOS';
+  }
+  return headers;
+}
+
+async function aiReadEndpointError(response){
+  let detail = '';
+  try {
+    const data = await response.json();
+    detail = data?.error?.message || data?.message || '';
+  } catch(_) {
+    try { detail = (await response.text()).slice(0, 300); } catch(_){}
+  }
+  return detail
+    ? `AI endpoint returned ${response.status}: ${detail}`
+    : `AI endpoint returned ${response.status}`;
+}
+
+function aiEndpointChatUrl(baseUrl){
+  const base = aiNormaliseEndpointBase(baseUrl);
+  if (/\/chat\/completions$/i.test(base)) return base;
+  return `${base}/chat/completions`;
+}
+
+async function aiDiscoverEndpointModels(config, apiKey = ''){
+  const base = aiNormaliseEndpointBase(config.baseUrl);
+  const headers = {};
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  const attempts = [`${base}/models`];
+  const root = base.replace(/\/v1$/i, '');
+  if (root !== base) attempts.push(`${root}/api/tags`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let lastError = null;
+  try {
+    for (const url of attempts){
+      try {
+        const response = await fetch(url, { headers, signal:controller.signal });
+        if (!response.ok) {
+          lastError = new Error(await aiReadEndpointError(response));
+          continue;
+        }
+        const data = await response.json();
+        const names = Array.isArray(data?.data)
+          ? data.data.map(item => item?.id)
+          : Array.isArray(data?.models)
+            ? data.models.map(item => item?.name || item?.model)
+            : [];
+        const clean = [...new Set(names.filter(name => typeof name === 'string' && name.trim()))];
+        if (clean.length) return clean.sort((a, b) => a.localeCompare(b));
+        lastError = new Error('The endpoint returned no models');
+      } catch (error){
+        lastError = error;
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (lastError?.name === 'AbortError') {
+    throw new Error('Endpoint discovery timed out. Check that the service is running and allows browser CORS.');
+  }
+  throw new Error(
+    `${lastError?.message || 'Could not discover endpoint models'}. ` +
+    `Check the URL, API key, and the endpoint's browser CORS settings.`
+  );
+}
+
+async function aiGenerateEndpoint(request){
+  const controller = new AbortController();
+  aiHost.endpointAbort = controller;
+  const response = await fetch(aiEndpointChatUrl(request.model.baseUrl), {
+    method:'POST',
+    headers:aiEndpointHeaders(request.model),
+    signal:controller.signal,
+    body:JSON.stringify({
+      model:request.model.model,
+      messages:request.messages,
+      max_tokens:request.maxTokens,
+      stream:true,
+    }),
+  });
+  if (!response.ok) throw new Error(await aiReadEndpointError(response));
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.body || !contentType.includes('text/event-stream')){
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') throw new Error('AI endpoint returned no assistant message');
+    if (text) aiEmit(request, { event:'token', token:text });
+    return data?.choices?.[0]?.finish_reason || 'stop';
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finishReason = 'stop';
+  while (true){
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream:true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const line of lines){
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let data;
+      try { data = JSON.parse(payload); } catch(_) { continue; }
+      const choice = data?.choices?.[0];
+      const token = choice?.delta?.content;
+      if (typeof token === 'string' && token) {
+        aiEmit(request, { event:'token', token });
+      }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+    }
+  }
+  return request.cancelled ? 'cancelled' : finishReason;
+}
+
+async function aiGenerate(request){
+  if (request.model.runtime === 'endpoint') {
+    try {
+      return await aiGenerateEndpoint(request);
+    } catch (error){
+      if (request.cancelled && error?.name === 'AbortError') return 'cancelled';
+      throw error;
+    } finally {
+      aiHost.endpointAbort = null;
+    }
+  }
+  return aiGenerateWorker(request);
 }
 
 async function aiProcessQueue(){
@@ -4957,7 +5379,7 @@ async function aiProcessQueue(){
   aiHost.active = request;
   try {
     aiEmit(request, { event:'status', status:'loading' });
-    await aiEnsureLoaded(progress => {
+    await aiEnsureLoaded(request.model, progress => {
       aiEmit(request, { event:'status', status:'loading', progress });
     });
     if (request.cancelled){
@@ -4984,8 +5406,14 @@ async function aiHostSubmit(source, msg, appId){
   const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 160) : '';
   const provisional = { source, appId, requestId:requestId || 'invalid' };
   try {
+    const model = aiSelectedModel();
     if (!requestId) throw new Error('Local AI requestId is required');
-    if (!aiWebGpuAvailable()) throw new Error('Local AI requires WebGPU in a recent Chrome or Edge browser');
+    if (!aiRuntimeAvailable(model)){
+      if (model.runtime === 'endpoint') {
+        throw new Error('Configure an endpoint URL and model in Settings → AI');
+      }
+      throw new Error('This on-device model requires WebGPU in a recent Chrome or Edge browser');
+    }
     if (!aiManifestAllows(appId)) throw new Error('This app did not declare the inference permission');
     const duplicate = aiHost.active?.source === source && aiHost.active.requestId === requestId ||
       aiHost.queue.some(request => request.source === source && request.requestId === requestId);
@@ -5011,6 +5439,7 @@ async function aiHostSubmit(source, msg, appId){
       workerRequestId:`naklios-ai-${++aiHost.requestCounter}`,
       messages,
       maxTokens:Math.max(16, Math.min(AI_MAX_OUTPUT_TOKENS, Number(msg.maxTokens) || 384)),
+      model,
       cancelled:false,
     };
     aiHost.queue.push(request);
@@ -5033,7 +5462,9 @@ function aiHostCancel(source, requestId){
   }
   if (aiHost.active?.source === source && aiHost.active.requestId === requestId){
     aiHost.active.cancelled = true;
-    if (aiHost.state === 'ready') {
+    if (aiHost.active.model?.runtime === 'endpoint'){
+      aiHost.endpointAbort?.abort();
+    } else if (aiHost.state === 'ready') {
       aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
     }
     return true;
@@ -5049,10 +5480,30 @@ function aiHostCancelSource(source){
   }
   if (aiHost.active?.source === source){
     aiHost.active.cancelled = true;
-    if (aiHost.state === 'ready') {
+    if (aiHost.active.model?.runtime === 'endpoint'){
+      aiHost.endpointAbort?.abort();
+    } else if (aiHost.state === 'ready') {
       aiHost.worker?.postMessage({ type:'stop', id:aiHost.active.workerRequestId });
     }
   }
+}
+
+function aiResetRuntime(){
+  if (aiHost.active || aiHost.queue.length) {
+    throw new Error('Wait for the current AI request to finish before changing models');
+  }
+  if (aiHost.endpointAbort){
+    try { aiHost.endpointAbort.abort(); } catch(_){}
+  }
+  try { aiHost.worker?.postMessage({ type:'unload' }); } catch(_){}
+  try { aiHost.worker?.terminate(); } catch(_){}
+  aiHost.worker = null;
+  aiHost.workerModelKey = null;
+  aiHost.loadPromise = null;
+  aiHost.loadResolve = null;
+  aiHost.loadReject = null;
+  aiHost.endpointAbort = null;
+  aiSetState('idle');
 }
 
 function aiHostChatNative(appId, messages, options = {}){
@@ -5109,12 +5560,16 @@ function capabilitySnapshot(appId){
   const fsCap = available.length > 0 && !explicitlyDenied;
   const fsBackends = available.map(backendDescriptor).filter(Boolean);
   const fsBackend = appBoundBackend(appId);
+  const aiModel = aiSelectedModel();
   return {
     fs: fsCap,
     fsBackends,
     fsBackend,
     ai: aiCapabilityForApp(appId),
-    aiModel: AI_MODEL_ID,
+    aiModel: aiModel.id,
+    aiModelLabel: aiModel.label,
+    aiProvider: aiModel.runtime,
+    aiLocal: aiModel.scope !== 'external',
     aiState: aiHost.state,
   };
 }
@@ -6032,7 +6487,7 @@ async function consentThirdPartyInstall(manifest, manifestSource){
     : 'No NakliOS storage access requested.';
   const inferenceLine = manifest.permissions.includes('inference')
     ? 'May ask to use the shared on-device LocalMind model. NakliOS asks again on first use and never shares prompts between apps.'
-    : 'No NakliOS Local AI access requested.';
+    : 'No NakliOS AI access requested.';
   const answer = await _nakliosDialog({
     title: existing ? `Review update for ${manifest.name}` : `Install ${manifest.name}?`,
     body:
@@ -6045,7 +6500,7 @@ async function consentThirdPartyInstall(manifest, manifestSource){
       `<strong>Isolation</strong> · Windowed apps always run in an opaque-origin sandbox. ` +
       `They never become a same-origin system app or mirror.<br>` +
       `<strong>Storage</strong> · ${_dlgEscape(storageLine)}<br>` +
-      `<strong>Local AI</strong> · ${_dlgEscape(inferenceLine)}<br><br>` +
+      `<strong>AI</strong> · ${_dlgEscape(inferenceLine)}<br><br>` +
       `Installation is local to this browser profile. Uninstalling later removes the registration, not app data.`,
     buttons: [
       { value:'cancel', label:'Cancel' },
@@ -6305,25 +6760,96 @@ function openSettings(section){
   `;
 
   const aiDecisionCount = Object.keys(state.aiPermissions).length;
-  const aiHTML = aiWebGpuAvailable() ? `
+  const selectedAiModel = aiSelectedModel();
+  const aiModelOptions = globalThis.LocalMindHostCatalog.models.map(model => `
+    <option value="${_dlgEscape(model.key)}" ${aiSettings.modelKey === model.key ? 'selected' : ''}>
+      ${_dlgEscape(model.label)} · ${_dlgEscape(model.size)}
+    </option>
+  `).join('');
+  const aiPresetOptions = Object.entries(AI_ENDPOINT_PRESETS).map(([key, preset]) => `
+    <option value="${_dlgEscape(key)}" ${aiSettings.endpoint.preset === key ? 'selected' : ''}>
+      ${_dlgEscape(preset.label)}
+    </option>
+  `).join('');
+  const endpointHidden = aiSettings.modelKey === 'endpoint' ? '' : 'hidden';
+  const endpointKeySaved = !!aiEndpointApiKey();
+  const aiAvailabilityNote = selectedAiModel.runtime !== 'endpoint' && !aiWebGpuAvailable()
+    ? `<div class="nw-fs-blurb" style="color:var(--brand);">
+        This built-in model needs WebGPU. You can still connect Ollama, LM Studio,
+        llama.cpp, or a cloud provider below.
+      </div>`
+    : '';
+  const aiHTML = `
     <div class="nw-fs-connected">
       <span>✦</span>
-      <span class="nw-fs-connected-name">${AI_MODEL_LABEL}</span>
-      <span style="color:var(--muted);">${aiHost.state}</span>
+      <span class="nw-fs-connected-name" id="ai-active-model">${AI_MODEL_LABEL}</span>
+      <span id="ai-active-state" style="color:var(--muted);">${aiHost.state}</span>
     </div>
     <div class="nw-fs-blurb">
-      One shared on-device model for cooperative apps. The first approved use
-      downloads about 140 MB; prompts and replies stay in this tab. Apps queue
-      fairly and receive only their own streamed reply.
+      One broker for cooperative apps. NakliOS owns the selected runtime,
+      permissions, queue, and credentials; apps receive only their own stream.
     </div>
-    <button class="nw-fs-btn-secondary" id="ai-forget-permissions" type="button"
-      ${aiDecisionCount ? '' : 'disabled'}>
-      Reset app AI decisions${aiDecisionCount ? ` (${aiDecisionCount})` : ''}
-    </button>
-  ` : `
-    <div class="nw-fs-blurb">
-      Local AI is unavailable because this browser does not expose WebGPU.
-      Use a recent Chrome or Edge browser with compatible graphics hardware.
+    ${aiAvailabilityNote}
+    <div class="nw-ai-form">
+      <label>
+        Model / provider
+        <select id="ai-model-select">
+          ${aiModelOptions}
+          <option value="endpoint" ${aiSettings.modelKey === 'endpoint' ? 'selected' : ''}>
+            Connect an endpoint…
+          </option>
+        </select>
+      </label>
+      <div class="nw-fs-blurb" id="ai-model-detail" style="margin:0;">
+        ${_dlgEscape(selectedAiModel.description || '')}
+        ${selectedAiModel.size ? ` First use: ${_dlgEscape(selectedAiModel.size)}.` : ''}
+      </div>
+      <div id="ai-endpoint-fields" ${endpointHidden}>
+        <div class="nw-ai-endpoint-grid">
+          <label>
+            Provider
+            <select id="ai-endpoint-preset">${aiPresetOptions}</select>
+          </label>
+          <label>
+            Base URL
+            <input id="ai-endpoint-url" inputmode="url" autocomplete="url"
+              value="${_dlgEscape(aiSettings.endpoint.baseUrl)}"
+              placeholder="http://127.0.0.1:11434/v1">
+          </label>
+        </div>
+        <div class="nw-ai-endpoint-grid" style="margin-top:8px;">
+          <label>
+            Model
+            <input id="ai-endpoint-model" list="ai-endpoint-models"
+              value="${_dlgEscape(aiSettings.endpoint.model)}"
+              placeholder="Discover or enter a model ID">
+            <datalist id="ai-endpoint-models"></datalist>
+          </label>
+          <label>
+            API key
+            <input id="ai-endpoint-key" type="password" autocomplete="off"
+              placeholder="${endpointKeySaved ? 'Key already available — leave blank to keep it' : 'Optional for local endpoints'}">
+          </label>
+        </div>
+        <label class="nw-fs-blurb" style="display:flex; grid-template-columns:auto 1fr; gap:6px; align-items:center; margin:8px 0 0;">
+          <input type="checkbox" id="ai-remember-key" style="width:auto;"
+            ${aiSettings.endpoint.rememberKey ? 'checked' : ''}>
+          <span>Remember API key on this device (otherwise it lasts only for this tab)</span>
+        </label>
+        <div class="nw-fs-connect-actions" style="margin-top:8px;">
+          <button class="nw-fs-btn-secondary" id="ai-discover-models" type="button">Discover models</button>
+          <button class="nw-fs-btn-secondary" id="ai-forget-key" type="button"
+            ${endpointKeySaved ? '' : 'disabled'}>Forget key</button>
+        </div>
+      </div>
+      <div class="nw-fs-connect-actions">
+        <button class="nw-fs-btn-primary" id="ai-apply-model" type="button">Use this model</button>
+        <button class="nw-fs-btn-secondary" id="ai-forget-permissions" type="button"
+          ${aiDecisionCount ? '' : 'disabled'}>
+          Reset app decisions${aiDecisionCount ? ` (${aiDecisionCount})` : ''}
+        </button>
+      </div>
+      <div class="nw-ai-result" id="ai-settings-result" role="status"></div>
     </div>
   `;
 
@@ -6348,7 +6874,7 @@ function openSettings(section){
     ${fsHTML}
     <h4>Crate (cloud, encrypted)</h4>
     ${crateHTML}
-    <h4 id="settings-ai-heading" tabindex="-1">Local AI</h4>
+    <h4 id="settings-ai-heading" tabindex="-1">AI</h4>
     ${aiHTML}
     <h4>Mode</h4>
     ${modeHTML}
@@ -6363,7 +6889,7 @@ function openSettings(section){
     </div>
     <h4>About</h4>
     <div style="font-size:11px; color:var(--muted); line-height:1.4;">
-      Single HTML file. No tracking. No data leaves your device.
+      Single HTML file. No tracking. Data stays local unless you explicitly connect an AI provider.
       <a class="nw-foot-link" href="https://github.com/NakliTechie/nakli-dev" target="_blank">View source on GitHub →</a>
       <a class="nw-foot-link" href="https://naklitechie.github.io/" target="_blank">Portfolio: naklitechie.github.io →</a>
     </div>
@@ -6447,12 +6973,147 @@ function openSettings(section){
   wrap.querySelector('#crate-stay')?.addEventListener('change', (e) => {
     setCrateStayUnlocked(e.target.checked);
   });
-  wrap.querySelector('#ai-forget-permissions')?.addEventListener('click', () => {
+
+  // --- AI model/provider handlers ---
+  const aiModelSelect = wrap.querySelector('#ai-model-select');
+  const aiEndpointFields = wrap.querySelector('#ai-endpoint-fields');
+  const aiEndpointPreset = wrap.querySelector('#ai-endpoint-preset');
+  const aiEndpointUrl = wrap.querySelector('#ai-endpoint-url');
+  const aiEndpointModel = wrap.querySelector('#ai-endpoint-model');
+  const aiEndpointKey = wrap.querySelector('#ai-endpoint-key');
+  const aiRememberKey = wrap.querySelector('#ai-remember-key');
+  const aiSettingsResult = wrap.querySelector('#ai-settings-result');
+  const aiModelDetail = wrap.querySelector('#ai-model-detail');
+  let aiDraftPreset = aiEndpointPreset?.value || 'custom';
+
+  const paintAiDraft = () => {
+    const key = aiModelSelect?.value || AI_DEFAULT_SETTINGS.modelKey;
+    const endpoint = key === 'endpoint';
+    if (aiEndpointFields) aiEndpointFields.hidden = !endpoint;
+    if (!aiModelDetail) return;
+    if (endpoint){
+      aiModelDetail.textContent =
+        'Connect Ollama, LM Studio, llama.cpp, or any OpenAI-compatible cloud provider. Credentials remain host-only.';
+      return;
+    }
+    const model = globalThis.LocalMindHostCatalog.get(key);
+    aiModelDetail.textContent = `${model.description} First use: ${model.size}.`;
+  };
+  aiModelSelect?.addEventListener('change', paintAiDraft);
+  paintAiDraft();
+
+  const paintEndpointKeyState = () => {
+    const preset = AI_ENDPOINT_PRESETS[aiEndpointPreset.value] || AI_ENDPOINT_PRESETS.custom;
+    const hasKey = !!aiEndpointApiKey(aiEndpointUrl.value);
+    aiEndpointKey.placeholder = preset.keyRequired
+      ? (hasKey ? 'Key already available — leave blank to keep it' : 'Required')
+      : (hasKey ? 'Key already available — leave blank to keep it' : 'Optional for local endpoints');
+    wrap.querySelector('#ai-forget-key').disabled = !hasKey;
+  };
+
+  aiEndpointPreset?.addEventListener('change', () => {
+    const previous = AI_ENDPOINT_PRESETS[aiDraftPreset];
+    const next = AI_ENDPOINT_PRESETS[aiEndpointPreset.value] || AI_ENDPOINT_PRESETS.custom;
+    const currentUrl = aiEndpointUrl.value.trim();
+    if (!currentUrl || currentUrl === previous?.baseUrl) aiEndpointUrl.value = next.baseUrl;
+    aiDraftPreset = aiEndpointPreset.value;
+    paintEndpointKeyState();
+  });
+  aiEndpointUrl?.addEventListener('input', paintEndpointKeyState);
+
+  wrap.querySelector('#ai-discover-models')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const suppliedKey = aiEndpointKey.value.trim();
+    const apiKey = suppliedKey || aiEndpointApiKey(aiEndpointUrl.value);
+    button.disabled = true;
+    aiSettingsResult.textContent = 'Looking for models…';
+    try {
+      const models = await aiDiscoverEndpointModels({
+        baseUrl:aiEndpointUrl.value,
+      }, apiKey);
+      const datalist = wrap.querySelector('#ai-endpoint-models');
+      datalist.replaceChildren(...models.map(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        return option;
+      }));
+      if (!aiEndpointModel.value.trim()) aiEndpointModel.value = models[0];
+      aiSettingsResult.textContent =
+        `Found ${models.length} model${models.length === 1 ? '' : 's'}. Choose one, then use this model.`;
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  wrap.querySelector('#ai-forget-key')?.addEventListener('click', (event) => {
+    try {
+      aiForgetEndpointKey(aiEndpointUrl.value);
+      aiEndpointKey.value = '';
+      event.currentTarget.disabled = true;
+      const preset = AI_ENDPOINT_PRESETS[aiEndpointPreset.value] || AI_ENDPOINT_PRESETS.custom;
+      aiEndpointKey.placeholder = preset.keyRequired ? 'Required' : 'Optional for local endpoints';
+      aiSettingsResult.textContent = 'The key for this endpoint was forgotten.';
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    }
+  });
+
+  wrap.querySelector('#ai-apply-model')?.addEventListener('click', async () => {
+    const modelKey = aiModelSelect.value;
+    let next = {
+      modelKey,
+      endpoint:{
+        preset:aiEndpointPreset.value,
+        baseUrl:aiEndpointUrl.value.trim(),
+        model:aiEndpointModel.value.trim(),
+        rememberKey:aiRememberKey.checked,
+      },
+    };
+    try {
+      if (modelKey === 'endpoint'){
+        next.endpoint.baseUrl = aiNormaliseEndpointBase(next.endpoint.baseUrl);
+        if (!next.endpoint.model) throw new Error('Choose or enter an endpoint model');
+        const preset = AI_ENDPOINT_PRESETS[next.endpoint.preset] || AI_ENDPOINT_PRESETS.custom;
+        if (preset.keyRequired && !aiEndpointKey.value.trim() &&
+            !aiEndpointApiKey(next.endpoint.baseUrl)) {
+          throw new Error(`${preset.label} requires an API key`);
+        }
+      } else {
+        const model = globalThis.LocalMindHostCatalog.get(modelKey);
+        if (model.sizeBytes >= 1_000_000_000 && modelKey !== aiSettings.modelKey){
+          const proceed = await nakliosConfirm(
+            `${model.label} downloads ${model.size} and needs substantial GPU memory. ` +
+            `The browser cache keeps its weights for later use.`,
+            {
+              title:`Use ${model.label}?`,
+              okLabel:'Use model',
+              cancelLabel:'Not now',
+            },
+          );
+          if (!proceed) return;
+        }
+      }
+      aiResetRuntime();
+      const suppliedKey = aiEndpointKey.value.trim();
+      aiPersistSettings(next, suppliedKey ? suppliedKey : null);
+      broadcastCapabilities();
+      wrap.querySelector('#ai-active-model').textContent = AI_MODEL_LABEL;
+      wrap.querySelector('#ai-active-state').textContent = aiHost.state;
+      aiSettingsResult.textContent = `Using ${AI_MODEL_LABEL}.`;
+    } catch (error){
+      aiSettingsResult.textContent = error?.message || String(error);
+    }
+  });
+
+  wrap.querySelector('#ai-forget-permissions')?.addEventListener('click', (event) => {
     state.aiPermissions = {};
     saveAiPermissions();
     broadcastCapabilities();
-    closeSettings();
-    openSettings('ai');
+    event.currentTarget.disabled = true;
+    event.currentTarget.textContent = 'Reset app decisions';
+    aiSettingsResult.textContent = 'App AI decisions were reset.';
   });
 
   wrap.querySelector('#third-party-add')?.addEventListener('click', async () => {
@@ -6511,7 +7172,8 @@ function outsideHandler(e){
   const btn = document.getElementById('settings-btn');
   const mode = document.getElementById('mode-pill');
   if (!pop) return;
-  if (pop.contains(e.target) || btn.contains(e.target) || mode.contains(e.target)) return;
+  if (pop.contains(e.target) || btn.contains(e.target) || mode.contains(e.target) ||
+      e.target.closest?.('.nw-dlg')) return;
   closeSettings();
 }
 
@@ -6964,7 +7626,7 @@ Classics.notepad = (body, win) => {
         <button class="cl-pad-btn" id="pad-wrap" aria-pressed="${settings.wrap ? 'true' : 'false'}" title="Toggle word wrap">Wrap</button>
         <button class="cl-pad-btn" id="pad-font-down" title="Smaller text">A−</button>
         <button class="cl-pad-btn" id="pad-font-up" title="Larger text">A＋</button>
-        <button class="cl-pad-btn" id="pad-ai" title="Use NakliOS Local AI on the selection or document">✦ AI</button>
+        <button class="cl-pad-btn" id="pad-ai" title="Use NakliOS AI on the selection or document">✦ AI</button>
         <span class="grow"></span>
         <button class="cl-pad-btn cl-pad-storage" id="pad-storage" title="Choose Local, NakliOS Folder, or Crate">Local</button>
       </div>
@@ -7414,16 +8076,20 @@ Classics.notepad = (body, win) => {
     const available = aiCapabilityForApp(APP_ID);
     aiBtn.disabled = !activeDocument() || !available;
     aiBtn.title = available
-      ? 'Use NakliOS Local AI on the selection or document'
-      : 'Local AI is unavailable or denied; reset it in Settings → Local AI';
+      ? 'Use NakliOS AI on the selection or document'
+      : 'AI is unavailable or denied; configure it in Settings → AI';
   }
   function aiProgressLabel(statusName, progress){
-    if (statusName === 'queued') return 'Waiting for the shared Local AI…';
-    if (statusName === 'generating') return 'Writing locally…';
-    if (progress?.total && Number.isFinite(progress.loaded)){
-      return `Loading Local AI · ${Math.round(progress.loaded / progress.total * 100)}%`;
+    if (statusName === 'queued') return 'Waiting for shared NakliOS AI…';
+    if (statusName === 'generating') {
+      return aiSelectedModel().scope === 'external'
+        ? 'Waiting for the configured provider…'
+        : 'Writing on this device…';
     }
-    return 'Loading Local AI for first use…';
+    if (progress?.total && Number.isFinite(progress.loaded)){
+      return `Loading NakliOS AI · ${Math.round(progress.loaded / progress.total * 100)}%`;
+    }
+    return 'Loading NakliOS AI for first use…';
   }
   function showPadAiResult({ action, sourceText, selectionStart, selectionEnd, documentId }){
     const dlg = document.createElement('dialog');
@@ -7432,9 +8098,9 @@ Classics.notepad = (body, win) => {
     dlg.setAttribute('aria-labelledby', titleId);
     dlg.innerHTML = `
       <form method="dialog" class="nw-dlg-form">
-        <h3 class="nw-dlg-title" id="${titleId}">Local AI · ${_dlgEscape(action.label)}</h3>
+        <h3 class="nw-dlg-title" id="${titleId}">NakliOS AI · ${_dlgEscape(action.label)}</h3>
         <div class="nw-dlg-body">Review the result before changing your document.</div>
-        <textarea class="cl-pad-ai-output" readonly aria-label="Local AI result"></textarea>
+        <textarea class="cl-pad-ai-output" readonly aria-label="AI result"></textarea>
         <div class="cl-pad-ai-status" role="status" aria-live="polite">Queued…</div>
         <menu class="nw-dlg-actions">
           <button value="cancel" class="nw-dlg-btn pad-ai-stop">Stop</button>
@@ -7509,7 +8175,7 @@ Classics.notepad = (body, win) => {
     void aiHostChatNative(APP_ID, [
       {
         role:'system',
-        content:'You are the private writing assistant inside NakliOS Notepad. Follow the requested editing task. Return only the useful result, without preamble or commentary.',
+        content:'You are the writing assistant inside NakliOS Notepad. Follow the requested editing task. Return only the useful result, without preamble or commentary.',
       },
       { role:'user', content:`${action.prompt}\n\nTEXT:\n${sourceText}` },
     ], {
@@ -7556,7 +8222,7 @@ Classics.notepad = (body, win) => {
       : ta.value;
     if (rawSourceText.length > AI_MAX_INPUT_CHARS - 800){
       await nakliosAlert(
-        'That text is too long for the compact local model. Select a passage under about 23,000 characters and try again.',
+        'That text exceeds the NakliOS AI request limit. Select a passage under about 23,000 characters and try again.',
         { title:'Select a shorter passage' }
       );
       return;
@@ -7566,9 +8232,15 @@ Classics.notepad = (body, win) => {
       await nakliosAlert('Select some text or write something first.', { title:'Nothing to send' });
       return;
     }
+    const selectedAiModel = aiSelectedModel();
+    const aiBoundary = selectedAiModel.scope === 'external'
+      ? `The text will be sent to ${selectedAiModel.label} under your app consent.`
+      : selectedAiModel.scope === 'local-endpoint'
+        ? `The text will be sent to your configured ${selectedAiModel.label} service.`
+        : `The text is processed in this browser by ${selectedAiModel.label}.`;
     const actionValue = await _nakliosDialog({
-      title:'Local AI in Notepad',
-      body:`Use the ${hasSelection ? 'selected text' : 'whole document'} as context. Nothing changes until you choose Replace or Insert.`,
+      title:'NakliOS AI in Notepad',
+      body:`Use the ${hasSelection ? 'selected text' : 'whole document'} as context. ${aiBoundary} Nothing changes until you choose Replace or Insert.`,
       buttons:[
         { value:'cancel', label:'Cancel' },
         { value:'proofread', label:'Proofread' },

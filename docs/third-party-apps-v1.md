@@ -114,6 +114,9 @@ An app should:
 7. call `naklios.ai.chat.completions.create(...)` only after checking
    `naklios.capabilities.ai`, show queued/loading/generating state, provide
    cancellation, and require an explicit user action before replacing content.
+   Do not ask for provider keys or assume prompts stay on-device; NakliOS owns
+   provider selection and per-destination consent. Read `aiLocal` and
+   `aiModelLabel` when the UI needs to describe the active boundary.
 
 See the full [cooperative app contract](app-contract.md) for message shapes,
 backend-affine filesystem operations, remote-change subscriptions, and

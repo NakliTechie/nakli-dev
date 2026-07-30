@@ -51,23 +51,27 @@ filesystem calls, separate Browser/Folder/Crate libraries, async close
 durability, explicit remote-conflict handling, and the optional streamed
 `naklios.ai` capability.
 
-## Local AI
+## AI
 
-NakliOS has one host-owned, on-device inference service backed by a pinned
-LocalMind runtime. The first approved use downloads and caches the compact
-LFM2.5 230M model (about 140 MB); later cooperative apps share that loaded
-runtime rather than each downloading or holding a model. Requests are bounded,
-queued fairly, reset between apps, streamed, and cancellable.
+NakliOS has one host-owned inference broker backed by pinned LocalMind
+runtimes. LFM2.5 230M remains the fast ~140 MB default. Settings also offers
+Gemma 4 E2B, Gemma 4 E4B, and Qwen3 4B through WebGPU, or an
+OpenAI-compatible endpoint: Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter,
+Groq, or a custom provider. Cooperative apps keep one SDK regardless of which
+runtime the user chooses. Requests are bounded, queued fairly, reset between
+apps, streamed, and cancellable.
 
-Consent is per app and per browser. Apps receive only their own text stream:
-they never receive the model worker, another app's prompts, filesystem
-capabilities, Crate credentials, or host tools. Third-party manifests must
-declare `inference`, followed by a separate first-use prompt. Notepad stages
-summaries and rewrites for explicit Replace/Insert review; Books explains or
-summarizes only the current selection or passage.
+Consent is per app, browser, and destination. A grant for a browser-local model
+does not silently authorize a local server or cloud provider. Endpoint URLs and
+API keys remain host-only; keys last for the tab unless the user explicitly
+chooses to remember one on that device. AI settings and secrets never sync
+through Folder or Crate. Apps receive only their own text stream: never the
+worker, endpoint credentials, another app's prompts, filesystem capabilities,
+Crate credentials, or host tools. Third-party manifests must declare
+`inference`, followed by a separate first-use prompt.
 
 LocalMind remains the source repository for inference runtime work. NakliOS
-checks in the tested worker and engine under
+checks in the tested workers, catalog, and engine under
 [`vendor/localmind/`](vendor/localmind/) with an upstream commit and SHA-256
 lock, so the full LocalMind workbench and the shared OS service cannot drift.
 
