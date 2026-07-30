@@ -57,8 +57,28 @@ assert.match(
 );
 assert.match(
   html,
+  /const DEFAULT_DESKTOP_APP_IDS = Object\.freeze\(\[\s*'books',\s*'nakliposter',\s*'bofh',\s*'mod',\s*'naklidata',\s*\]\)/,
+  'Books, NakliPoster, BOFH, MoD, and NakliData are first-party desktop defaults',
+);
+assert.match(
+  html,
+  /function applyDesktopDefaults\(layout\)[\s\S]*?layout\.unfoldered\.push\(appId\)[\s\S]*?layout\.desktopDefaultsVersion = DESKTOP_DEFAULTS_VERSION/,
+  'desktop defaults carry a one-time migration version in the layout',
+);
+assert.match(
+  html,
+  /state\.layout = sanitizeLayout\(remote\.layout\)[\s\S]*?applyDesktopDefaults\(state\.layout\)/,
+  'older Folder-backed layouts receive the desktop-default migration too',
+);
+assert.match(
+  html,
+  /id:'naklidata'[\s\S]*?url:'https:\/\/naklidata\.naklitechie\.com\/'[\s\S]*?maxMode:'basic'[\s\S]*?desktopAlign:'right', desktopOrder:5/,
+  'NakliData launches top-level and occupies the fifth right-side desktop slot',
+);
+assert.match(
+  html,
   /function getDesktopItems\(\)[\s\S]*?for \(const folder of FOLDERS\)[\s\S]*?if \(isInFolder\(app\.id\)\) continue/,
-  'the cold desktop is task folders plus deliberate user pull-outs',
+  'the desktop is task folders plus default or deliberate app pull-outs',
 );
 
 const appsBlock = html.slice(html.indexOf('const APPS = ['), html.indexOf('const FOLDERS = ['));

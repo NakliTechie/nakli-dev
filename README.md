@@ -45,6 +45,15 @@ One line in the `APPS` array at the top of `index.html`:
 
 Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`, `embedUrl:'https://naklios.dev/apps/<id>/'` (same-origin mirror for FSA-needing apps; see `apps/manifest.json`).
 
+Apps retain one predictable task-folder home. NakliOS also places Books,
+NakliPoster, BOFH, MoD, and NakliData on the right side of the desktop by
+default; users can return any shortcut to its folder from the desktop context
+menu.
+
+NakliData opens as a top-level app rather than an opaque sandboxed iframe
+because its browser-native data engine relies on File System Access, OPFS,
+workers, and cross-origin isolation.
+
 First-party stateful and cooperative apps should follow the
 [`NakliOS app contract`](docs/app-contract.md), including backend-affine
 filesystem calls, separate Browser/Folder/Crate libraries, async close

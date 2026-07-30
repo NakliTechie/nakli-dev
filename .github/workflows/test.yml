@@ -51,6 +51,9 @@ jobs:
       - name: Verify catalog, mirror, lock, and on-disk inventory agree
         run: node scripts/audit-app-inventory.mjs
 
+      - name: Verify task folders and first-party desktop defaults
+        run: node scripts/test-app-catalog.mjs
+
       - name: Verify deterministic inventory drift detection
         run: node scripts/test-app-inventory.mjs
 
