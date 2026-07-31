@@ -45,7 +45,7 @@ One line in the `APPS` array at the top of `index.html`:
 
 Optional fields: `maxMode:'basic'`, `iframeable:false`, `private:true`, `kind:'classic'`, `desktopAlign:'right'` + `desktopOrder:N`, `svg:'<path d=…>'`, `embedUrl:'https://naklios.dev/apps/<id>/'` (same-origin mirror for FSA-needing apps; see `apps/manifest.json`).
 
-Apps retain one predictable task-folder home. NakliOS also places Books,
+Apps retain one predictable task-folder home. NakliOS also places Lorewell,
 NakliPoster, BOFH, MoD, NakliData, Tijori, Files, and Notes on the right side
 of the desktop by default; users can return any shortcut to its folder from
 the desktop context menu.
@@ -154,7 +154,12 @@ The Crate ESM modules are vendored under [`vendor/crate/`](vendor/crate/) and lo
 
 **Notepad v2** is a practical multi-document editor with horizontal open-document tabs, autosave, search/replace (including case-sensitive and regular-expression modes), go-to-line, Markdown edit/split/preview modes, local file open/Save As, import/download, word wrap, font and tab-size controls, keyboard shortcuts, and reviewed Local AI summarize/improve/proofread actions. Persistence follows a deliberate order: an app-scoped NakliOS Folder or Crate whenever one is connected, durable local file handles when working from this device, then an IndexedDB recovery/session journal (with the former localStorage registry retained only as a compatibility fallback). The journal restores open tabs and newer unsaved text after a crash, reload, or shutdown. Switching locations never migrates data implicitly, and the original v1 scratch value is preserved after one-time migration.
 
-**Books v1.1** remains hosted in both desktop modes. It uses the current storage SDK, keeps Folder and Crate libraries isolated, and adds filtering, sorting, duplicate protection, modal-confirmed removal, reader appearance preferences, and a Local AI reading companion scoped to the visible selection, page, or passage. Local development loads the sibling `Books/` checkout; production keeps the cross-origin published app.
+**Lorewell** remains hosted in both desktop modes under the stable `books` app
+ID. It uses the current storage SDK, keeps Folder and Crate libraries isolated,
+and adds filtering, sorting, duplicate protection, modal-confirmed removal,
+reader appearance preferences, and a Local AI reading companion scoped to the
+visible selection, page, or passage. Local development loads the sibling
+`Books/` checkout; production uses `lorewell.naklitechie.com`.
 
 **Notes v1** is a bundled three-pane notebook app that stays hosted in both
 desktop modes. Browser, Folder, and encrypted Crate are visibly separate

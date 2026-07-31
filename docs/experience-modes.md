@@ -13,7 +13,7 @@ tab; NakliOS does not weaken its sandbox or pretend an incompatible app embeds.
 ## Basic
 
 Basic is a retained compatibility and user-choice mode. Host-native classics
-and the storage-dependent system apps Files, Notes, and Books remain in NakliOS
+and the storage-dependent system apps Files, Notes, and Lorewell remain in NakliOS
 windows. Other standalone web apps open at their canonical URL in a new tab.
 
 Basic remains useful when:
@@ -32,7 +32,7 @@ safe hosted core and the canonical new-tab fallback.
 
 - New profiles default to Immersive.
 - An existing explicit Basic preference is preserved.
-- Files, Notes, Books, and host-native classics stay hosted in both modes.
+- Files, Notes, Lorewell, and host-native classics stay hosted in both modes.
 - App catalog compatibility flags override Immersive without changing the
   user's saved preference.
 - Switching modes does not migrate, copy, delete, or rebind app data.
@@ -49,4 +49,3 @@ terminology.
 catalog make the compatibility route genuinely unused. Until then, removing it
 would turn known iframe incompatibilities into regressions for no meaningful
 reduction in the maintained host surface.
-
