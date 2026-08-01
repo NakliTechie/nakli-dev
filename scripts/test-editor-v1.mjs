@@ -43,6 +43,7 @@ for (const contract of [
   assert.ok(html.includes(contract), `Editor implements ${contract}`);
 }
 assert.doesNotMatch(html, /\b(?:alert|confirm|prompt)\s*\(/, 'Editor uses styled in-app UI');
+assert.match(html, /\.welcome\[hidden\]\{display:none\}/, 'the empty-workspace welcome yields to an open editor tab');
 assert.doesNotMatch(files, /\b(?:alert|confirm|prompt)\s*\(/, 'Files uses styled in-app UI');
 assert.match(files, /id="ctx-edit"[^>]*>Edit in Editor/);
 assert.match(files, /naklios\.files\.openWith\('editor', path\)/);
