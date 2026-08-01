@@ -88,6 +88,8 @@
   var fsSubscriptions = new Map(); // subscriptionId → callback
   var aiRequests = new Map(); // requestId → streamed request state
   var aiImageRequests = new Map(); // requestId → image request state
+  var fileOpenListeners = new Set(); // exact-file grants delivered by the host
+  var pendingFileGrants = [];
 
   function send(type, data) {
     if (!inNakliOS) return;
@@ -353,7 +355,20 @@
           request.reject(new Error(msg.error || 'NakliOS image generation failed'));
         });
       }
-    } else if (msg.type === 'naklios:fs:reply' && msg.requestId) {
+    } else if (msg.type === 'naklios:file:grant' && msg.grant) {
+      var grant = {
+        token: String(msg.grant.token || ''),
+        name: String(msg.grant.name || 'Untitled'),
+        path: String(msg.grant.path || ''),
+        sourceAppId: String(msg.grant.sourceAppId || ''),
+        backend: String(msg.grant.backend || ''),
+      };
+      if (!grant.token) return;
+      if (!fileOpenListeners.size) pendingFileGrants.push(grant);
+      else fileOpenListeners.forEach(function (cb) {
+        try { cb(grant); } catch (_) {}
+      });
+    } else if ((msg.type === 'naklios:fs:reply' || msg.type === 'naklios:file:reply') && msg.requestId) {
       var p = pendingRpc.get(msg.requestId);
       if (!p) return;
       pendingRpc.delete(msg.requestId);
@@ -441,6 +456,35 @@
       // Explicit backend changes are always confirmed by the NakliOS host.
       // Switching changes the app-scoped view; it never copies or deletes data.
       useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },
+    },
+    files: {
+      // Ask NakliOS to open one app-relative file in another cooperative app.
+      // The target gets a window-lifetime token for exactly that file; it does
+      // not receive the source app's namespace or a Folder/Crate credential.
+      openWith: function (appId, path) {
+        return rpc('naklios:file:openWith', fsPayload({
+          appId: String(appId || ''),
+          path: String(path || ''),
+        }));
+      },
+      onOpen: function (cb) {
+        if (typeof cb !== 'function') return function () {};
+        fileOpenListeners.add(cb);
+        var queued = pendingFileGrants.splice(0);
+        queued.forEach(function (grant) {
+          try { cb(grant); } catch (_) {}
+        });
+        return function () { fileOpenListeners.delete(cb); };
+      },
+      read: function (token) {
+        return rpc('naklios:file:read', { token: String(token || '') });
+      },
+      write: function (token, data) {
+        return rpc('naklios:file:write', { token: String(token || ''), data: data });
+      },
+      release: function (token) {
+        send('naklios:file:release', { token: String(token || '') });
+      },
     },
     ai: {
       chat: {

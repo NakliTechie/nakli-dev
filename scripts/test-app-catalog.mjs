@@ -92,6 +92,16 @@ assert.match(
 );
 assert.match(
   html,
+  /id:'editor'[\s\S]*?kind:'system'[\s\S]*?url:'\.\/apps\/editor\/'[\s\S]*?embedUrl:'\.\/apps\/editor\/'/,
+  'Editor is a bundled system app',
+);
+assert.match(
+  html,
+  /id:'fld-work'[\s\S]*?apps:\['editor','kanzen','nakliposter','bofh','mod','naklidata','nemawashi'\]/,
+  'Editor has one predictable home in Work & Build',
+);
+assert.match(
+  html,
   /function getDesktopItems\(\)[\s\S]*?for \(const folder of FOLDERS\)[\s\S]*?if \(isInFolder\(app\.id\)\) continue/,
   'the desktop is task folders plus default or deliberate app pull-outs',
 );

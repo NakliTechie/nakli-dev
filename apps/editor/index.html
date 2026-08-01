@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Editor — NakliOS</title>
+<meta name="description" content="A private developer workspace for NakliOS Folder, Crate, or Browser storage.">
+<style>
+:root{--body:#15100c;--panel:#1e1813;--panel2:#251d16;--ink:#f5e6c8;--muted:#ae9d84;--brand:#c8512a;--ok:#7cab78;--line:color-mix(in srgb,var(--ink) 14%,transparent);--danger:#e07575}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--brand) 55%,var(--panel2)) var(--panel)}
+*::-webkit-scrollbar{width:10px;height:10px}*::-webkit-scrollbar-track{background:var(--panel)}*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--brand) 55%,var(--panel2));border:2px solid var(--panel);border-radius:999px}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--body);color:var(--ink);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{display:grid;grid-template-rows:auto auto 1fr auto}
+button,input,textarea{font:inherit}button{border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--ink);padding:6px 9px;cursor:pointer}button:hover{border-color:color-mix(in srgb,var(--brand) 70%,var(--line));background:color-mix(in srgb,var(--brand) 15%,var(--panel2))}button:disabled{opacity:.45;cursor:not-allowed}
+header{display:flex;gap:9px;align-items:center;padding:8px 11px;background:var(--panel);border-bottom:1px solid var(--line)}.brand{font-weight:750;letter-spacing:.02em}.brand b{color:var(--brand)}.spacer{flex:1}.locations{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px}.locations button{border:0;background:transparent;padding:4px 8px;color:var(--muted)}.locations button.active{background:var(--panel2);color:var(--ink)}.locations button.disabled{opacity:.55}
+.tabs{display:flex;min-height:35px;overflow:auto;background:var(--panel);border-bottom:1px solid var(--line)}.tab{display:flex;align-items:center;gap:6px;min-width:110px;max-width:230px;border:0;border-right:1px solid var(--line);border-radius:0;background:transparent;color:var(--muted);padding:7px 9px}.tab.active{background:var(--body);color:var(--ink)}.tab .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tab .dirty{color:var(--brand)}.tab .close{margin-left:auto;padding:0;border:0;background:none;color:inherit}
+.main{display:grid;grid-template-columns:250px 1fr;min-height:0}.sidebar{display:grid;grid-template-rows:auto auto 1fr auto;min-height:0;border-right:1px solid var(--line);background:color-mix(in srgb,var(--panel) 76%,var(--body))}.side-head{display:flex;align-items:center;gap:6px;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.side-search{margin:0 8px 7px;width:calc(100% - 16px);border:1px solid var(--line);border-radius:7px;background:var(--body);color:var(--ink);padding:7px 8px}.tree{overflow:auto;padding:4px 6px 12px}.tree details{padding-left:8px}.tree summary{padding:4px;cursor:pointer;color:var(--muted);user-select:none}.tree-file,.result{display:block;width:100%;border:0;background:transparent;text-align:left;padding:5px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}.tree-file.active{background:color-mix(in srgb,var(--brand) 20%,var(--panel));color:var(--ink)}.search-results{max-height:38%;overflow:auto;border-top:1px solid var(--line);padding:6px}.result small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis}.empty{padding:20px 12px;color:var(--muted);text-align:center}
+.workspace{display:grid;grid-template-rows:auto auto 1fr;min-width:0;min-height:0}.toolbar{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--panel);border-bottom:1px solid var(--line)}.findbar{display:none;gap:6px;padding:6px 9px;background:var(--panel2);border-bottom:1px solid var(--line)}.findbar.open{display:flex}.findbar input{min-width:0;flex:1;border:1px solid var(--line);border-radius:6px;background:var(--body);color:var(--ink);padding:5px 7px}.editor-shell{position:relative;display:grid;grid-template-columns:auto 1fr;min-height:0;background:var(--body)}.line-numbers{margin:0;padding:12px 9px 80px;min-width:45px;overflow:hidden;text-align:right;color:color-mix(in srgb,var(--muted) 68%,transparent);background:var(--panel);border-right:1px solid var(--line);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none}.editor{width:100%;height:100%;resize:none;border:0;outline:0;background:var(--body);color:var(--ink);padding:12px 14px 80px;tab-size:2;white-space:pre;overflow:auto;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.welcome{grid-column:1/-1;display:grid;place-items:center;color:var(--muted);text-align:center;padding:30px}.recovery{position:absolute;left:55px;right:12px;top:10px;z-index:5;display:none;align-items:center;gap:8px;padding:9px 11px;border:1px solid color-mix(in srgb,var(--brand) 58%,var(--line));border-radius:8px;background:var(--panel2);box-shadow:0 8px 30px rgba(0,0,0,.35)}.recovery.show{display:flex}.recovery span{flex:1}
+footer{display:flex;gap:13px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--muted)}footer .save-state{color:var(--ok)}
+dialog{width:min(500px,calc(100vw - 30px));padding:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:0 20px 70px rgba(0,0,0,.55)}dialog::backdrop{background:rgba(0,0,0,.6)}.dialog-body{padding:18px}.dialog-body h2{margin:0 0 13px;font-size:16px}.field{display:grid;gap:5px;margin:10px 0;color:var(--muted)}.field input,.field textarea{width:100%;border:1px solid var(--line);border-radius:7px;background:var(--body);color:var(--ink);padding:8px}.field textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.dialog-error{min-height:1.3em;color:var(--danger)}.dialog-actions{display:flex;justify-content:flex-end;gap:7px;padding:0 18px 18px}.primary{background:var(--brand);border-color:var(--brand);color:#fff}.palette-list{display:grid;gap:5px}.palette-list button{text-align:left;padding:9px}.toast{position:fixed;right:16px;bottom:35px;z-index:50;max-width:min(430px,calc(100vw - 32px));padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;background:var(--panel);box-shadow:0 10px 35px rgba(0,0,0,.5)}
+@media(max-width:700px){.main{grid-template-columns:1fr}.sidebar{display:none}.locations button{font-size:0}.locations button::first-letter{font-size:12px}.toolbar button span{display:none}}
+</style>
+</head>
+<body>
+<script src="../../sdk/naklios.js?v=2026-08-01-files-v1"></script>
+<script src="core.js"></script>
+<header>
+  <div class="brand"><b>&lt;/&gt;</b> Editor</div>
+  <div class="locations" id="locations" aria-label="Editor storage location"></div>
+  <div class="spacer"></div>
+  <button id="new-file">＋ File</button>
+  <button id="save-all">Save all</button>
+  <button id="commands">⌘ Commands</button>
+</header>
+<div class="tabs" id="tabs" aria-label="Open files"></div>
+<div class="main">
+  <aside class="sidebar">
+    <div class="side-head"><strong>Project</strong><span class="spacer"></span><span id="project-count">0 files</span></div>
+    <input class="side-search" id="project-search" type="search" placeholder="Filter paths · Enter searches contents" aria-label="Project search">
+    <div class="tree" id="tree"></div>
+    <div class="search-results" id="search-results" hidden></div>
+  </aside>
+  <section class="workspace">
+    <div class="toolbar">
+      <button id="toggle-find">Find / Replace</button>
+      <button id="indent">Indent</button>
+      <button id="outdent">Outdent</button>
+      <span class="spacer"></span><span id="file-origin"></span>
+    </div>
+    <div class="findbar" id="findbar">
+      <input id="find-text" placeholder="Find" aria-label="Find">
+      <input id="replace-text" placeholder="Replace" aria-label="Replace">
+      <button id="find-next">Next</button><button id="replace-one">Replace</button><button id="replace-all">All</button><button id="close-find" aria-label="Close find">✕</button>
+    </div>
+    <div class="editor-shell">
+      <pre class="line-numbers" id="line-numbers" aria-hidden="true">1</pre>
+      <textarea class="editor" id="editor" aria-label="Code editor" spellcheck="false" disabled></textarea>
+      <div class="welcome" id="welcome"><div><h2>Private project workspace</h2><p>Create a file here, or use <strong>Edit in Editor</strong> from Files for a one-file grant.</p></div></div>
+      <div class="recovery" id="recovery" role="status"><span>A newer crash-recovery copy exists for this file.</span><button id="discard-recovery">Discard</button><button class="primary" id="restore-recovery">Restore</button></div>
+    </div>
+  </section>
+</div>
+<footer><span id="location-status">Browser</span><span id="language">Plain text</span><span id="cursor">Ln 1, Col 1</span><span class="spacer"></span><span class="save-state" id="save-state">Ready</span></footer>
+
+<dialog id="new-dialog" aria-labelledby="new-title"><form id="new-form" method="dialog"><div class="dialog-body"><h2 id="new-title">New project file</h2><label class="field">Relative path<input id="new-path" value="src/main.js" autocomplete="off"></label><label class="field">Contents<textarea id="new-content"></textarea></label><div class="dialog-error" id="new-error" role="status"></div></div><div class="dialog-actions"><button type="button" id="new-cancel">Cancel</button><button class="primary" type="submit">Create</button></div></form></dialog>
+<dialog id="palette" aria-labelledby="palette-title"><div class="dialog-body"><h2 id="palette-title">Commands</h2><div class="palette-list"><button data-command="new">New file</button><button data-command="save">Save all</button><button data-command="find">Find / replace</button><button data-command="search">Search project contents</button><button data-command="format-json">Format JSON</button></div></div><div class="dialog-actions"><button id="palette-close">Close</button></div></dialog>
+
+<script>
+(() => {
+'use strict';
+const Core=window.EditorCore,$=id=>document.getElementById(id),STATE_FILE='.editor-state.json',LOCATION_KEY='naklios.editor.location.v1';
+let activeLocation='browser',adapter=null,tabs=[],activeId=null,projectFiles=[],unsubscribe=null,saveChain=Promise.resolve(),capabilitiesReady=false,searchRun=0;
+const saveTimers=new Map();
+window.addEventListener('error',event=>setSave('Editor error: '+event.message,false));
+window.addEventListener('unhandledrejection',event=>setSave('Editor error: '+(event.reason?.message||event.reason),false));
+
+function toast(message){document.querySelector('.toast')?.remove();const el=document.createElement('div');el.className='toast';el.setAttribute('role','status');el.textContent=message;document.body.append(el);setTimeout(()=>el.remove(),5000)}
+function setSave(message,ok=true){$('save-state').textContent=message;$('save-state').style.color=ok?'var(--ok)':'var(--danger)'}
+function basename(path){return String(path).split('/').filter(Boolean).at(-1)||'Untitled'}
+function locationLabel(id){if(id==='browser')return'Browser';return naklios.capabilities.fsBackends.find(x=>x.id===id)?.label||(id==='crate'?'Crate':'Folder')}
+function available(){return naklios.capabilities.fsBackends.map(x=>x.id)}
+
+function openDb(name,store){return new Promise((resolve,reject)=>{const request=indexedDB.open(name,1);request.onupgradeneeded=()=>request.result.createObjectStore(store);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})}
+async function idbAction(dbName,store,mode,action){const db=await openDb(dbName,store);return await new Promise((resolve,reject)=>{const tx=db.transaction(store,mode),os=tx.objectStore(store);let value;try{value=action(os)}catch(error){reject(error);return}tx.oncomplete=()=>resolve(value?.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)})}
+const browserAdapter={
+ async read(path){const value=await idbAction('naklios-editor','files','readonly',os=>os.get(path));if(value==null)throw new Error('Not found: '+path);return String(value)},
+ async write(path,data){await idbAction('naklios-editor','files','readwrite',os=>os.put(String(data),path))},
+ async delete(path){await idbAction('naklios-editor','files','readwrite',os=>os.delete(path))},
+ async exists(path){return (await idbAction('naklios-editor','files','readonly',os=>os.getKey(path)))!=null},
+ async list(prefix=''){const keys=await idbAction('naklios-editor','files','readonly',os=>os.getAllKeys())||[],base=prefix?prefix.replace(/\/+$/,'')+'/':'';const out=new Set();for(const raw of keys){const key=String(raw);if(!key.startsWith(base))continue;const rest=key.slice(base.length);if(!rest)continue;const slash=rest.indexOf('/');out.add(slash<0?base+rest:base+rest.slice(0,slash+1))}return [...out].sort()},
+};
+const hostAdapter={read:path=>naklios.fs.read(path),write:(path,data)=>naklios.fs.write(path,data),delete:path=>naklios.fs.delete(path),exists:path=>naklios.fs.exists(path),list:path=>naklios.fs.list(path)};
+async function recoveryGet(key){return await idbAction('naklios-editor-recovery','records','readonly',os=>os.get(key))||null}
+async function recoveryPut(key,value){await idbAction('naklios-editor-recovery','records','readwrite',os=>os.put(value,key))}
+async function recoveryDelete(key){await idbAction('naklios-editor-recovery','records','readwrite',os=>os.delete(key))}
+
+function renderLocations(){const root=$('locations');root.replaceChildren();for(const item of[{id:'browser',label:'Browser',ok:true},{id:'fsa',label:'Folder',ok:available().includes('fsa')},{id:'crate',label:'Crate',ok:available().includes('crate')}]){const button=document.createElement('button');button.textContent=item.ok?item.label:`Connect ${item.label}`;button.classList.toggle('active',activeLocation===item.id);button.classList.toggle('disabled',!item.ok);button.setAttribute('aria-pressed',String(activeLocation===item.id));button.onclick=()=>item.ok?void activate(item.id):naklios.openSettings?.('storage');root.append(button)}$('location-status').textContent=activeLocation==='browser'?'Browser workspace':`${locationLabel(activeLocation)} · apps/editor/`}
+
+async function activate(id){if(id===activeLocation&&adapter)return;await saveAll();if(id!=='browser'&&naklios.capabilities.fsBackend!==id){if(!await naklios.fs.useBackend(id))return}unsubscribe?.();unsubscribe=null;activeLocation=id;adapter=id==='browser'?browserAdapter:hostAdapter;localStorage.setItem(LOCATION_KEY,id);tabs=tabs.filter(tab=>tab.kind==='grant');activeId=tabs[0]?.id||null;renderLocations();await loadWorkspace();await ensureSubscription();naklios.title(`Editor — ${locationLabel(id)}`)}
+
+async function chooseInitial(){const choices=available(),stored=localStorage.getItem(LOCATION_KEY);let preferred=stored==='browser'||choices.includes(stored)?stored:(choices.includes(naklios.capabilities.fsBackend)?naklios.capabilities.fsBackend:'browser');try{await activate(preferred)}catch(error){toast(`${locationLabel(preferred)} was not opened: ${error.message}`);if(preferred!=='browser')await activate('browser')}}
+
+async function readWorkspace(){try{return Core.normaliseWorkspace(JSON.parse(await adapter.read(STATE_FILE)))}catch(_){return Core.normaliseWorkspace(null)}}
+async function writeWorkspace(){if(!adapter)return;const projectTabs=tabs.filter(tab=>tab.kind==='project'&&tab.location===activeLocation);const state={version:1,open:projectTabs.map(tab=>tab.path),active:tabs.find(tab=>tab.id===activeId)?.path||projectTabs[0]?.path||null};await adapter.write(STATE_FILE,JSON.stringify(state,null,2))}
+function queueWorkspace(){saveChain=saveChain.then(()=>writeWorkspace()).catch(error=>setSave(error.message,false));return saveChain}
+
+async function loadWorkspace(){setSave('Loading…');const state=await readWorkspace();await refreshTree();for(const path of state.open){if(await adapter.exists(path))await openProjectFile(path,{persist:false,focus:path===state.active})}if(!activeId&&tabs.length)activeId=tabs[0].id;render();setSave('Saved')}
+async function walkFiles(prefix='',out=[]){for(const entry of await adapter.list(prefix)){if(entry.endsWith('/'))await walkFiles(entry,out);else if(entry!==STATE_FILE)out.push(entry)}return out}
+async function refreshTree(){try{projectFiles=await walkFiles()}catch(error){projectFiles=[];setSave(error.message,false)}renderTree()}
+function renderTree(){const root=$('tree'),query=$('project-search').value.trim().toLowerCase(),files=projectFiles.filter(path=>!query||path.toLowerCase().includes(query));$('project-count').textContent=`${projectFiles.length} file${projectFiles.length===1?'':'s'}`;root.replaceChildren();if(!files.length){root.innerHTML='<div class="empty">No matching project files.</div>';return}const tree={};for(const path of files){let cursor=tree;for(const part of path.split('/'))cursor=cursor[part]||(cursor[part]={})}function renderNode(node,parent,prefix=''){for(const name of Object.keys(node).sort()){const path=prefix?`${prefix}/${name}`:name,children=node[name],folder=Object.keys(children).length>0;if(folder){const details=document.createElement('details');details.open=true;const summary=document.createElement('summary');summary.textContent=name;details.append(summary);renderNode(children,details,path);parent.append(details)}else{const button=document.createElement('button');button.className='tree-file';button.textContent=name;button.title=path;button.classList.toggle('active',tabs.find(tab=>tab.id===activeId)?.path===path);button.onclick=()=>void openProjectFile(path);parent.append(button)}}}renderNode(tree,root)}
+
+async function openProjectFile(path,options={}){path=Core.normalisePath(path);const id=`project:${activeLocation}:${path}`;let tab=tabs.find(item=>item.id===id);if(!tab){const content=await adapter.read(path),key=Core.recoveryKey(activeLocation,path),recovery=await recoveryGet(key);tab={id,kind:'project',location:activeLocation,path,name:basename(path),content,saved:content,dirty:false,recovery:recovery&&recovery.content!==content?recovery:null,recoveryKey:key};tabs.push(tab)}if(options.focus!==false)activeId=id;render();if(options.persist!==false)queueWorkspace();return tab}
+async function openGrant(grant){const id=`grant:${grant.token}`;if(tabs.some(tab=>tab.id===id)){activeId=id;render();return}try{const file=await naklios.files.read(grant.token),key=Core.recoveryKey('grant',`${grant.sourceAppId}:${grant.backend}:${grant.path}`),recovery=await recoveryGet(key);tabs.push({id,kind:'grant',token:grant.token,path:file.path,name:file.name,sourceAppId:file.sourceAppId,backend:file.backend,content:file.data,saved:file.data,dirty:false,recovery:recovery&&recovery.content!==file.data?recovery:null,recoveryKey:key});activeId=id;render();toast(`Opened ${file.name} with an exact-file grant`)}catch(error){toast('Open With failed: '+error.message)}}
+
+function activeTab(){return tabs.find(tab=>tab.id===activeId)||null}
+function renderTabs(){const root=$('tabs');root.replaceChildren();for(const tab of tabs){const button=document.createElement('button');button.className='tab';button.classList.toggle('active',tab.id===activeId);button.innerHTML=`<span class="name"></span><span class="dirty">${tab.dirty?'●':''}</span><span class="close" aria-label="Close ${tab.name}">×</span>`;button.querySelector('.name').textContent=tab.name;button.onclick=e=>{if(e.target.closest('.close'))void closeTab(tab);else{activeId=tab.id;render()}};root.append(button)}}
+function render(){renderTabs();renderTree();const tab=activeTab(),editor=$('editor');$('welcome').hidden=!!tab;$('line-numbers').hidden=!tab;editor.hidden=!tab;editor.disabled=!tab;if(tab&&editor.value!==tab.content)editor.value=tab.content;$('language').textContent=tab?Core.detectLanguage(tab.path):'Plain text';$('file-origin').textContent=tab?(tab.kind==='grant'?`${tab.sourceAppId} · ${tab.backend} · exact file`:`${locationLabel(tab.location)} · ${tab.path}`):'';$('recovery').classList.toggle('show',!!tab?.recovery);updateLines();updateCursor()}
+function updateLines(){const count=Math.max(1,$('editor').value.split('\n').length);$('line-numbers').textContent=Array.from({length:count},(_,i)=>i+1).join('\n')}
+function updateCursor(){const pos=Core.lineColumn($('editor').value,$('editor').selectionStart);$('cursor').textContent=`Ln ${pos.line}, Col ${pos.column}`}
+
+async function saveTab(tab){if(!tab?.dirty)return;clearTimeout(saveTimers.get(tab.id));saveTimers.delete(tab.id);try{if(tab.kind==='grant')await naklios.files.write(tab.token,tab.content);else{if(tab.location!==activeLocation)throw new Error('Switch back to the file storage location before saving');await adapter.write(tab.path,tab.content)}tab.saved=tab.content;tab.dirty=false;tab.recovery=null;await recoveryDelete(tab.recoveryKey);setSave('Saved');renderTabs()}catch(error){setSave('Recovery saved · '+error.message,false);throw error}}
+function scheduleSave(tab){clearTimeout(saveTimers.get(tab.id));saveTimers.set(tab.id,setTimeout(()=>void saveTab(tab).catch(()=>{}),900))}
+async function saveAll(){for(const tab of [...tabs])if(tab.dirty)await saveTab(tab);await queueWorkspace();setSave('Saved')}
+async function closeTab(tab){try{if(tab.dirty)await saveTab(tab)}catch(error){toast(`Could not close ${tab.name}: ${error.message}`);return}if(tab.kind==='grant')naklios.files.release(tab.token);tabs=tabs.filter(item=>item!==tab);if(activeId===tab.id)activeId=tabs.at(-1)?.id||null;render();queueWorkspace()}
+
+async function ensureSubscription(){unsubscribe?.();unsubscribe=null;if(activeLocation==='browser')return;try{unsubscribe=await naklios.fs.subscribe('',event=>{if(event.op==='disconnected'){unsubscribe=null;setSave('Storage disconnected; recoveries remain in Browser',false);return}const tab=tabs.find(item=>item.kind==='project'&&item.location===activeLocation&&item.path===event.path);if(!tab){void refreshTree();return}if(tab.dirty){toast(`${tab.name} changed elsewhere. Your unsaved recovery was kept.`);return}void adapter.read(tab.path).then(content=>{tab.content=tab.saved=content;render()}).catch(()=>{})})}catch(error){setSave('Live updates unavailable: '+error.message,false)}}
+
+async function createFile(){let path;try{path=Core.normalisePath($('new-path').value)}catch(error){$('new-error').textContent=error.message;return}if(await adapter.exists(path)){$('new-error').textContent='A file already exists at that path.';return}try{await adapter.write(path,$('new-content').value);$('new-dialog').close();await refreshTree();await openProjectFile(path);setSave('Saved')}catch(error){$('new-error').textContent=error.message}}
+async function projectSearch(){const query=$('project-search').value.trim(),run=++searchRun,root=$('search-results');if(!query){root.hidden=true;return}root.hidden=false;root.innerHTML='<div class="empty">Searching…</div>';const results=[];for(const path of projectFiles){if(run!==searchRun)return;try{const text=await adapter.read(path),matches=Core.searchText(text,query,{});if(matches.length){const at=matches[0].index;results.push({path,snippet:text.slice(Math.max(0,at-40),at+100).replace(/\s+/g,' ')})}}catch(_){}}root.replaceChildren();if(!results.length){root.innerHTML='<div class="empty">No content matches.</div>';return}for(const result of results){const button=document.createElement('button');button.className='result';button.innerHTML='<strong></strong><small></small>';button.querySelector('strong').textContent=result.path;button.querySelector('small').textContent=result.snippet;button.onclick=()=>void openProjectFile(result.path);root.append(button)}}
+
+function findNext(){const tab=activeTab(),query=$('find-text').value;if(!tab||!query)return;let matches;try{matches=Core.searchText(tab.content,query,{})}catch(error){toast('Find pattern: '+error.message);return}const next=matches.find(match=>match.index>$('editor').selectionStart)||matches[0];if(next){$('editor').focus();$('editor').setSelectionRange(next.index,next.index+next.length);updateCursor()}else toast('No matches')}
+function replaceSelection(){const editor=$('editor'),tab=activeTab();if(!tab||editor.selectionStart===editor.selectionEnd)return findNext();editor.setRangeText($('replace-text').value,editor.selectionStart,editor.selectionEnd,'end');editor.dispatchEvent(new Event('input'));findNext()}
+function replaceAll(){const tab=activeTab(),query=$('find-text').value;if(!tab||!query)return;let pattern;try{pattern=new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi')}catch(error){toast(error.message);return}$('editor').value=tab.content.replace(pattern,$('replace-text').value);$('editor').dispatchEvent(new Event('input'))}
+function indent(out=false){const editor=$('editor'),start=editor.selectionStart,end=editor.selectionEnd,lineStart=editor.value.lastIndexOf('\n',start-1)+1,chunk=editor.value.slice(lineStart,end),updated=chunk.split('\n').map(line=>out?line.replace(/^ {1,2}/,''):'  '+line).join('\n');editor.setRangeText(updated,lineStart,end,'select');editor.dispatchEvent(new Event('input'))}
+function formatJson(){const tab=activeTab();if(!tab)return;try{$('editor').value=JSON.stringify(JSON.parse(tab.content),null,2)+'\n';$('editor').dispatchEvent(new Event('input'))}catch(error){toast('JSON could not be formatted: '+error.message)}}
+
+$('editor').addEventListener('input',()=>{const tab=activeTab();if(!tab)return;tab.content=$('editor').value;tab.dirty=tab.content!==tab.saved;tab.recovery=null;if(tab.dirty){void recoveryPut(tab.recoveryKey,{content:tab.content,updatedAt:Date.now()});scheduleSave(tab)}else{clearTimeout(saveTimers.get(tab.id));saveTimers.delete(tab.id);void recoveryDelete(tab.recoveryKey)}updateLines();updateCursor();renderTabs()});
+$('editor').addEventListener('scroll',()=>{$('line-numbers').scrollTop=$('editor').scrollTop});$('editor').addEventListener('click',updateCursor);$('editor').addEventListener('keyup',updateCursor);
+$('editor').addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();indent(e.shiftKey)}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void saveAll()}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='f'){e.preventDefault();$('findbar').classList.add('open');$('find-text').focus()}if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();$('palette').showModal()}});
+$('new-file').onclick=()=>{$('new-error').textContent='';$('new-dialog').showModal();$('new-path').focus();$('new-path').select()};$('new-cancel').onclick=()=>$('new-dialog').close();$('new-form').addEventListener('submit',e=>{e.preventDefault();void createFile()});$('save-all').onclick=()=>void saveAll();
+$('toggle-find').onclick=()=>{$('findbar').classList.toggle('open');if($('findbar').classList.contains('open'))$('find-text').focus()};$('close-find').onclick=()=>$('findbar').classList.remove('open');$('find-next').onclick=findNext;$('replace-one').onclick=replaceSelection;$('replace-all').onclick=replaceAll;$('indent').onclick=()=>indent(false);$('outdent').onclick=()=>indent(true);
+$('project-search').addEventListener('input',renderTree);$('project-search').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();void projectSearch()}});$('commands').onclick=()=>$('palette').showModal();$('palette-close').onclick=()=>$('palette').close();$('palette').addEventListener('click',e=>{const command=e.target.closest('[data-command]')?.dataset.command;if(!command)return;$('palette').close();if(command==='new')$('new-file').click();if(command==='save')void saveAll();if(command==='find')$('toggle-find').click();if(command==='search'){$('project-search').focus();void projectSearch()}if(command==='format-json')formatJson()});
+$('restore-recovery').onclick=()=>{const tab=activeTab();if(!tab?.recovery)return;tab.content=tab.recovery.content;tab.dirty=tab.content!==tab.saved;tab.recovery=null;render();scheduleSave(tab)};$('discard-recovery').onclick=()=>{const tab=activeTab();if(!tab)return;tab.recovery=null;void recoveryDelete(tab.recoveryKey);render()};
+
+naklios.files.onOpen(grant=>void openGrant(grant));naklios.beforeClose(()=>saveAll());naklios.theme.onChange(theme=>{if(!theme?.colors)return;for(const [key,value] of Object.entries(theme.colors))document.documentElement.style.setProperty(`--${key}`,value)});naklios.theme.request();
+let boot=setTimeout(()=>{if(!capabilitiesReady){capabilitiesReady=true;void chooseInitial()}},650);naklios.onCapabilitiesChange(()=>{renderLocations();if(!capabilitiesReady&&(available().length||!naklios.capabilities.hosted)){clearTimeout(boot);capabilitiesReady=true;void chooseInitial()}else if(capabilitiesReady&&activeLocation!=='browser'&&!available().includes(activeLocation)){void activate('browser');toast('Storage disconnected. Opened Browser workspace.')}else if(capabilitiesReady&&activeLocation!=='browser'&&!unsubscribe){void ensureSubscription()}});naklios.requestCapabilities();naklios.ready();renderLocations();render();
+})();
+</script>
+</body>
+</html>

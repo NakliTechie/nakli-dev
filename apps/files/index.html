@@ -128,10 +128,15 @@ dialog::backdrop{background:rgba(0,0,0,.58);}
 .dialog-body p{margin:0; color:var(--muted); line-height:1.5; overflow-wrap:anywhere;}
 .dialog-actions{display:flex; justify-content:flex-end; gap:8px; padding:12px 18px 18px;}
 .dialog-actions .danger{background:#b43c3c; border-color:#b43c3c; color:#fff;}
+.field{display:grid; gap:5px; margin-top:12px; color:var(--muted); font-size:11px;}
+.field input,.field textarea{width:100%; border:1px solid var(--line-strong); border-radius:7px; background:var(--body); color:var(--ink); padding:8px; font:inherit;}
+.field textarea{min-height:120px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+.field-error{min-height:1.2em; margin-top:8px; color:#ef8c8c; font-size:11px;}
+.toast{position:fixed; right:16px; bottom:38px; z-index:1100; max-width:min(420px,calc(100vw - 32px)); padding:9px 12px; border:1px solid var(--line-strong); border-left:3px solid var(--brand); border-radius:8px; background:var(--panel); color:var(--ink); box-shadow:0 10px 30px rgba(0,0,0,.4);}
 </style>
 </head>
 <body>
-<script src="../../sdk/naklios.js"></script>
+<script src="../../sdk/naklios.js?v=2026-08-01-files-v1"></script>
 
 <header>
   <h1>📁 Files</h1>
@@ -169,6 +174,25 @@ dialog::backdrop{background:rgba(0,0,0,.58);}
   </form>
 </dialog>
 
+<dialog id="new-file-dialog" aria-labelledby="new-file-title">
+  <form method="dialog" id="new-file-form">
+    <div class="dialog-body">
+      <h2 id="new-file-title">New text file</h2>
+      <label class="field">File name
+        <input id="new-file-name" value="naklios-roundtrip.txt" autocomplete="off">
+      </label>
+      <label class="field">Contents
+        <textarea id="new-file-contents">NakliOS ↔ Crate live round-trip</textarea>
+      </label>
+      <div class="field-error" id="new-file-error" role="status"></div>
+    </div>
+    <div class="dialog-actions">
+      <button value="cancel" type="button" id="new-file-cancel">Cancel</button>
+      <button value="create" type="submit">Create</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 (function(){
 'use strict';
@@ -185,6 +209,15 @@ let expanded = new Set(); // expanded folder paths
 let listing = [];         // current dir entries
 
 function setStatus(text){ $('status').textContent = text; }
+function showToast(text){
+  document.querySelector('.toast')?.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.setAttribute('role', 'status');
+  toast.textContent = text;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+}
 function fmtSize(bytes){
   if (bytes == null) return '';
   if (bytes < 1024) return bytes + ' B';
@@ -465,6 +498,7 @@ function showContextMenu(x, y, path, isDir){
   const inner = [];
   if (!isDir){
     inner.push(`<button id="ctx-open">Open / preview</button>`);
+    inner.push(`<button id="ctx-edit">Edit in Editor</button>`);
     inner.push(`<button id="ctx-download">Download…</button>`);
     inner.push(`<div class="sep"></div>`);
   }
@@ -476,6 +510,13 @@ function showContextMenu(x, y, path, isDir){
     closeContextMenu();
     previewFile(path);
   });
+  menu.querySelector('#ctx-edit')?.addEventListener('click', async () => {
+    closeContextMenu();
+    try {
+      const opened = await naklios.files.openWith('editor', path);
+      setStatus(opened ? `Opened ${basename(path)} in Editor` : 'Open With cancelled');
+    } catch (e){ showToast('Could not open in Editor: ' + e.message); }
+  });
   menu.querySelector('#ctx-download')?.addEventListener('click', async () => {
     closeContextMenu();
     try {
@@ -484,7 +525,7 @@ function showContextMenu(x, y, path, isDir){
       const a = document.createElement('a');
       a.href = url; a.download = basename(path); document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e){ alert('Download failed: ' + e.message); }
+    } catch (e){ showToast('Download failed: ' + e.message); }
   });
   menu.querySelector('#ctx-delete')?.addEventListener('click', async () => {
     closeContextMenu();
@@ -497,7 +538,7 @@ function showContextMenu(x, y, path, isDir){
         $('preview').innerHTML = '';
       }
       await refresh();
-    } catch (e){ alert('Delete failed: ' + e.message); }
+    } catch (e){ showToast('Delete failed: ' + e.message); }
   });
 
   setTimeout(() => document.addEventListener('pointerdown', closeContextMenuOnOutside, true), 0);
@@ -513,24 +554,27 @@ function closeContextMenuOnOutside(e){
 
 // Wire toolbar
 $('new-text').addEventListener('click', async () => {
-  const rawName = prompt('File name', 'naklios-roundtrip.txt');
-  if (rawName == null) return;
-  const name = rawName.trim();
+  $('new-file-error').textContent = '';
+  $('new-file-dialog').showModal();
+  $('new-file-name').focus();
+  $('new-file-name').select();
+});
+$('new-file-cancel').addEventListener('click', () => $('new-file-dialog').close('cancel'));
+$('new-file-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('new-file-name').value.trim();
   if (!name || name === '.' || name === '..' || /[\/\\]/.test(name)){
-    alert('Use a plain file name without folders or slashes.');
+    $('new-file-error').textContent = 'Use a plain file name without folders or slashes.';
+    $('new-file-name').focus();
     return;
   }
-  const contents = prompt(
-    'Text contents',
-    'NakliOS ↔ Crate live round-trip',
-  );
-  if (contents == null) return;
   try {
-    await fs.write(name, contents);
+    await fs.write(name, $('new-file-contents').value);
+    $('new-file-dialog').close('create');
     await refresh();
     setStatus(`Created ${name}`);
   } catch (e){
-    alert('Create failed: ' + e.message);
+    $('new-file-error').textContent = 'Create failed: ' + e.message;
   }
 });
 $('refresh').addEventListener('click', () => refresh());

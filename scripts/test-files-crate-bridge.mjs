@@ -27,7 +27,7 @@ assert.match(
 );
 assert.match(
   filesSource,
-  /<script src="\.\.\/\.\.\/sdk\/naklios\.js"><\/script>/,
+  /<script src="\.\.\/\.\.\/sdk\/naklios\.js(?:\?[^\"]+)?"><\/script>/,
   "Files must load the full naklios.fs SDK",
 );
 assert.match(filesSource, /const fs = window\.naklios\?\.fs;/);

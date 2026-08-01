@@ -64,6 +64,12 @@ The bundled Calendar lives in Essentials and provides month, week, and day
 views, recurring-series CRUD with IANA time-zone handling, and ICS
 import/export. Browser, Folder, and Crate each remain a separate calendar.
 
+The bundled Editor lives in Work & Build. It is the developer workspace—tabs,
+project tree/search, find/replace, commands, backend subscriptions, and
+independent per-file crash recovery—while Notepad remains the fast general
+text/Markdown tool. Files can hand one selected text file to Editor through an
+explicit, window-lifetime exact-file grant; no app namespace is broadened.
+
 ## AI
 
 NakliOS has one host-owned inference broker backed by pinned LocalMind

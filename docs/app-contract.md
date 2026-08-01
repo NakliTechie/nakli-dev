@@ -244,6 +244,19 @@ Do not overwrite a dirty editor automatically when a change arrives. Offer an
 explicit reload/keep-mine/later decision. Clean views may refresh
 automatically.
 
+## Exact-file handoff
+
+Cross-app editing uses the narrow [`naklios.files` handoff
+contract](file-handoff-v1.md), never a broader `naklios.fs` namespace. A source
+may ask the host to open one of its own app-relative files in an approved
+handler. The target receives an opaque, window-lifetime token for that exact
+backend path. Disconnecting or replacing the original backend invalidates the
+grant.
+
+Handoffs are explicit user actions and preserve file identity: v1 links the
+approved file in place, does not silently import or copy it, and never exposes
+Folder handles or Crate credentials.
+
 ## Persistence conventions
 
 Prefer inspectable, recoverable formats:
@@ -278,6 +291,18 @@ Calendar stores recurring series as local wall times plus an IANA time zone so
 weekly events stay at the intended hour across daylight-saving changes. ICS
 import/export is an explicit user action; switching Browser, Folder, or Crate
 opens a separate calendar and never copies events.
+
+Editor v1 keeps its project files and session index together:
+
+```text
+apps/editor/
+├── .editor-state.json
+└── <user-created project files and folders>
+```
+
+Crash recoveries remain in a Browser-only IndexedDB store, keyed independently
+by storage location and file identity. A recovery is removed only after that
+file saves successfully or the user explicitly discards it.
 
 ## Security boundary
 
