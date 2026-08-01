@@ -60,6 +60,10 @@ filesystem calls, separate Browser/Folder/Crate libraries, async close
 durability, explicit remote-conflict handling, and the optional streamed
 chat and image-generation surfaces under `naklios.ai`.
 
+The bundled Calendar lives in Essentials and provides month, week, and day
+views, recurring-series CRUD with IANA time-zone handling, and ICS
+import/export. Browser, Folder, and Crate each remain a separate calendar.
+
 ## AI
 
 NakliOS has one host-owned inference broker backed by pinned LocalMind

@@ -267,6 +267,18 @@ apps/notes/
     └── <note-id>.json
 ```
 
+Calendar v1 uses the same location lifecycle with a single inspectable index:
+
+```text
+apps/calendar/
+└── calendar.json
+```
+
+Calendar stores recurring series as local wall times plus an IANA time zone so
+weekly events stay at the intended hour across daylight-saving changes. ICS
+import/export is an explicit user action; switching Browser, Folder, or Crate
+opens a separate calendar and never copies events.
+
 ## Security boundary
 
 The app never receives Folder handles, Crate credentials, bucket configuration,

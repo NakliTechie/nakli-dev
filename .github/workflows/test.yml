@@ -33,6 +33,12 @@ jobs:
       - name: Verify Notepad v2 uses isolated Local, Folder, and Crate storage
         run: node scripts/test-notepad-storage.mjs
 
+      - name: Verify Notes v1 persistence and storage lifecycle
+        run: node scripts/test-notes-v1.mjs
+
+      - name: Verify Calendar timezone, recurrence, ICS, and storage lifecycle
+        run: node scripts/test-calendar.mjs
+
       - name: Verify Books stays hosted and uses explicit Folder or Crate storage
         run: node scripts/test-books-storage-bridge.mjs
 
@@ -41,6 +47,15 @@ jobs:
 
       - name: Verify UX recovery paths and accessibility contracts
         run: node scripts/test-ux-recovery.mjs
+
+      - name: Verify filesystem operations remain bound to their selected backend
+        run: node scripts/test-fs-backend-affinity.mjs
+
+      - name: Verify shared local AI broker and SDK contracts
+        run: node scripts/test-local-ai.mjs
+
+      - name: Verify vendored LocalMind runtime assets
+        run: node scripts/test-localmind-vendor.mjs
 
       - name: Verify mirrored app artifacts match the immutable lock
         run: node scripts/validate-mirrors.mjs
@@ -59,6 +74,9 @@ jobs:
 
       - name: Verify read-only launch diagnostics
         run: node scripts/test-launch-diagnostics.mjs
+
+      - name: Verify app information and provenance surfaces
+        run: node scripts/test-app-info.mjs
 
       - name: Verify secure Crate setup handoff receiver
         run: node scripts/test-crate-setup-handoff.mjs

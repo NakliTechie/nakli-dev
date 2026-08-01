@@ -82,6 +82,16 @@ assert.match(
 );
 assert.match(
   html,
+  /id:'calendar'[\s\S]*?kind:'system'[\s\S]*?url:'\.\/apps\/calendar\/'[\s\S]*?embedUrl:'\.\/apps\/calendar\/'/,
+  'Calendar is a bundled system app',
+);
+assert.match(
+  html,
+  /id:'fld-essentials'[\s\S]*?apps:\['files','notes','calendar','notepad','books','calculator'\]/,
+  'Calendar has one predictable home in Essentials',
+);
+assert.match(
+  html,
   /function getDesktopItems\(\)[\s\S]*?for \(const folder of FOLDERS\)[\s\S]*?if \(isInFolder\(app\.id\)\) continue/,
   'the desktop is task folders plus default or deliberate app pull-outs',
 );

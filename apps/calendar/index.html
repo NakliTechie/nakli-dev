@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calendar — NakliOS</title>
+<meta name="description" content="A private calendar stored in your browser, NakliOS Folder, or encrypted Crate.">
+<style>
+:root{
+  --body:#faf2e2;--panel:#fdf8ec;--ink:#2c1810;--brand:#c8512a;--act:#2a4a8a;
+  --ok:#5a7a30;--row:#f0e2c8;--muted:color-mix(in srgb,var(--ink) 58%,var(--body));
+  --faint:color-mix(in srgb,var(--ink) 35%,var(--body));--line:color-mix(in srgb,var(--ink) 14%,transparent);
+  --strong:color-mix(in srgb,var(--ink) 27%,transparent);--shadow:0 18px 50px rgba(40,20,8,.18);
+}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--body);color:var(--ink);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--act);outline-offset:2px}
+.app{height:100%;display:flex;flex-direction:column;min-height:0}.topbar{display:flex;align-items:center;gap:9px;min-height:54px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:760}.mark{display:grid;place-items:center;width:29px;height:29px;border-radius:9px;background:var(--brand);color:white}
+.locations,.segmented{display:flex;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--body)}
+.locations button,.segmented button{border:0;background:transparent;border-radius:7px;padding:5px 8px;color:var(--muted);white-space:nowrap}
+.locations button.active,.segmented button.active{background:var(--panel);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.12)}.locations button.disabled{opacity:.62}
+.spacer{flex:1}.toolbar-btn,.primary,.icon-btn{border:1px solid var(--line);border-radius:8px;background:var(--row);padding:6px 10px}.toolbar-btn:hover,.icon-btn:hover{background:color-mix(in srgb,var(--brand) 12%,var(--row))}.primary{background:var(--brand);border-color:transparent;color:#fff;font-weight:700}
+.calendar-head{display:flex;align-items:center;gap:8px;padding:10px 14px;background:color-mix(in srgb,var(--panel) 76%,var(--body));border-bottom:1px solid var(--line)}
+.calendar-head h1{font:750 21px/1.1 Georgia,serif;margin:0 6px;min-width:210px}.content{flex:1;min-height:0;overflow:auto;scrollbar-color:var(--faint) transparent;scrollbar-width:thin}
+.month{display:grid;grid-template-columns:repeat(7,minmax(100px,1fr));min-width:720px;min-height:100%}.weekday{position:sticky;top:0;z-index:3;background:var(--panel);padding:7px 9px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);font-size:11px;font-weight:760;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.day-cell{min-height:112px;padding:7px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--body);text-align:left}.day-cell.outside{background:color-mix(in srgb,var(--row) 35%,var(--body));color:var(--faint)}.day-cell.today .day-num{background:var(--brand);color:#fff}.day-num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:50%;font-weight:700}
+.event-pill{display:block;width:100%;border:0;border-radius:5px;margin-top:4px;padding:3px 6px;text-align:left;background:color-mix(in srgb,var(--act) 16%,var(--panel));border-left:3px solid var(--act);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.event-pill.all-day{border-left-color:var(--ok)}
+.agenda{display:grid;grid-template-columns:repeat(7,minmax(170px,1fr));min-width:860px;min-height:100%}.agenda.day-view{grid-template-columns:minmax(320px,720px);justify-content:center}.agenda-day{border-right:1px solid var(--line);min-height:100%;padding:0 10px 18px}.agenda-day h2{position:sticky;top:0;z-index:2;margin:0 -10px 10px;padding:10px;background:var(--panel);border-bottom:1px solid var(--line);font-size:13px}.agenda-day.today h2{color:var(--brand)}
+.agenda-event{display:block;width:100%;margin:7px 0;padding:9px;border:1px solid var(--line);border-left:4px solid var(--act);border-radius:8px;background:var(--panel);text-align:left}.agenda-event strong{display:block}.agenda-event span{display:block;color:var(--muted);font-size:11px;margin-top:2px}.empty{padding:18px;color:var(--muted);text-align:center}
+.status{min-height:28px;display:flex;align-items:center;gap:8px;padding:4px 12px;border-top:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:11px}.status strong{color:var(--ink)}
+dialog{width:min(510px,calc(100vw - 24px));max-height:calc(100vh - 28px);overflow:auto;border:1px solid var(--strong);border-radius:13px;background:var(--panel);color:var(--ink);padding:0;box-shadow:var(--shadow)}dialog::backdrop{background:rgba(20,12,8,.48);backdrop-filter:blur(2px)}
+.dialog-body{padding:18px}.dialog-body h2{margin:0 0 13px;font-size:18px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.form-grid .wide{grid-column:1/-1}.form-grid label{display:grid;gap:4px;color:var(--muted);font-size:11px;font-weight:650}.form-grid input,.form-grid select,.form-grid textarea{width:100%;border:1px solid var(--strong);border-radius:8px;background:var(--body);padding:8px}.form-grid textarea{resize:vertical;min-height:70px}.check{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center}.check input{width:auto}.dialog-actions{display:flex;gap:8px;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--line)}.dialog-actions .danger{color:#b63232;margin-right:auto}.error{color:#b63232;min-height:18px;margin-top:8px}
+.toast{position:fixed;right:16px;bottom:42px;max-width:360px;background:var(--ink);color:var(--panel);border-radius:9px;padding:9px 12px;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);pointer-events:none;transition:.16s;z-index:20}.toast.show{opacity:1;transform:none}
+@media(max-width:760px){.brand span:last-child{display:none}.topbar{gap:5px;padding-inline:7px}.locations button{padding-inline:5px}.calendar-head h1{min-width:0;font-size:17px}.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<script src="../../sdk/naklios.js"></script>
+<script src="core.js"></script>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="mark">31</span><span>Calendar</span></div>
+    <div class="locations" id="locations" aria-label="Calendar storage location"></div>
+    <div class="spacer"></div>
+    <button class="toolbar-btn" id="import">Import .ics</button>
+    <input id="import-file" type="file" accept=".ics,text/calendar" hidden>
+    <button class="toolbar-btn" id="export">Export .ics</button>
+    <button class="primary" id="new-event">＋ Event</button>
+  </header>
+  <div class="calendar-head">
+    <button class="icon-btn" id="previous" aria-label="Previous period">←</button>
+    <button class="toolbar-btn" id="today">Today</button>
+    <button class="icon-btn" id="next" aria-label="Next period">→</button>
+    <h1 id="period-title"></h1>
+    <div class="spacer"></div>
+    <div class="segmented" aria-label="Calendar view">
+      <button data-view="month">Month</button><button data-view="week">Week</button><button data-view="day">Day</button>
+    </div>
+  </div>
+  <main class="content" id="calendar"></main>
+  <footer class="status"><strong id="storage-name">Browser</strong><span id="storage-detail">Private to this browser</span><span class="spacer"></span><span id="save-state">Starting…</span></footer>
+</div>
+
+<dialog id="event-dialog">
+  <form id="event-form" method="dialog">
+    <div class="dialog-body">
+      <h2 id="event-heading">New event</h2>
+      <input id="event-id" type="hidden">
+      <div class="form-grid">
+        <label class="wide">Title<input id="event-title" maxlength="180" required autofocus></label>
+        <label class="check wide"><input id="event-all-day" type="checkbox"><span>All-day event</span></label>
+        <label>Starts<input id="event-start" type="datetime-local" required></label>
+        <label>Ends<input id="event-end" type="datetime-local" required></label>
+        <label class="wide">Time zone<select id="event-timezone"></select></label>
+        <label>Repeats<select id="event-repeat"><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
+        <label>Repeat until<input id="event-until" type="date"></label>
+        <label class="wide">Location<input id="event-location" maxlength="240"></label>
+        <label class="wide">Notes<textarea id="event-description" maxlength="8000"></textarea></label>
+      </div>
+      <div class="error" id="event-error" role="status"></div>
+    </div>
+    <div class="dialog-actions">
+      <button class="toolbar-btn danger" id="delete-event" type="button" hidden>Delete series</button>
+      <button class="toolbar-btn" value="cancel">Cancel</button>
+      <button class="primary" id="save-event" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm-dialog">
+  <div class="dialog-body"><h2>Delete recurring event?</h2><p>This removes the entire event series from this storage location.</p></div>
+  <div class="dialog-actions"><button class="toolbar-btn" id="confirm-cancel">Cancel</button><button class="primary" id="confirm-delete">Delete series</button></div>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+const $=id=>document.getElementById(id);const Core=window.CalendarCore;
+const DATA_FILE='calendar.json',LOCATION_KEY='naklios.calendar.location',VIEW_KEY='naklios.calendar.view';
+let data={version:1,updatedAt:Date.now(),events:[]},activeLocation='browser',activeAdapter=null;
+let view=localStorage.getItem(VIEW_KEY)||'month',cursor=new Date(),saveQueue=Promise.resolve();
+let capabilitiesReady=false,unsubscribeFs=null,toastTimer=null,ownWrites=new Map(),remoteTimer=null;
+const defaultZone=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';
+function now(){return Date.now()}function uid(){return globalThis.crypto?.randomUUID?.()||`event-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}
+function pad(n){return String(n).padStart(2,'0')}function localDate(date){return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`}
+function localDateTime(date){return `${localDate(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`}
+function startOfDay(date){const out=new Date(date);out.setHours(0,0,0,0);return out}function addDays(date,n){const out=new Date(date);out.setDate(out.getDate()+n);return out}
+function escapeHtml(value){return String(value||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function showToast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600)}
+function setSave(text){$('save-state').textContent=text}function normalise(value){const next=value&&value.version===1?value:{version:1,updatedAt:now(),events:[]};next.events=Array.isArray(next.events)?next.events.filter(Boolean).map(e=>({...e,id:String(e.id||uid()),title:String(e.title||'Untitled event').slice(0,180),description:String(e.description||''),location:String(e.location||''),timeZone:e.timeZone||defaultZone,allDay:!!e.allDay,recurrence:{frequency:e.recurrence?.frequency||'none',interval:Math.max(1,Number(e.recurrence?.interval)||1),until:e.recurrence?.until||null},createdAt:Number(e.createdAt)||now(),updatedAt:Number(e.updatedAt)||now()})):[];return next}
+
+function openDb(){return new Promise((resolve,reject)=>{const request=indexedDB.open('naklios-calendar-v1',1);request.onupgradeneeded=()=>request.result.createObjectStore('files');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})}
+async function idb(mode,action){const db=await openDb();try{return await new Promise((resolve,reject)=>{const tx=db.transaction('files',mode),store=tx.objectStore('files');let request;try{request=action(store)}catch(error){reject(error);return}request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})}finally{db.close()}}
+const browserAdapter={async read(path){const value=await idb('readonly',s=>s.get(path));if(value==null)throw new Error('File not found');return String(value)},write:(path,value)=>idb('readwrite',s=>s.put(String(value),path)),exists:async path=>(await idb('readonly',s=>s.getKey(path)))!=null};
+const hostedAdapter={read:path=>naklios.fs.read(path),write:(path,value)=>{ownWrites.set(path,now());return naklios.fs.write(path,value)},exists:path=>naklios.fs.exists(path)};
+function locationLabel(id){if(id==='browser')return'Browser';return naklios.capabilities.fsBackends.find(x=>x.id===id)?.label||(id==='crate'?'Crate':'Folder')}
+function locationDetail(id){if(id==='browser')return'Private to this browser';const item=naklios.capabilities.fsBackends.find(x=>x.id===id);return id==='crate'?`Encrypted Crate${item?.name?' · '+item.name:''}`:`NakliOS Folder${item?.name?' · '+item.name:''}`}
+function available(){return['browser',...naklios.capabilities.fsBackends.map(x=>x.id)]}
+function renderLocations(){const root=$('locations');root.replaceChildren();for(const item of[{id:'browser',label:'Browser',ok:true},{id:'fsa',label:'Folder',ok:available().includes('fsa')},{id:'crate',label:'Crate',ok:available().includes('crate')}]){const button=document.createElement('button');button.textContent=item.ok?item.label:`Connect ${item.label}`;button.classList.toggle('active',activeLocation===item.id);button.classList.toggle('disabled',!item.ok);button.setAttribute('aria-pressed',String(activeLocation===item.id));button.addEventListener('click',()=>item.ok?void switchLocation(item.id):naklios.openSettings?.('storage'));root.append(button)}$('storage-name').textContent=locationLabel(activeLocation);$('storage-detail').textContent=locationDetail(activeLocation)}
+async function waitBackend(id,timeout=1800){if(naklios.capabilities.fsBackend===id)return true;return await new Promise(resolve=>{const started=now(),timer=setInterval(()=>{if(naklios.capabilities.fsBackend===id){clearInterval(timer);resolve(true)}else if(now()-started>timeout){clearInterval(timer);resolve(false)}},30)})}
+async function activate(id,{initial=false}={}){if(id!=='browser'){if(!available().includes(id))throw new Error(`${locationLabel(id)} is not connected`);if(naklios.capabilities.fsBackend!==id){if(!await naklios.fs.useBackend(id))throw new Error('Storage switch cancelled');if(!await waitBackend(id))throw new Error('NakliOS did not finish binding storage')}}activeLocation=id;activeAdapter=id==='browser'?browserAdapter:hostedAdapter;localStorage.setItem(LOCATION_KEY,id);renderLocations();await load();await subscribe();if(!initial)showToast(`Opened the separate ${locationLabel(id)} calendar. Nothing was copied.`)}
+async function switchLocation(id){if(id===activeLocation)return;try{await saveQueue;setSave(`Opening ${locationLabel(id)}…`);await activate(id)}catch(error){setSave('Storage switch cancelled');showToast(error.message);renderLocations()}}
+async function chooseInitial(){const choices=available(),stored=localStorage.getItem(LOCATION_KEY);let preferred=choices.includes(stored)?stored:(choices.includes(naklios.capabilities.fsBackend)?naklios.capabilities.fsBackend:null);if(!preferred)preferred=choices.includes('crate')?'crate':choices.includes('fsa')?'fsa':'browser';try{await activate(preferred,{initial:true})}catch(_){await activate('browser',{initial:true});if(preferred!=='browser')showToast(`${locationLabel(preferred)} was not opened. Using Browser.`)}}
+async function load(){setSave(`Loading ${locationLabel(activeLocation)}…`);try{data=normalise(JSON.parse(await activeAdapter.read(DATA_FILE)))}catch(_){data=normalise(null);await save()}render();setSave(`Saved to ${locationLabel(activeLocation)}`);naklios.title(`Calendar — ${locationLabel(activeLocation)}`)}
+function save(){data.updatedAt=now();const snapshot=JSON.stringify(data,null,2),location=activeLocation;setSave(`Saving to ${locationLabel(location)}…`);saveQueue=saveQueue.catch(()=>{}).then(async()=>{if(location!==activeLocation)return;ownWrites.set(DATA_FILE,now());await activeAdapter.write(DATA_FILE,snapshot);setSave(`Saved to ${locationLabel(activeLocation)}`)}).catch(error=>{setSave('Save failed');showToast(`Could not save: ${error.message}`)});return saveQueue}
+
+function rangeForView(){if(view==='month'){const first=new Date(cursor.getFullYear(),cursor.getMonth(),1),start=addDays(first,-((first.getDay()+6)%7)),end=addDays(start,42);return{start,end}}if(view==='week'){const start=addDays(startOfDay(cursor),-((cursor.getDay()+6)%7));return{start,end:addDays(start,7)}}const start=startOfDay(cursor);return{start,end:addDays(start,1)}}
+function occurrences(){const range=rangeForView();return Core.expandEvents(data.events,range.start.getTime(),range.end.getTime())}
+function occurrenceDay(occ){return occ.event.allDay?occ.startLocal.slice(0,10):Core.utcToWall(occ.startUtc,defaultZone).slice(0,10)}
+function eventTime(occ){if(occ.event.allDay)return'All day';const local=Core.utcToWall(occ.startUtc,defaultZone);return new Date(`${local}:00`).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+function render(){document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('active',button.dataset.view===view));const range=rangeForView(),items=occurrences();if(view==='month')renderMonth(range,items);else renderAgenda(range,items);renderTitle(range)}
+function renderTitle(range){if(view==='month')$('period-title').textContent=cursor.toLocaleDateString([],{month:'long',year:'numeric'});else if(view==='week')$('period-title').textContent=`${range.start.toLocaleDateString([],{month:'short',day:'numeric'})} – ${addDays(range.end,-1).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}`;else $('period-title').textContent=cursor.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})}
+function eventButton(occ,agenda=false){const button=document.createElement('button');button.className=agenda?'agenda-event':`event-pill${occ.event.allDay?' all-day':''}`;button.dataset.eventId=occ.event.id;if(agenda)button.innerHTML=`<strong>${escapeHtml(occ.event.title)}</strong><span>${escapeHtml(eventTime(occ))}${occ.event.location?' · '+escapeHtml(occ.event.location):''}${occ.event.recurrence?.frequency!=='none'?' · repeats':''}</span>`;else button.textContent=`${occ.event.allDay?'':eventTime(occ)+' '}${occ.event.title}`;button.addEventListener('click',event=>{event.stopPropagation();openEvent(occ.event)});return button}
+function renderMonth(range,items){const root=$('calendar');root.className='content month';root.replaceChildren();for(const day of['Mon','Tue','Wed','Thu','Fri','Sat','Sun']){const head=document.createElement('div');head.className='weekday';head.textContent=day;root.append(head)}for(let index=0;index<42;index++){const date=addDays(range.start,index),key=localDate(date),cell=document.createElement('div');cell.tabIndex=0;cell.setAttribute('role','button');cell.setAttribute('aria-label',date.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'}));cell.className='day-cell';cell.classList.toggle('outside',date.getMonth()!==cursor.getMonth());cell.classList.toggle('today',key===localDate(new Date()));cell.innerHTML=`<span class="day-num">${date.getDate()}</span>`;cell.addEventListener('click',event=>{if(event.target===cell||event.target.classList.contains('day-num'))openEvent(null,date)});cell.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openEvent(null,date)}});for(const occ of items.filter(item=>occurrenceDay(item)===key).slice(0,4))cell.append(eventButton(occ));const count=items.filter(item=>occurrenceDay(item)===key).length;if(count>4){const more=document.createElement('div');more.className='event-pill';more.textContent=`+${count-4} more`;cell.append(more)}root.append(cell)}}
+function renderAgenda(range,items){const root=$('calendar');root.className=`content agenda${view==='day'?' day-view':''}`;root.replaceChildren();const days=view==='day'?1:7;for(let index=0;index<days;index++){const date=addDays(range.start,index),key=localDate(date),section=document.createElement('section');section.className='agenda-day';section.classList.toggle('today',key===localDate(new Date()));section.innerHTML=`<h2>${escapeHtml(date.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}))}</h2>`;const dayItems=items.filter(item=>occurrenceDay(item)===key);if(!dayItems.length)section.insertAdjacentHTML('beforeend','<div class="empty">No events</div>');for(const occ of dayItems)section.append(eventButton(occ,true));section.addEventListener('dblclick',event=>{if(event.target===section||event.target.tagName==='H2')openEvent(null,date)});root.append(section)}}
+
+function zoneOptions(){let zones=[defaultZone,'UTC','Asia/Kolkata','America/New_York','Europe/London','Asia/Tokyo'];try{zones=Intl.supportedValuesOf('timeZone')}catch(_){}const select=$('event-timezone');select.replaceChildren(...zones.map(zone=>{const option=document.createElement('option');option.value=zone;option.textContent=zone;return option}))}
+function setAllDayInputs(){const allDay=$('event-all-day').checked;for(const input of[$('event-start'),$('event-end')]){const value=input.value;input.type=allDay?'date':'datetime-local';input.value=allDay?value.slice(0,10):(value.includes('T')?value:`${value}T09:00`)}}
+function openEvent(event,date=new Date()){const start=new Date(date);if(!event){start.setHours(start.getHours()+1,0,0,0);const end=new Date(start.getTime()+3600000);$('event-id').value='';$('event-title').value='';$('event-all-day').checked=false;$('event-start').type=$('event-end').type='datetime-local';$('event-start').value=localDateTime(start);$('event-end').value=localDateTime(end);$('event-timezone').value=defaultZone;$('event-repeat').value='none';$('event-until').value='';$('event-location').value='';$('event-description').value='';$('delete-event').hidden=true;$('event-heading').textContent='New event'}else{$('event-id').value=event.id;$('event-title').value=event.title;$('event-all-day').checked=event.allDay;$('event-start').type=$('event-end').type=event.allDay?'date':'datetime-local';$('event-start').value=event.startLocal;$('event-end').value=event.endLocal;$('event-timezone').value=event.timeZone;$('event-repeat').value=event.recurrence?.frequency||'none';$('event-until').value=event.recurrence?.until||'';$('event-location').value=event.location||'';$('event-description').value=event.description||'';$('delete-event').hidden=false;$('event-heading').textContent=event.recurrence?.frequency!=='none'?'Edit event series':'Edit event'}$('event-error').textContent='';$('event-dialog').showModal()}
+async function commitEvent(){const id=$('event-id').value,title=$('event-title').value.trim(),allDay=$('event-all-day').checked,start=$('event-start').value,end=$('event-end').value;if(!title){$('event-error').textContent='Give this event a title.';return false}if(!start||!end){$('event-error').textContent='Choose both start and end.';return false}try{const tz=$('event-timezone').value||defaultZone,startMs=allDay?Date.parse(`${start}T00:00:00Z`):Date.parse(Core.wallToUtc(start,tz)),endMs=allDay?Date.parse(`${end}T00:00:00Z`):Date.parse(Core.wallToUtc(end,tz));if(endMs<=startMs)throw new Error('End must be after start.');const previous=data.events.find(item=>item.id===id),stamp=now(),next={id:id||uid(),title,startLocal:start,endLocal:end,allDay,timeZone:tz,recurrence:{frequency:$('event-repeat').value,interval:1,until:$('event-until').value||null},location:$('event-location').value.trim(),description:$('event-description').value.trim(),createdAt:previous?.createdAt||stamp,updatedAt:stamp};if(previous)Object.assign(previous,next);else data.events.push(next);await save();render();return true}catch(error){$('event-error').textContent=error.message;return false}}
+async function deleteCurrent(){const id=$('event-id').value;if(!id)return;data.events=data.events.filter(event=>event.id!==id);$('confirm-dialog').close();$('event-dialog').close();await save();render();showToast('Event series deleted')}
+
+async function importIcs(file){try{const imported=Core.parseIcs(await file.text(),defaultZone);if(!imported.length)throw new Error('No VEVENT records found');const ids=new Set(data.events.map(event=>event.id));for(const event of imported){if(ids.has(event.id))event.id=uid();data.events.push(event)}await save();render();showToast(`Imported ${imported.length} event${imported.length===1?'':'s'}`)}catch(error){showToast(`Import failed: ${error.message}`)}finally{$('import-file').value=''}}
+function exportIcs(){const blob=new Blob([Core.exportIcs(data.events)],{type:'text/calendar'}),link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`naklios-calendar-${localDate(new Date())}.ics`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0)}
+function isOwn(path){const stamp=ownWrites.get(path);if(!stamp)return false;if(now()-stamp<2500)return true;ownWrites.delete(path);return false}async function subscribe(){if(unsubscribeFs){try{unsubscribeFs()}catch(_){}unsubscribeFs=null}if(activeLocation==='browser'||typeof naklios.fs.subscribe!=='function')return;try{unsubscribeFs=await naklios.fs.subscribe('',event=>{if(event.source!=='remote'&&isOwn(event.path))return;clearTimeout(remoteTimer);remoteTimer=setTimeout(()=>void load(),180)})}catch(_){}}
+function applyTheme(theme){const colors=theme?.colors;if(!colors)return;const style=document.documentElement.style;for(const[name,key]of[['--body','BODY'],['--panel','PANEL'],['--ink','INK'],['--brand','BRAND'],['--act','ACT'],['--ok','OK'],['--row','ROW']])style.setProperty(name,colors[key])}
+
+zoneOptions();$('event-all-day').addEventListener('change',setAllDayInputs);$('event-form').addEventListener('submit',async event=>{event.preventDefault();if(await commitEvent())$('event-dialog').close()});$('delete-event').addEventListener('click',()=> $('confirm-dialog').showModal());$('confirm-cancel').addEventListener('click',()=> $('confirm-dialog').close());$('confirm-delete').addEventListener('click',()=>void deleteCurrent());$('new-event').addEventListener('click',()=>openEvent());$('import').addEventListener('click',()=> $('import-file').click());$('import-file').addEventListener('change',event=>event.target.files[0]&&void importIcs(event.target.files[0]));$('export').addEventListener('click',exportIcs);$('today').addEventListener('click',()=>{cursor=new Date();render()});$('previous').addEventListener('click',()=>{if(view==='month')cursor.setMonth(cursor.getMonth()-1);else cursor.setDate(cursor.getDate()-(view==='week'?7:1));render()});$('next').addEventListener('click',()=>{if(view==='month')cursor.setMonth(cursor.getMonth()+1);else cursor.setDate(cursor.getDate()+(view==='week'?7:1));render()});document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{view=button.dataset.view;localStorage.setItem(VIEW_KEY,view);render()}));document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='n'){event.preventDefault();openEvent()}if(event.key==='Escape'&&$('confirm-dialog').open)$('confirm-dialog').close()});
+naklios.beforeClose(()=>saveQueue);naklios.theme.onChange(applyTheme);naklios.theme.request();let boot=setTimeout(()=>{if(!capabilitiesReady){capabilitiesReady=true;void chooseInitial()}},650);naklios.onCapabilitiesChange(capabilities=>{renderLocations();if(!capabilitiesReady&&(capabilities.fsBackends.length||!capabilities.hosted)){clearTimeout(boot);capabilitiesReady=true;void chooseInitial()}else if(capabilitiesReady&&activeLocation!=='browser'&&!available().includes(activeLocation)){void activate('browser',{initial:true});showToast('Storage disconnected. Opened Browser calendar.')}});naklios.requestCapabilities();naklios.ready();render();
+})();
+</script>
+</body>
+</html>
