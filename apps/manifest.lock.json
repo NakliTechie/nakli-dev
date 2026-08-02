@@ -5,13 +5,13 @@
       "id": "reel",
       "repo": "NakliTechie/reel",
       "requestedRef": "main",
-      "resolvedCommit": "5700da5d2ceebd5b232c3a77932c9963806dc768",
+      "resolvedCommit": "d16f7ef1d855aebcbb48b388d44dce2050dbad7e",
       "files": [
         {
           "source": "index.html",
           "destination": "index.html",
-          "sha256": "b546559cbd9a03c6ae866b4af9993b61f0a2ff788599e18130bdbeac1fefb097",
-          "bytes": 115787
+          "sha256": "e15cb557b1ac79c925b26352ff14275ac85c7cb0a549bd718fcc51b55748b045",
+          "bytes": 115788
         },
         {
           "source": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
