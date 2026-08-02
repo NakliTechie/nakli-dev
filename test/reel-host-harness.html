@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reel NakliOS metadata smoke</title>
+<style>
+#reel{position:fixed;left:-10000px;top:0;width:800px;height:600px;border:0}
+</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="reel" aria-hidden="true" tabindex="-1"></iframe>
+<script type="module">
+const result = document.querySelector('#result');
+const frame = document.querySelector('#reel');
+const files = new Map();
+const writes = [];
+let readyReceived = false;
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function waitFor(check, message, timeoutMs = 10_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+function capabilities(target) {
+  target.postMessage({
+    type: 'naklios:capabilities',
+    fs: true,
+    fsBackends: [{ id: 'crate', label: 'Crate', name: 'test-crate' }],
+    fsBackend: 'crate',
+  }, '*');
+}
+
+function reply(target, requestId, value) {
+  target.postMessage({ type: 'naklios:fs:reply', requestId, result: value }, '*');
+}
+
+addEventListener('message', event => {
+  if (event.source !== frame.contentWindow || !event.data?.type) return;
+  const message = event.data;
+  if (message.type === 'naklios:ready') {
+    readyReceived = true;
+    capabilities(event.source);
+    return;
+  }
+  if (message.type === 'naklios:capabilities-request') {
+    capabilities(event.source);
+    return;
+  }
+  if (!message.type.startsWith('naklios:fs:')) return;
+  assert(message.backend === 'crate' || message.type === 'naklios:fs:unsubscribe', 'Filesystem request escaped the Crate binding');
+  const operation = message.type.slice('naklios:fs:'.length);
+  if (operation === 'exists') reply(event.source, message.requestId, files.has(message.path));
+  if (operation === 'read') reply(event.source, message.requestId, files.get(message.path));
+  if (operation === 'write') {
+    writes.push({ path: message.path, data: message.data });
+    files.set(message.path, message.data);
+    reply(event.source, message.requestId, true);
+  }
+  if (operation === 'subscribe') reply(event.source, message.requestId, 'reel-test-subscription');
+});
+
+async function run() {
+  const loaded = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Reel mirror boot timed out')), 10_000);
+    frame.addEventListener('load', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+  frame.src = '../apps/reel/index.html?dev=1&harness=naklios-metadata-v1';
+  await loaded;
+  const reelWindow = frame.contentWindow;
+  const reel = await waitFor(() => reelWindow.reel, 'Reel dev interface is unavailable');
+  await waitFor(() => readyReceived, 'Reel did not signal NakliOS readiness');
+  await waitFor(() => reel.debug.metadataState().crateAvailable, 'Reel did not receive the Crate capability');
+
+  reelWindow.document.querySelector('#metadata-sync-action').click();
+  await waitFor(() => reel.debug.metadataState().crateActive, 'Crate metadata opt-in did not activate');
+  const entry = {
+    fingerprint: 'fixture-content-fingerprint',
+    name: 'Fixture.mkv',
+    positionS: 42,
+    durationS: 600,
+    container: 'mkv',
+    updatedAt: 1_786_000_000_000,
+  };
+  await reel.debug.metadataSave(entry);
+  assert(writes.length === 1, 'Crate metadata save did not issue exactly one write');
+  assert(writes[0].path === 'library.json', 'Crate metadata escaped library.json');
+  const library = JSON.parse(writes[0].data);
+  assert(library.version === 1 && library.items.length === 1, 'Crate library shape is invalid');
+  assert(library.items[0].fingerprint === entry.fingerprint, 'Crate library omitted the fingerprint');
+  assert(!('bytes' in library.items[0]) && !('data' in library.items[0]), 'Crate library included media payload fields');
+  const listed = await reel.debug.metadataList();
+  assert(listed.length === 1 && listed[0].positionS === 42, 'Crate metadata did not round-trip');
+
+  reelWindow.document.querySelector('#metadata-sync-action').click();
+  await waitFor(() => reel.debug.metadataState().mode === 'browser', 'Browser metadata opt-out did not activate');
+  const browserItems = await reel.debug.metadataList();
+  assert(browserItems.length === 0, 'Switching from Crate copied metadata into Browser storage');
+  assert(files.has('library.json'), 'Switching from Crate deleted remote metadata');
+
+  return {
+    readyReceived,
+    mirrorVersion: reel.version,
+    writePaths: writes.map(write => write.path),
+    remoteItems: library.items.length,
+    browserItems: browserItems.length,
+  };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — Reel NakliOS metadata smoke';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — Reel NakliOS metadata smoke';
+});
+</script>
+</body>
+</html>

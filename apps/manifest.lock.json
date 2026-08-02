@@ -2,6 +2,32 @@
   "version": 1,
   "apps": [
     {
+      "id": "reel",
+      "repo": "NakliTechie/reel",
+      "requestedRef": "main",
+      "resolvedCommit": "5700da5d2ceebd5b232c3a77932c9963806dc768",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html",
+          "sha256": "b546559cbd9a03c6ae866b4af9993b61f0a2ff788599e18130bdbeac1fefb097",
+          "bytes": 115787
+        },
+        {
+          "source": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "destination": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "sha256": "1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b",
+          "bytes": 627244
+        },
+        {
+          "source": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "destination": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+          "bytes": 16726
+        }
+      ]
+    },
+    {
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
       "requestedRef": "main",

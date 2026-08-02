@@ -97,6 +97,16 @@ assert.match(
 );
 assert.match(
   html,
+  /id:'reel'[\s\S]*?url:'https:\/\/reel\.naklitechie\.com\/'[\s\S]*?embedUrl:'https:\/\/naklios\.dev\/apps\/reel\/'/,
+  'Reel keeps its canonical host and uses a same-origin Immersive mirror',
+);
+assert.match(
+  html,
+  /id:'fld-games'[\s\S]*?apps:\['reel'/,
+  'Reel has one predictable home under Play',
+);
+assert.match(
+  html,
   /id:'fld-work'[\s\S]*?apps:\['editor','kanzen','nakliposter','bofh','mod','naklidata','nemawashi'\]/,
   'Editor has one predictable home in Work & Build',
 );

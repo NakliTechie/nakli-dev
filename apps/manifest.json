@@ -3,6 +3,25 @@
   "_comment": "Standalone repositories are authoritative. The sync workflow resolves each ref to an immutable commit, copies the declared release artifacts into apps/<id>/, and records commit + SHA-256 data in manifest.lock.json. Only mirror apps that need same-origin capabilities; keep other apps cross-origin and sandboxed.",
   "apps": [
     {
+      "id": "reel",
+      "repo": "NakliTechie/reel",
+      "ref": "main",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html"
+        },
+        {
+          "source": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "destination": "vendor/mediabunny/mediabunny-1.51.0.min.mjs"
+        },
+        {
+          "source": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "destination": "vendor/mediabunny/LICENSE-MPL-2.0.txt"
+        }
+      ]
+    },
+    {
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
       "ref": "main",
