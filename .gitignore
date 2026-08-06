@@ -9,6 +9,8 @@ plan/
 !sdk/*
 !apps/
 !apps/**
+!sys/
+!sys/**
 !scripts/
 !scripts/*
 !docs/
