@@ -157,10 +157,13 @@ export function createGitCore({ fs, dir = '/', transport = null }) {
     if (!transport) throw new Error(`git.${op} needs a Transport (none configured)`);
     return transport;
   }
-  async function clone(opts) { return requireTransport('clone').clone({ git, base, ...opts }); }
-  async function fetch(opts) { return requireTransport('fetch').fetch({ git, base, ...opts }); }
-  async function push(opts) { return requireTransport('push').push({ git, base, ...opts }); }
-  async function listServerRefs(opts) { return requireTransport('listServerRefs').listServerRefs({ git, base, ...opts }); }
+  // Transports also receive the raw fileops (`fs`) and worktree `dir`: base.fs
+  // is the isomorphic-git adapter, but a Transport needs glob/read/write to move
+  // the object database.
+  async function clone(opts = {}) { return requireTransport('clone').clone({ git, base, fs, dir, ...opts }); }
+  async function fetch(opts = {}) { return requireTransport('fetch').fetch({ git, base, fs, dir, ...opts }); }
+  async function push(opts = {}) { return requireTransport('push').push({ git, base, fs, dir, ...opts }); }
+  async function listServerRefs(opts = {}) { return requireTransport('listServerRefs').listServerRefs({ git, base, fs, dir, ...opts }); }
 
   return {
     init, add, remove, commit, log, status, statusMatrix,

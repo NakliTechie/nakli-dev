@@ -6,15 +6,21 @@ Gate for the git-core chunk (RIG-AGENT-HANDOFF §5, §12). Built in two layers.
 
 ```bash
 node sys/rig/git/test/conformance.test.mjs        # Layer 1: adapter + local ops
+node sys/rig/git/test/transport.test.mjs          # Layer 2: Transport + FakeTransport
 node sys/rig/registry/test/conformance.test.mjs   # git.* on the one registry
 ```
 
-## Result — Layer 1 (local ops)
+## Result
 
 ```
 C2 (Layer 1) conformance: 8/8 passed
+C2 (Layer 2 / Transport) conformance: 3/3 passed
 exit: 0
 ```
+
+All four §5 checkpoint parts pass: (1) clone pinned repo@SHA → head matches;
+(2) known edit → content hash matches; (3) statusMatrix on a fixture; (4) ref
+set survives round-trip.
 
 ## Vendoring (hard rule #3 — never fork isomorphic-git)
 
@@ -62,11 +68,21 @@ C1 registry as `fs.*`. Scopes: `git:read` / `git:write` (+ `git:remote` /
 git.resolveRef` flow drives entirely through `invokeCommand`
 (`registry` gate 11/11).
 
-## Not yet done — Layer 2 (Transport)
+## Layer 2 — Transport seam + FakeTransport
 
-Checkpoint parts **1** (clone pinned repo@SHA → head matches) and **4** (ref set
-survives round-trip) need the Transport seam: a `Transport` interface and the
-permanent `FakeTransport` (a bare repo in the store) supplying clone/fetch/push.
-`git-core` exposes `clone/fetch/push/listServerRefs` that delegate to an injected
-transport; none is wired yet. Push stays operator-only and is not exposed to the
-kernel.
+All remote I/O flows through one `Transport` interface
+(`clone/fetch/push/listServerRefs`). `FakeTransport` (`transport.mjs`) is the
+permanent test seam: it serves a source repo held in the store and moves the
+object database by copying the content-addressed loose objects + refs between
+two fileops-backed repos.
+
+- **Part 1 — clone.** A fresh target clones the source; `HEAD` resolves to the
+  source SHA and the worktree materialises from the tree (force-checkout,
+  because the copied `.git/index` would otherwise mask an empty worktree).
+- **Part 4 — ref round-trip.** The full ref set (`main` + `feature`) survives a
+  clone; a branch committed on the target `push`es back so the server advertises
+  it *and* holds its objects (the source resolves and reads the pushed commit).
+
+The Bridge project supplies the real HTTP transports later against this same
+interface; every Bridge checkpoint re-runs C2's checkpoint unchanged. Push stays
+operator-only and is not exposed to the kernel.
