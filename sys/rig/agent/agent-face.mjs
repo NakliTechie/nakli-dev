@@ -1,0 +1,110 @@
+// agent-face — Rig's C4 governed surface over the C1 registry.
+//
+// Everything a non-operator caller does goes through here: the registry stays
+// the single capability shape, and this layer adds the governance §6 requires —
+// grant enforcement per command, destructive-op staging, and the append-only
+// op-log. window.rig (below, via installWindowRig) and Kiln both call invoke;
+// neither gets its own path to capability.
+
+// Conventional path-carrying input keys for fs.*/git.* commands. A command may
+// override with an explicit `pathParams` array in its metadata.
+const PATH_KEYS = new Set(['path', 'from', 'to', 'cwd', 'filepath']);
+
+/**
+ * @param {object} opts
+ * @param {object} opts.registry  a createRegistry(...) / buildRigRegistry(...) result
+ * @param {object} opts.grant     a createGrant(...) — the session authorisation
+ * @param {object} opts.opLog     a createOpLog(...) — append-only audit
+ * @param {string} [opts.actor='agent']   actor id recorded on the op-log
+ * @param {string} [opts.caller=null]      caller id (session/subagent provenance)
+ */
+export function createAgentFace({ registry, grant, opLog, actor = 'agent', caller = null }) {
+  if (!registry) throw new Error('createAgentFace requires a registry');
+  if (!grant) throw new Error('createAgentFace requires a grant');
+  if (!opLog) throw new Error('createAgentFace requires an opLog');
+
+  const staged = new Map(); // proposalId -> { name, input }
+  let counter = 0;
+
+  function pathArgsOf(command, input) {
+    const keys = Array.isArray(command.pathParams)
+      ? command.pathParams
+      : [...PATH_KEYS].filter((k) => input && k in input);
+    return keys.filter((k) => input && typeof input[k] === 'string').map((k) => input[k]);
+  }
+
+  // Returns a denial result, or null when allowed.
+  function grantCheck(command, input) {
+    if (!grant.allowsScope(command.scope)) {
+      return { ok: false, code: 'EGRANT', message: `scope not granted: ${command.scope}` };
+    }
+    for (const p of pathArgsOf(command, input)) {
+      if (!grant.allowsPath(p)) {
+        return { ok: false, code: 'EGRANT', message: `path outside grant: ${p}` };
+      }
+    }
+    return null;
+  }
+
+  async function logAnd(name, input, status, who) {
+    await opLog.append({ actor: who || actor, caller, command: name, args: input, status });
+  }
+
+  async function runThroughRegistry(name, input, who) {
+    const result = await registry.invokeCommand(name, input, { actor: who || actor, caller, grant });
+    await logAnd(name, input, result.ok ? 'ok' : (result.code || 'error'), who);
+    return result;
+  }
+
+  async function invoke(name, input = {}) {
+    const command = registry.describeCommand(name);
+    if (!command) {
+      const miss = await registry.invokeCommand(name, input, { actor, caller });
+      await logAnd(name, input, 'unknown');
+      return miss; // typed ENOCMD with suggestions — never a throw
+    }
+    const denied = grantCheck(command, input);
+    if (denied) { await logAnd(name, input, denied.code); return denied; }
+    if (command.destructive) {
+      const proposalId = 'p' + (++counter);
+      staged.set(proposalId, { name, input });
+      await logAnd(name, input, 'staged');
+      return {
+        ok: false, staged: true, proposalId, command: name, input,
+        scope: command.scope, summary: command.summary,
+        message: `destructive — staged for operator accept (${proposalId})`,
+      };
+    }
+    return runThroughRegistry(name, input);
+  }
+
+  // Operator-only: execute a staged destructive proposal. Grant is re-checked at
+  // accept time in case it was revoked or narrowed after staging.
+  async function accept(proposalId, { by = 'operator' } = {}) {
+    const p = staged.get(proposalId);
+    if (!p) return { ok: false, code: 'ENOPROPOSAL', message: `no staged proposal: ${proposalId}` };
+    staged.delete(proposalId);
+    const command = registry.describeCommand(p.name);
+    const denied = grantCheck(command, p.input);
+    if (denied) { await logAnd(p.name, p.input, denied.code, by); return denied; }
+    return runThroughRegistry(p.name, p.input, by);
+  }
+
+  function reject(proposalId) {
+    const had = staged.has(proposalId);
+    staged.delete(proposalId);
+    return had;
+  }
+
+  return {
+    invoke,
+    accept,
+    reject,
+    pendingProposals: () => [...staged.keys()],
+    // discovery + tool-schema emit — metadata only, straight from the registry
+    searchCommands: (q) => registry.searchCommands(q),
+    describeCommand: (n) => registry.describeCommand(n),
+    toolSchemas: () => registry.toolSchemas(),
+    grant,
+  };
+}
