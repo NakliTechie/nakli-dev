@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kiln K0 — real Pyodide verification</title>
+  <style>
+    body { font: 14px ui-monospace, monospace; padding: 1rem; background:#0b0d10; color:#d7dbe0; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Kiln K0 — real Pyodide verification</h1>
+  <pre id="out">loading Pyodide (~12 MiB from CDN)…</pre>
+  <script type="module">
+    // Verifies the REAL pyodide-runtime + kernel-core against actual Pyodide in
+    // the browser: namespace persistence across cells, a real traceback, output
+    // cap, and inspect. (The SAB interrupt path needs COOP/COEP — tested with a
+    // headered server, not here.)
+    const PY = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+    const out = document.getElementById('out');
+    const results = [];
+    const eq = (a, b, m) => { if (a !== b) throw new Error(`${m||'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); };
+    const assert = (c, m) => { if (!c) throw new Error(m || 'assert'); };
+    async function check(name, fn) {
+      try { await fn(); results.push({ name, ok: true }); }
+      catch (e) { results.push({ name, ok: false, detail: String(e && e.message || e) }); }
+    }
+
+    try {
+      const { loadPyodide } = await import(PY + 'pyodide.mjs');
+      const { createPyodideRuntime } = await import('/sys/kiln/pyodide-runtime.mjs?v=2');
+      const { createKernelCore } = await import('/sys/kiln/kernel-core.mjs');
+
+      const pyodide = await loadPyodide({ indexURL: PY });
+      out.textContent = 'Pyodide ' + pyodide.version + ' loaded. Running…';
+      const runtime = createPyodideRuntime(pyodide); // no interrupt buffer (no COOP/COEP here)
+      const core = createKernelCore({ runtime });
+
+      await check('namespace persists: assignment across cells', async () => {
+        eq((await core.exec('c1', 'x = 40 + 2', { provenance:'operator' })).status, 'ok', 'assign');
+        const r = await core.exec('c2', 'print(x)', { provenance:'operator' });
+        eq(r.status, 'ok', 'read'); eq(r.stdout, '42\n', 'value persisted');
+      });
+      await check('namespace persists: def + import across cells', async () => {
+        await core.exec('d', 'def dbl(n):\n    return n*2');
+        await core.exec('i', 'import math');
+        eq((await core.exec('u1', 'print(dbl(21))')).stdout, '42\n', 'def persists');
+        eq((await core.exec('u2', 'print(int(math.pi*100))')).stdout, '314\n', 'import persists');
+      });
+      await check('uncaught exception → real traceback as data', async () => {
+        let threw = false, r;
+        try { r = await core.exec('e', 'raise ValueError("boom")'); } catch (_) { threw = true; }
+        assert(!threw, 'must not throw across boundary');
+        eq(r.status, 'error', 'error status');
+        assert(/ValueError/.test(r.traceback) && /boom/.test(r.traceback), 'traceback carries the error: ' + r.traceback);
+        eq((await core.exec('after', 'ok = 1')).status, 'ok', 'kernel usable after');
+      });
+      await check('output cap truncates real stdout', async () => {
+        const r = await core.exec('big', 'print("z"*5000)', { outputCapBytes: 100 });
+        assert(r.stdout.length <= 100, 'capped: ' + r.stdout.length);
+        eq(r.truncated, true, 'truncation reported');
+      });
+      await check('listNames + inspect on the real namespace', async () => {
+        await core.exec('l', 'nums = [1, 2, 3]');
+        assert((core.listNames()).names.includes('nums'), 'listNames sees nums');
+        const info = core.inspect('nums').info;
+        eq(info.type, 'list', 'inspect type'); eq(info.repr, '[1, 2, 3]', 'inspect repr');
+      });
+
+      const passed = results.filter(r=>r.ok).length;
+      const failed = results.length - passed;
+      out.textContent = `Kiln K0 real-Pyodide (${pyodide.version}): ${passed}/${results.length} passed` + (failed?` — ${failed} FAILED`:'');
+      for (const r of results) out.textContent += '\n' + (r.ok?'  PASS ':'  FAIL ') + r.name + (r.detail? '\n      '+r.detail:'');
+      window.__pyresults = { version: pyodide.version, passed, failed, total: results.length, results };
+      document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+    } catch (e) {
+      out.textContent = 'HARNESS ERROR: ' + (e && e.stack || e);
+      window.__pyresults = { error: String(e && e.message || e) };
+      document.title = 'HARNESS ERROR';
+    }
+  </script>
+</body>
+</html>

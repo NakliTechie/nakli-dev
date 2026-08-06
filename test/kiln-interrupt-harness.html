@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Kiln K0 — SAB interrupt</title>
+<style>body{font:14px ui-monospace,monospace;padding:1rem;background:#0b0d10;color:#d7dbe0}pre{white-space:pre-wrap}</style></head>
+<body>
+  <h1>Kiln K0 — SharedArrayBuffer interrupt</h1>
+  <pre id="out">loading…</pre>
+  <script type="module">
+    // Verifies the real interrupt path: a runaway `while True` is interrupted
+    // within the timeout via the SharedArrayBuffer byte, and the kernel is
+    // usable afterward. Requires cross-origin isolation (COOP/COEP).
+    const PY = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+    const out = document.getElementById('out');
+    const results = [];
+    const eq = (a,b,m)=>{ if(a!==b) throw new Error(`${m||'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); };
+    const assert = (c,m)=>{ if(!c) throw new Error(m||'assert'); };
+    async function check(name, fn){ try { await fn(); results.push({name,ok:true}); } catch(e){ results.push({name,ok:false,detail:String(e&&e.message||e)}); } }
+    try {
+      assert(self.crossOriginIsolated, 'crossOriginIsolated must be true for SharedArrayBuffer');
+      const { loadPyodide } = await import(PY + 'pyodide.mjs');
+      const { createPyodideRuntime } = await import('/sys/kiln/pyodide-runtime.mjs?v=2');
+      const { createKernelCore } = await import('/sys/kiln/kernel-core.mjs');
+      const ibuf = new Uint8Array(new SharedArrayBuffer(1));
+      const pyodide = await loadPyodide({ indexURL: PY });
+      out.textContent = 'Pyodide ' + pyodide.version + ' + SAB. Running…';
+      const runtime = createPyodideRuntime(pyodide, ibuf);
+      const core = createKernelCore({ runtime });
+
+      await check('runaway while-True interrupted within the timeout', async () => {
+        const r = await core.exec('loop', 'while True:\n    pass', { timeoutMs: 800 });
+        eq(r.status, 'timeout', 'runaway loop → timeout (status was ' + r.status + ')');
+        assert(r.ms < 5000, 'returned promptly, not hung: ' + r.ms + 'ms');
+      });
+      await check('kernel usable after the interrupt', async () => {
+        eq((await core.exec('a', 'x = 5')).status, 'ok', 'exec ok after interrupt');
+        eq((await core.exec('b', 'print(x)')).stdout, '5\n', 'namespace intact');
+      });
+      await check('explicit interrupt stops a running cell', async () => {
+        const p = core.exec('loop2', 'while True:\n    pass', { timeoutMs: 60000 });
+        await new Promise(r=>setTimeout(r,150));
+        core.interrupt('loop2');
+        const r = await p;
+        eq(r.status, 'interrupted', 'explicit interrupt → interrupted (was ' + r.status + ')');
+      });
+
+      const passed = results.filter(r=>r.ok).length, failed = results.length-passed;
+      out.textContent = `Kiln K0 SAB interrupt (${pyodide.version}): ${passed}/${results.length} passed` + (failed?` — ${failed} FAILED`:'');
+      for (const r of results) out.textContent += '\n' + (r.ok?'  PASS ':'  FAIL ') + r.name + (r.detail?'\n      '+r.detail:'');
+      window.__intresults = { version: pyodide.version, passed, failed, total: results.length, results };
+      document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+    } catch (e) {
+      out.textContent = 'HARNESS ERROR: ' + (e && e.stack || e);
+      window.__intresults = { error: String(e && e.message || e) };
+      document.title = 'HARNESS ERROR';
+    }
+  </script>
+</body>
+</html>

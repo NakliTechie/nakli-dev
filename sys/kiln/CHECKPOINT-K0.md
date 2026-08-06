@@ -51,19 +51,35 @@ and real Pyodide are interchangeable.
   and `exec` never call `loadRuntime` (`loads === 0`) and report
   `consent-withheld` / `unavailable`; granting consent loads exactly once.
 
-## Browser follow-on (real Pyodide + Worker — assumed, not headless-verified)
+## Real-Pyodide browser verification (2026-08-06)
 
-- **pyodide-runtime.mjs** real-Python behaviour — namespace persistence, a real
-  `KeyboardInterrupt` on a runaway loop via the SAB byte, real tracebacks — is
-  verified in the browser Worker with real Pyodide, not headlessly. The core
-  orchestration those behaviours plug into IS verified above.
-- **The Worker transport** — a blob-URL module Worker hosting Pyodide, a
-  main-thread proxy implementing the runtime contract by messaging it, and the
-  shared interrupt buffer (needs COOP/COEP cross-origin isolation for
-  SharedArrayBuffer) — is not built here; it is the K0 browser wiring.
-- **The consent-gated loader** that actually imports Pyodide from the pinned CDN
-  (`PYODIDE_INDEX_URL`, `v0.26.4`, ~12 MiB shown before fetch) plugs into the
-  verified `loadRuntime` seam.
+Verified in Chromium (in-app browser) against real Pyodide **0.26.4** loaded
+from the pinned CDN — harness `test/kiln-pyodide-harness.html`, **5/5**:
 
-No fabricated headless claim is made for the real-Pyodide path; the seam is
-built and verified, the WASM integration is the documented next step.
+- Namespace persists across cells — assignment, `def`, and `import` all survive
+  into later `exec` calls.
+- An uncaught exception returns a real traceback as data (no throw, kernel
+  usable after).
+- Output is capped and truncation reported.
+- `listNames` / `inspect` report the real namespace.
+
+**Fix found by this pass:** `pyodide-runtime` used `setStdout({batched})`, which
+is line-buffered and strips the trailing newline — `print(x)` captured as `"42"`
+not `"42\n"`. Switched to `setStdout({write})` (raw bytes, streaming decoder) for
+byte-exact capture. This is the value of the browser pass.
+
+## Still a follow-on — the SAB interrupt needs the Worker
+
+The runaway-loop interrupt (`while True` → `KeyboardInterrupt` via the SAB byte)
+is **not** verifiable with Pyodide on the main thread: a tight Python loop blocks
+the event loop, so the main-thread timer that sets the interrupt byte can never
+fire (confirmed empirically — the tab hangs). This is exactly why the handoff
+mandates *a Worker hosting Pyodide*: the interrupt is set from the free main
+thread while the Worker blocks. The `setInterruptBuffer` wiring in
+`pyodide-runtime` is correct; it is only exercisable through the Worker
+transport, which remains the K0 browser follow-on (needs COOP/COEP cross-origin
+isolation for `SharedArrayBuffer`; COEP `credentialless` lets the CDN still
+load).
+
+The **consent-gated CDN loader** (`PYODIDE_INDEX_URL`, `v0.26.4`, ~12 MiB shown
+before fetch) plugs into the verified `loadRuntime` seam.

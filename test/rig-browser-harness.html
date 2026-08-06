@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Rig spine — browser verification</title>
+  <style>
+    body { font: 14px ui-monospace, monospace; padding: 1rem; background:#0b0d10; color:#d7dbe0; }
+    .pass { color:#6fcf7f; } .fail { color:#ff6b6b; } h1 { font-size: 16px; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Rig spine — browser verification</h1>
+  <pre id="out">running…</pre>
+  <script type="module">
+    // Verifies the shipped ESM modules run in a REAL browser (not just node):
+    // fileops, registry, git core (exercises the vendored isomorphic-git bundle
+    // + its Buffer polyfill in-browser — the biggest "assumed" path), agent
+    // face, and the faux CLI. All over MemoryBackend, so no connected backend
+    // is needed.
+    const out = document.getElementById('out');
+    const results = [];
+    const log = (s) => { out.textContent += '\n' + s; };
+    async function check(name, fn) {
+      try { await fn(); results.push({ name, ok: true }); }
+      catch (e) { results.push({ name, ok: false, detail: String(e && e.stack || e) }); }
+    }
+    const eq = (a, b, m) => { if (a !== b) throw new Error(`${m||'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); };
+    const assert = (c, m) => { if (!c) throw new Error(m || 'assert'); };
+
+    const { createFileops, MemoryBackend } = await import('/sys/rig/fileops/index.mjs');
+    const { buildRigRegistry } = await import('/sys/rig/registry/index.mjs');
+    const { createGitCore } = await import('/sys/rig/git/git-core.mjs');
+    const { createGrant, createOpLog, createAgentFace } = await import('/sys/rig/agent/index.mjs');
+    const { compile, createRepl } = await import('/sys/rig/cli/index.mjs');
+
+    await check('fileops: binary round-trip + patch revert', async () => {
+      const fs = createFileops({ backend: new MemoryBackend() });
+      const buf = new Uint8Array(256); for (let i=0;i<256;i++) buf[i]=i;
+      await fs.write('b.bin', buf);
+      const r = await fs.read('b.bin');
+      assert(r.data instanceof Uint8Array && r.data.length===256, 'binary read');
+      for (let i=0;i<256;i++) if (r.data[i]!==i) throw new Error('byte '+i);
+      await fs.write('f.txt','a\nb\nc\n');
+      const diff = ['@@ -1,3 +1,3 @@',' a','-b','+B',' c'].join('\n');
+      const p = await fs.patch('f.txt', diff); assert(p.ok,'patch');
+      const rev = await fs.patch('f.txt', p.revert); assert(rev.ok,'revert');
+      eq((await fs.read('f.txt',{encoding:'utf-8'})).data, 'a\nb\nc\n', 'revert restores');
+    });
+
+    await check('registry: invokeCommand round-trip', async () => {
+      const fs = createFileops({ backend: new MemoryBackend() });
+      const reg = buildRigRegistry({ fs });
+      assert((await reg.invokeCommand('fs.write',{path:'x',data:'hi'})).ok,'write');
+      eq((await reg.invokeCommand('fs.read',{path:'x',encoding:'utf-8'})).data,'hi','read');
+    });
+
+    // The load-bearing one: vendored isomorphic-git + Buffer polyfill in-browser.
+    await check('git core (isomorphic-git bundle) in-browser', async () => {
+      const fs = createFileops({ backend: new MemoryBackend() });
+      const git = createGitCore({ fs, dir:'/' });
+      await git.init({ defaultBranch:'main' });
+      await fs.write('a.txt','hello\n');
+      await git.add({ filepath:'a.txt' });
+      const c = await git.commit({ message:'first', actor:'operator', identity:{name:'O',email:'o@x'}, timestamp:0 });
+      assert(c.ok && c.oid, 'commit');
+      eq((await git.resolveRef({ref:'HEAD'})).oid, c.oid, 'HEAD');
+      const blob = await git._git.readBlob({ ...git._base, oid:c.oid, filepath:'a.txt' });
+      eq(blob.oid, 'ce013625030ba8dba906f756967f9e9ca394464a', 'canonical blob hash in-browser');
+      const sm = (await git.statusMatrix()).matrix.find(r=>r[0]==='a.txt');
+      eq(JSON.stringify(sm), JSON.stringify(['a.txt',1,1,1]), 'statusMatrix');
+    });
+
+    await check('agent face: escape rejected', async () => {
+      const fs = createFileops({ backend: new MemoryBackend() });
+      const reg = buildRigRegistry({ fs });
+      const logFs = createFileops({ backend: new MemoryBackend() });
+      const grant = createGrant({ prefixes:['work'], scopes:['fs:read','fs:write'] });
+      const face = createAgentFace({ registry: reg, grant, opLog: createOpLog({ fs: logFs }), actor:'agent' });
+      eq((await face.invoke('fs.write',{path:'../secret',data:'x'})).code,'EGRANT','escape denied');
+      assert((await face.invoke('fs.write',{path:'work/a',data:'x'})).ok,'in-grant ok');
+    });
+
+    await check('faux CLI: parse + repl', async () => {
+      const fs = createFileops({ backend: new MemoryBackend() });
+      const reg = buildRigRegistry({ fs });
+      const logFs = createFileops({ backend: new MemoryBackend() });
+      const grant = createGrant({ prefixes:[''], scopes:['fs:read','fs:write'] });
+      const face = createAgentFace({ registry: reg, grant, opLog: createOpLog({ fs: logFs }), actor:'operator' });
+      const repl = createRepl({ registry: reg, face });
+      eq(compile('/ls -R src', reg).name, 'fs.list', 'parse alias');
+      await repl.feed('/write a.txt "hi there"');
+      eq((await repl.feed('/read a.txt')).output.join('\n'), 'hi there', 'repl read');
+    });
+
+    const passed = results.filter(r=>r.ok).length;
+    const failed = results.length - passed;
+    out.textContent = `Rig spine browser verification: ${passed}/${results.length} passed` + (failed?` — ${failed} FAILED`:'');
+    for (const r of results) {
+      log((r.ok?'  PASS ':'  FAIL ') + r.name + (r.detail? '\n      '+r.detail.split('\n').slice(0,3).join('\n      '):''));
+    }
+    window.__results = { passed, failed, total: results.length, results };
+    document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+  </script>
+</body>
+</html>

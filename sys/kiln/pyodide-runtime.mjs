@@ -55,8 +55,14 @@ export function createPyodideRuntime(pyodide, interruptBuffer) {
       if (outputCapBytes && next.length >= outputCapBytes) { truncated = true; return next.slice(0, outputCapBytes); }
       return next;
     };
-    pyodide.setStdout({ batched: (s) => { stdout = cap(stdout, s); } });
-    pyodide.setStderr({ batched: (s) => { stderr = cap(stderr, s); } });
+    // `write` (raw bytes) rather than `batched`: batched is line-buffered and
+    // strips the trailing newline, so print output was not captured byte-exact
+    // (found in the browser verification pass). Streaming decoders handle a
+    // multibyte character split across writes.
+    const outDec = new TextDecoder('utf-8');
+    const errDec = new TextDecoder('utf-8');
+    pyodide.setStdout({ write: (buf) => { stdout = cap(stdout, outDec.decode(buf, { stream: true })); return buf.length; } });
+    pyodide.setStderr({ write: (buf) => { stderr = cap(stderr, errDec.decode(buf, { stream: true })); return buf.length; } });
     if (interruptBuffer) interruptBuffer[0] = 0; // clear before each run
 
     let traceback = null;
