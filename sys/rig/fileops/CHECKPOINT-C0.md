@@ -14,7 +14,7 @@ Vanilla ESM, no build step, no deps. Node 22 verified; environment-neutral
 ## Result
 
 ```
-C0 conformance: 14/14 passed
+C0 conformance: 16/16 passed
 exit: 0
 ```
 
@@ -57,6 +57,13 @@ rejected at the resolver.
 path, and `write` with an invalid data type, all return `{ok:false, code}` —
 no exception.
 
+**Backend-agnostic (3 backend shapes proven).** The backend contract is a
+one-level `list` (immediate children); `fileops` owns recursion. Verified
+against: a one-level object store (`MemoryBackend`), a recursive-list backend,
+and a Crate-faithful backend whose `delete` throws on a directory and whose
+`mkdir` is a no-op (dirs implicit). `remove`/`copy`/`glob`/recursive-`list`
+are correct against all three.
+
 ## Seam
 
 `createFileops({ backend, root })` composes the injected storage primitive into
@@ -66,9 +73,19 @@ store in `naklios/index.html`); the suite wires `MemoryBackend` — the C2
 filesystem. One ingress validator (`pathguard.normalizeMountPath`) is the single
 entry for every external path.
 
-## Not yet wired (follow-on)
+## Live wiring (in place; live behaviour unverified headlessly)
 
-The live `BACKENDS` in `naklios/index.html` needs `stat` and `mkdir` added
-(the "if not, add it there" clause of §3) before Rig fileops runs against the
-real store in the browser. The headless gate above is backend-agnostic and does
-not depend on that wiring.
+`naklios/index.html` now carries the live-store wiring (all additive — nothing
+existing calls it, so it cannot regress the shipped app; inert until C2):
+
+- `fsStat` / `fsMkdir` helpers (Folder backend); `stat` returns null for a
+  missing path rather than throwing.
+- `BACKENDS.fsa` and `BACKENDS.crate` gain `stat` + `mkdir`. Crate `stat` maps
+  the manifest entry (`{isDir,size,ts}` → `{type,size,mtimeMs}`) and falls back
+  to a prefix listing for an implicit directory; Crate `mkdir` is a no-op.
+- `rigFileops({root, backendId})` factory — dynamic-imports this module and
+  injects `BACKENDS[bound]`. Not exposed on `window` (that is C4's gated door).
+
+The main inline script passes `node --check` after the edits. The live
+behaviour against a real connected Crate/Folder is **assumed**, not verified —
+it needs a browser smoke or C2's git-adapter checkpoint to confirm.

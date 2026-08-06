@@ -8,6 +8,12 @@
 //   move(from,to)   copy(from,to)   patch(path,unifiedDiff)
 //   glob(pattern,{cwd})   grep(pattern,{cwd,glob,maxResults})
 //
+// Backend contract (deliberately the common denominator of Folder + Crate):
+//   readBinary/write/delete/exists/stat/mkdir act on a single safePath.
+//   list(safeDir) returns the IMMEDIATE children only (one level), each a full
+//   safePath, directories suffixed '/'. Recursion is owned here, not by the
+//   backend — so a one-level Folder (fsList) and an object-store Crate both work.
+//
 // Contract:
 //   - Every external path passes normalizeMountPath (the one ingress). ".."
 //     escapes, absolute escapes, encoded traversal, symlink-out all fail closed.
@@ -66,12 +72,6 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
   if (!backend) throw new Error('createFileops requires a backend');
   const rootPrefix = String(root || '').replace(/\/+$/, '');
 
-  const toMountRel = (safe) => {
-    if (!rootPrefix) return safe;
-    if (safe === rootPrefix) return '';
-    return safe.startsWith(rootPrefix + '/') ? safe.slice(rootPrefix.length + 1) : safe;
-  };
-
   // Validate + fully resolve symlinks, re-checking mount containment on every
   // hop. Returns { ok, path (mount-relative), safe (backend safePath) }.
   async function resolveMount(mountRel, depthLeft) {
@@ -104,6 +104,49 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
   }
 
   const resolve = (p) => resolveMount(p, symlinkDepth);
+
+  // Immediate children of a directory safePath → [{ safe, name, type }].
+  // Collapses whatever the backend returns to one level, so it is correct
+  // whether backend.list is one-level (Folder/fsList) or recursive (an
+  // object-store Crate that returns deep descendants). A deeper entry
+  // contributes its first segment as a directory child.
+  async function listChildren(safeDir) {
+    const raw = await backend.list(safeDir);
+    const base = safeDir === '' ? '' : safeDir + '/';
+    const map = new Map(); // childName -> isDir
+    for (const full0 of raw) {
+      const isDirMark = full0.endsWith('/');
+      const full = isDirMark ? full0.slice(0, -1) : full0;
+      if (full === safeDir) continue;
+      const rel = base ? (full.startsWith(base) ? full.slice(base.length) : full) : full;
+      if (rel === '') continue;
+      const slash = rel.indexOf('/');
+      if (slash === -1) {
+        if (isDirMark) map.set(rel, true);
+        else if (!map.has(rel)) map.set(rel, false);
+      } else {
+        map.set(rel.slice(0, slash), true); // deeper ⇒ a directory at this level
+      }
+    }
+    return [...map.entries()].map(([name, isDir]) => ({
+      safe: base + name, name, type: isDir ? 'dir' : 'file',
+    }));
+  }
+
+  // Depth-first walk. Returns { files:[safe], dirs:[safe] } for all descendants.
+  async function walkAll(safeDir) {
+    const files = [];
+    const dirs = [];
+    const stack = [safeDir];
+    while (stack.length) {
+      const d = stack.pop();
+      for (const c of await listChildren(d)) {
+        if (c.type === 'dir') { dirs.push(c.safe); stack.push(c.safe); }
+        else files.push(c.safe);
+      }
+    }
+    return { files, dirs };
+  }
 
   async function ensureParents(mountPath) {
     const parts = mountPath.split('/');
@@ -168,31 +211,22 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
     const st = await backend.stat(r.safe);
     if (!st) return err('ENOENT', `no such directory: ${r.path}`, { path: r.path });
     if (st.type !== 'dir') return err('ENOTDIR', `not a directory: ${r.path}`, { path: r.path });
-    const raw = await backend.list(r.safe);
-    const basePrefix = r.safe === '' ? '' : r.safe + '/';
-    const childMap = new Map(); // relBase -> type
-    for (const full0 of raw) {
-      const isDirMarker = full0.endsWith('/');
-      const full = isDirMarker ? full0.slice(0, -1) : full0;
-      if (full === r.safe) continue;
-      if (basePrefix && !full.startsWith(basePrefix)) continue;
-      const relBase = basePrefix ? full.slice(basePrefix.length) : full;
-      if (relBase === '') continue;
-      const segs = relBase.split('/');
-      if (opts.recursive) {
-        childMap.set(relBase, isDirMarker ? 'dir' : 'file');
-        for (let k = 1; k < segs.length; k++) childMap.set(segs.slice(0, k).join('/'), 'dir');
-      } else {
-        const child = segs[0];
-        const type = segs.length > 1 ? 'dir' : (isDirMarker ? 'dir' : 'file');
-        if (!childMap.has(child) || type === 'dir') childMap.set(child, type);
-      }
+    const base = r.safe === '' ? '' : r.safe + '/';
+    const toEntry = (safe, type) => {
+      const rel = base ? (safe.startsWith(base) ? safe.slice(base.length) : safe) : safe;
+      return { path: r.path ? r.path + '/' + rel : rel, name: rel.split('/').pop(), type };
+    };
+    let entries;
+    if (opts.recursive) {
+      const { files, dirs } = await walkAll(r.safe);
+      entries = [...dirs.map((d) => toEntry(d, 'dir')), ...files.map((f) => toEntry(f, 'file'))];
+    } else {
+      const children = await listChildren(r.safe);
+      entries = children.map((c) => ({
+        path: r.path ? r.path + '/' + c.name : c.name, name: c.name, type: c.type,
+      }));
     }
-    const entries = [...childMap.keys()].sort().map((rel) => ({
-      path: r.path ? r.path + '/' + rel : rel,
-      name: rel.split('/').pop(),
-      type: childMap.get(rel),
-    }));
+    entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     return { ok: true, entries };
   }
 
@@ -201,18 +235,28 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
     if (!r.ok) return r;
     const st = await backend.stat(r.safe);
     if (!st) return err('ENOENT', `no such path: ${r.path}`, { path: r.path });
+    // Directories are implicit on object stores (Crate.remove throws on a
+    // folder); deleting a dir path there is a no-op success. So dir-path deletes
+    // are best-effort, while file deletes are strict — a failed file delete is a
+    // real EIO, surfaced as a typed result rather than a throw.
+    const deleteDir = async (p) => { try { await backend.delete(p); } catch (_) { /* implicit dir */ } };
+    const deleteFile = async (p) => {
+      try { await backend.delete(p); return null; }
+      catch (e) { return err('EIO', `could not remove ${p}: ${e && e.message ? e.message : e}`); }
+    };
     if (st.type === 'dir') {
-      const raw = await backend.list(r.safe);
-      const descendants = raw.map((p) => (p.endsWith('/') ? p.slice(0, -1) : p))
-        .filter((p) => p !== r.safe && p.startsWith(r.safe + '/'));
-      if (descendants.length > 0 && !opts.recursive) {
+      const { files, dirs } = await walkAll(r.safe);
+      if ((files.length || dirs.length) && !opts.recursive) {
         return err('ENOTEMPTY', `directory not empty: ${r.path}`, { path: r.path });
       }
-      for (const d of raw) await backend.delete(d.endsWith('/') ? d.slice(0, -1) : d);
-      await backend.delete(r.safe);
+      for (const f of files) { const e = await deleteFile(f); if (e) return e; }
+      // deepest-first so a backend that tracks explicit dir markers stays consistent
+      for (const d of dirs.sort((a, b) => b.split('/').length - a.split('/').length)) await deleteDir(d);
+      await deleteDir(r.safe);
       return { ok: true, path: r.path };
     }
-    await backend.delete(r.safe);
+    const e = await deleteFile(r.safe);
+    if (e) return e;
     return { ok: true, path: r.path };
   }
 
@@ -226,13 +270,12 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
     const tst = await backend.stat(tr.safe);
     if (tst) return err('EEXIST', `destination exists: ${tr.path}`, { path: tr.path });
     if (fst.type === 'dir') {
-      const raw = await backend.list(fr.safe);
-      const fromPrefix = fr.safe === '' ? '' : fr.safe + '/';
+      const { files } = await walkAll(fr.safe);
+      const fromBase = fr.safe === '' ? '' : fr.safe + '/';
       if (backend.mkdir) await backend.mkdir(tr.safe);
-      for (const full0 of raw) {
-        if (full0.endsWith('/')) continue;
-        const rel = fromPrefix ? full0.slice(fromPrefix.length) : full0;
-        const bytes = await backend.readBinary(full0);
+      for (const f of files) {
+        const rel = f.startsWith(fromBase) ? f.slice(fromBase.length) : f;
+        const bytes = await backend.readBinary(f);
         await backend.write(joinRoot(tr.safe, rel), bytes);
       }
       return { ok: true, from: fr.path, to: tr.path };
@@ -267,14 +310,12 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
   async function glob(pattern, opts = {}) {
     const cr = await resolve(opts.cwd || '');
     if (!cr.ok) return cr;
-    const raw = await backend.list(cr.safe);
-    const basePrefix = cr.safe === '' ? '' : cr.safe + '/';
+    const { files } = await walkAll(cr.safe);
+    const base = cr.safe === '' ? '' : cr.safe + '/';
     const re = globToRegExp(pattern);
     const matches = [];
-    for (const full0 of raw) {
-      if (full0.endsWith('/')) continue;
-      if (basePrefix && !full0.startsWith(basePrefix)) continue;
-      const rel = basePrefix ? full0.slice(basePrefix.length) : full0;
+    for (const f of files) {
+      const rel = base ? (f.startsWith(base) ? f.slice(base.length) : f) : f;
       if (re.test(rel)) matches.push(cr.path ? cr.path + '/' + rel : rel);
     }
     matches.sort();
@@ -292,7 +333,7 @@ export function createFileops({ backend, root = '', symlinkDepth = 8, grepCap = 
     let truncated = false;
     outer: for (const p of globbed.matches) {
       const rd = await read(p, { encoding: 'utf-8' });
-      if (!rd.ok) continue; // skip unreadable/binary lines silently
+      if (!rd.ok) continue; // skip unreadable/binary silently
       const lines = rd.data.split('\n');
       for (let i = 0; i < lines.length; i++) {
         if (re.test(lines[i])) {

@@ -2141,6 +2141,28 @@ async function fsExists(path){
     } catch(_){ return false; }
   }
 }
+// Rig fileops (C0) additions. Return null for a missing path (fileops expects a
+// typed absence, not a throw); type/size/mtime for a file or directory.
+async function fsStat(path){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  if (!path) return { type: 'dir', size: 0, mtimeMs: 0 };
+  try {
+    const { dir, name } = await fsGetDir(path);
+    try {
+      const fh = await dir.getFileHandle(name);
+      const file = await fh.getFile();
+      return { type: 'file', size: file.size, mtimeMs: file.lastModified };
+    } catch(_){
+      await dir.getDirectoryHandle(name);
+      return { type: 'dir', size: 0, mtimeMs: 0 };
+    }
+  } catch(_){ return null; }
+}
+async function fsMkdir(path){
+  if (!state.fsHandle) throw new Error('No folder connected');
+  const { dir, name } = await fsGetDir(path, true);
+  if (name) await dir.getDirectoryHandle(name, { create: true });
+}
 
 // Connection / lifecycle.
 async function fsConnect(){
@@ -4590,6 +4612,8 @@ const BACKENDS = {
     async delete(safePath){ await fsDelete(safePath); },
     async exists(safePath){ return await fsExists(safePath); },
     async list(prefix){ return await fsList(prefix); },
+    async stat(safePath){ return await fsStat(safePath); },
+    async mkdir(safePath){ await fsMkdir(safePath); },
   },
   crate: {
     id: 'crate',
@@ -4631,6 +4655,17 @@ const BACKENDS = {
         return e.isDir && !p.endsWith('/') ? p + '/' : p;
       }).sort();
     },
+    // Rig fileops (C0) additions. Crate holds no manifest entry for an implicit
+    // directory, so stat() falls back to a prefix listing to report a dir; mkdir
+    // is a no-op because directories are implicit on the object store.
+    async stat(safePath){
+      const s = await state.crate.stat('/' + safePath);
+      if (s) return { type: s.isDir ? 'dir' : 'file', size: s.size ?? 0, mtimeMs: s.ts ?? 0 };
+      const kids = await state.crate.list('/' + safePath);
+      if (Array.isArray(kids) && kids.length) return { type: 'dir', size: 0, mtimeMs: 0 };
+      return null;
+    },
+    async mkdir(_safePath){ /* implicit dirs on the object store — no-op */ },
   },
 };
 
@@ -4652,6 +4687,17 @@ function backendsAvailable(){
   if (BACKENDS.fsa.isConnected()) out.push('fsa');
   if (BACKENDS.crate.isConnected()) out.push('crate');
   return out;
+}
+
+// Rig fileops (C0) factory. System code (the C2 git adapter, Forge) builds a
+// live fileops instance over a bound storage backend. Deliberately NOT exposed
+// on window — window.rig is C4's developer-gated surface, off by default.
+let _rigFileopsMod = null;
+async function rigFileops({ root = '', backendId } = {}){
+  const bid = backendId || backendsAvailable()[0];
+  if (!bid) throw new Error('No storage backend connected');
+  if (!_rigFileopsMod) _rigFileopsMod = await import('./sys/rig/fileops/index.mjs');
+  return _rigFileopsMod.createFileops({ backend: BACKENDS[bid], root });
 }
 
 function backendDescriptor(backendId){

@@ -174,6 +174,62 @@ await test('grep finds lines, caps, reports truncation', async () => {
   eq(capped.truncated, true, 'truncation reported');
 });
 
+// ── backend-agnostic: a recursive-list backend collapses correctly ───────
+// The live Folder backend (fsList) lists one level; a Crate object-store may
+// list recursively. fileops must be correct against both. This backend returns
+// ALL descendants for any prefix; fileops must still yield correct children.
+class RecursiveBackend extends MemoryBackend {
+  async list(prefix) {
+    const under = (k) => prefix === '' ? true : (k === prefix || k.startsWith(prefix + '/'));
+    const out = new Set();
+    for (const k of this.files.keys()) if (under(k) && k !== prefix) out.add(k);
+    for (const k of this.symlinks.keys()) if (under(k) && k !== prefix) out.add(k);
+    for (const d of this.dirs) if (under(d) && d !== prefix) out.add(d + '/');
+    return [...out].sort();
+  }
+}
+
+await test('fileops collapses a recursive-list backend to correct children', async () => {
+  const fs = createFileops({ backend: new RecursiveBackend() });
+  await fs.write('proj/src/a.js', '1');
+  await fs.write('proj/src/deep/b.js', '2');
+  await fs.write('proj/readme.md', 'r');
+  const top = await fs.list('proj');
+  eq(JSON.stringify(top.entries.map((e) => `${e.name}:${e.type}`).sort()),
+    JSON.stringify(['readme.md:file', 'src:dir']), 'immediate children from a recursive backend');
+  const rec = await fs.list('proj', { recursive: true });
+  const files = rec.entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  eq(JSON.stringify(files), JSON.stringify(['proj/readme.md', 'proj/src/a.js', 'proj/src/deep/b.js']), 'recursive walk');
+  const g = await fs.glob('**/*.js', { cwd: 'proj' });
+  eq(JSON.stringify(g.matches.sort()), JSON.stringify(['proj/src/a.js', 'proj/src/deep/b.js']), 'glob over recursive backend');
+});
+
+// Model the live Crate object store: recursive list, dirs are implicit,
+// delete() throws on a directory ("refuse to remove a folder"), mkdir is a
+// no-op. fileops.remove/copy must still be correct against it.
+class ObjectStoreBackend extends RecursiveBackend {
+  async mkdir(_safePath) { /* implicit dirs — no-op */ }
+  async delete(safePath) {
+    const st = await this.stat(safePath);
+    if (st && st.type === 'dir') throw new Error('refuse to remove a folder');
+    this.files.delete(safePath);
+    this.symlinks.delete(safePath);
+  }
+}
+
+await test('object-store backend: recursive remove + copy work despite dir-delete throwing', async () => {
+  const fs = createFileops({ backend: new ObjectStoreBackend() });
+  await fs.write('proj/a.txt', 'A');
+  await fs.write('proj/sub/b.txt', 'B');
+  const cp = await fs.copy('proj', 'copyOfProj');
+  assert(cp.ok, 'dir copy ok');
+  eq((await fs.read('copyOfProj/sub/b.txt', { encoding: 'utf-8' })).data, 'B', 'nested file copied');
+  const rm = await fs.remove('proj', { recursive: true });
+  assert(rm.ok, `recursive remove ok (got ${rm.code || 'ok'})`);
+  eq((await fs.stat('proj')).code, 'ENOENT', 'dir gone after remove');
+  eq((await fs.stat('proj/sub/b.txt')).code, 'ENOENT', 'nested file gone');
+});
+
 // ── traversal rejection matrix — every class fails closed ───────────────
 await test('traversal matrix: all escape classes rejected at the validator', async () => {
   const fs = newFs('mnt'); // non-empty mount root so ".." above it is meaningful

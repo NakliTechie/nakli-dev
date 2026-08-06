@@ -77,12 +77,31 @@ export class MemoryBackend {
     return null;
   }
 
+  // Contract: IMMEDIATE children only (one level), each a full safePath,
+  // directories suffixed '/'. Mirrors the Folder backend's fsList; fileops owns
+  // recursion. A key with a deeper segment contributes its first segment as a
+  // directory child.
   async list(prefix) {
-    const under = (key) => prefix === '' ? true : (key === prefix || key.startsWith(prefix + '/'));
-    const out = new Set();
-    for (const k of this.files.keys()) if (under(k) && k !== prefix) out.add(k);
-    for (const k of this.symlinks.keys()) if (under(k) && k !== prefix) out.add(k);
-    for (const d of this.dirs) if (under(d) && d !== prefix) out.add(d + '/');
-    return [...out].sort();
+    const base = prefix === '' ? '' : prefix + '/';
+    const children = new Map(); // childName -> isDir
+    const consider = (key, forceDir) => {
+      if (prefix !== '' && !(key === prefix || key.startsWith(base))) return;
+      if (key === prefix) return;
+      const rest = base ? key.slice(base.length) : key;
+      if (rest === '') return;
+      const slash = rest.indexOf('/');
+      if (slash === -1) {
+        if (forceDir) children.set(rest, true);
+        else if (!children.has(rest)) children.set(rest, false);
+      } else {
+        children.set(rest.slice(0, slash), true); // deeper key ⇒ this level is a dir
+      }
+    };
+    for (const k of this.files.keys()) consider(k, false);
+    for (const k of this.symlinks.keys()) consider(k, false);
+    for (const d of this.dirs) consider(d, true);
+    return [...children.entries()]
+      .map(([name, isDir]) => base + name + (isDir ? '/' : ''))
+      .sort();
   }
 }
