@@ -1,0 +1,110 @@
+// pyodide-runtime — the REAL runtime the MockRuntime stands in for.
+//
+// This is the executor that runs inside the Kiln Worker: it holds a persistent
+// Python namespace, runs code against it, captures stdout/stderr/traceback,
+// caps output, and honours an interrupt via a SharedArrayBuffer byte. It matches
+// the same contract createKernelCore expects, so the mock and the real thing are
+// interchangeable.
+//
+// Verification status: the kernel-core orchestration + consent gate are verified
+// headlessly (test/conformance.test.mjs, 9/9). This adapter's real-Python
+// behaviour (namespace persistence, KeyboardInterrupt on a runaway loop,
+// tracebacks) is verified in the browser Worker with real Pyodide — see
+// CHECKPOINT-K0.md "browser follow-on". No fabricated headless claim is made
+// for it.
+
+// Pinned Pyodide (hard rule #11: never auto-download — the loader shows this
+// size and asks before fetching).
+export const PYODIDE_VERSION = 'v0.26.4';
+export const PYODIDE_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`;
+export const PYODIDE_APPROX_BYTES = 12 * 1024 * 1024; // ~12 MiB core, for the consent prompt
+
+// Strip anything secret-shaped from a traceback before it crosses to the UI or
+// the op-log (§9). Mirrors the scrollback redactor.
+const TOKEN_PATTERNS = [
+  /\b(sk|pk|ghp|gho|xox[baprs])[-_][A-Za-z0-9]{16,}\b/g,
+  /\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/g,
+  /\b[A-Fa-f0-9]{64,}\b/g,
+];
+export function sanitizeTraceback(text) {
+  let out = String(text);
+  for (const re of TOKEN_PATTERNS) out = out.replace(re, '[redacted]');
+  return out;
+}
+
+/**
+ * Wrap a loaded Pyodide instance as a Kiln runtime.
+ *
+ * @param {object} pyodide          a loaded Pyodide (loadPyodide result)
+ * @param {Uint8Array} [interruptBuffer]  a Uint8Array over a SharedArrayBuffer;
+ *   setting [0]=2 raises KeyboardInterrupt in the running cell. Set on the main
+ *   thread while the Worker is busy — that is the whole point of the SAB.
+ */
+export function createPyodideRuntime(pyodide, interruptBuffer) {
+  if (interruptBuffer) pyodide.setInterruptBuffer(interruptBuffer);
+  // A dedicated namespace dict so reset() is clean and we never clobber builtins.
+  let ns = pyodide.runPython('dict()');
+
+  async function runCode(code, { outputCapBytes } = {}) {
+    let stdout = '';
+    let stderr = '';
+    let truncated = false;
+    const cap = (buf, s) => {
+      if (truncated) return buf;
+      const next = buf + s;
+      if (outputCapBytes && next.length >= outputCapBytes) { truncated = true; return next.slice(0, outputCapBytes); }
+      return next;
+    };
+    pyodide.setStdout({ batched: (s) => { stdout = cap(stdout, s); } });
+    pyodide.setStderr({ batched: (s) => { stderr = cap(stderr, s); } });
+    if (interruptBuffer) interruptBuffer[0] = 0; // clear before each run
+
+    let traceback = null;
+    let result = null;
+    let interrupted = false;
+    try {
+      const r = await pyodide.runPythonAsync(code, { globals: ns });
+      result = r == null ? null : (typeof r === 'object' && r.toString ? r.toString() : String(r));
+      if (r && typeof r.destroy === 'function') r.destroy();
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (/KeyboardInterrupt/.test(msg)) interrupted = true;
+      else traceback = sanitizeTraceback(msg);
+    } finally {
+      pyodide.setStdout({});
+      pyodide.setStderr({});
+    }
+    return { stdout, stderr, result, traceback, interrupted, truncated };
+  }
+
+  function interrupt() {
+    if (interruptBuffer) interruptBuffer[0] = 2; // SIGINT
+  }
+
+  function listNames() {
+    const proxy = pyodide.runPython('list(k for k in globals().keys() if not k.startswith("__"))', { globals: ns });
+    const names = proxy.toJs ? proxy.toJs() : [];
+    if (proxy.destroy) proxy.destroy();
+    return names;
+  }
+
+  function inspect(name) {
+    const info = pyodide.runPython(
+      `__k = globals().get(${JSON.stringify(name)});\n`
+      + '(None if __k is None else {"type": type(__k).__name__, "repr": repr(__k)[:200]})',
+      { globals: ns },
+    );
+    if (info == null) return null;
+    const obj = info.toJs ? Object.fromEntries(info.toJs()) : info;
+    if (info.destroy) info.destroy();
+    return obj;
+  }
+
+  function reset({ keepMounts } = {}) {
+    if (ns && ns.destroy) ns.destroy();
+    ns = pyodide.runPython('dict()');
+    // keepMounts is honoured by the fs bridge (K1); the namespace is always fresh.
+  }
+
+  return { runCode, interrupt, listNames, inspect, reset };
+}
