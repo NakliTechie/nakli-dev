@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Kiln K1 — fs bridge from inside Python (PARKED)</title>
+<style>body{font:14px ui-monospace,monospace;padding:1rem;background:#0b0d10;color:#d7dbe0}pre{white-space:pre-wrap}</style></head>
+<body>
+  <h1>Kiln K1 — fs bridge escape rejection FROM INSIDE PYTHON</h1>
+  <pre id="out">loading…</pre>
+  <script type="module">
+    // PARKED operator check (autopilot cannot drive a browser). Serve naklios and
+    // open this page, then confirm the handoff K1 clause "every escape class
+    // rejected from INSIDE Python" holds: the bridge is exposed to Python and a
+    // Python-side escape attempt is refused with EINVAL_PATH, while an in-mount
+    // path round-trips. The headless JS side is already green
+    // (sys/kiln/test/fs-bridge.test.mjs). This confirms the boundary holds when
+    // the caller is Python, not JS.
+    //
+    // NOTE: the full K1 also mounts the bridge into the Pyodide Emscripten FS so
+    // Python's own open()/os path sees the subtree — that Worker+FS wiring is the
+    // remaining K1 browser work. This harness verifies the bridge contract across
+    // the JS↔Python boundary via an exposed callable, which is the security-
+    // relevant half.
+    const PY = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+    const out = document.getElementById('out');
+    const results = [];
+    const eq = (a,b,m)=>{ if(a!==b) throw new Error(`${m||'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); };
+    const assert=(c,m)=>{ if(!c) throw new Error(m||'assert'); };
+    async function check(name, fn){ try{ await fn(); results.push({name,ok:true}); }catch(e){ results.push({name,ok:false,detail:String(e&&e.message||e)}); } }
+    try {
+      const { loadPyodide } = await import(PY + 'pyodide.mjs');
+      const { MemoryBackend } = await import('/sys/rig/fileops/index.mjs');
+      const { createFsBridge } = await import('/sys/kiln/fs-bridge.mjs');
+      const pyodide = await loadPyodide({ indexURL: PY });
+      const bridge = createFsBridge({ backend: new MemoryBackend(), mount: 'app/data' });
+      await bridge.write('ok.txt', 'inside');
+      // expose read/write to Python (returns JS result objects Python can await)
+      pyodide.globals.set('_read', async (p) => bridge.readText(p));
+      pyodide.globals.set('_write', async (p, d) => bridge.write(p, d));
+
+      await check('in-mount read round-trips from Python', async () => {
+        const r = await pyodide.runPythonAsync(`(await _read("ok.txt")).to_py()`);
+        const o = r.toJs ? Object.fromEntries(r) : r;
+        eq(o.ok, true, 'ok'); eq(o.data, 'inside', 'content');
+      });
+      await check('a Python-side escape is rejected (EINVAL_PATH)', async () => {
+        const r = await pyodide.runPythonAsync(`(await _read("../../secret")).to_py()`);
+        const o = r.toJs ? Object.fromEntries(r) : r;
+        eq(o.ok, false, 'rejected'); eq(o.code, 'EINVAL_PATH', 'EINVAL_PATH from inside Python');
+      });
+
+      const passed = results.filter(r=>r.ok).length, failed = results.length-passed;
+      out.textContent = `Kiln K1 fs-bridge from Python: ${passed}/${results.length} passed` + (failed?` — ${failed} FAILED`:'');
+      for (const r of results) out.textContent += '\n' + (r.ok?'  PASS ':'  FAIL ') + r.name + (r.detail?'\n      '+r.detail:'');
+      window.__bridgeresults = { passed, failed, total: results.length, results };
+      document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+    } catch (e) {
+      out.textContent = 'HARNESS ERROR (expected until the K1 Worker/FS mount lands): ' + (e && e.stack || e);
+      window.__bridgeresults = { error: String(e && e.message || e) };
+    }
+  </script>
+</body>
+</html>
