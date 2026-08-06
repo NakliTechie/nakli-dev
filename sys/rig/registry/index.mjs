@@ -10,17 +10,23 @@
 // and Kiln bindings all consume it.
 import { createRegistry, KNOWN_SCOPES } from './registry.mjs';
 import { buildFileopsCommands } from './fileops-commands.mjs';
+import { buildGitCommands } from './git-commands.mjs';
 
 export { createRegistry, KNOWN_SCOPES } from './registry.mjs';
 export { buildFileopsCommands } from './fileops-commands.mjs';
+export { buildGitCommands } from './git-commands.mjs';
 
 /**
- * Build the Rig registry over a fileops instance (C2 will add git commands to
- * the same registry).
+ * Build the Rig registry over a fileops instance, plus git commands when a
+ * git core is supplied. Both surfaces share the one registry.
  * @param {object} opts
- * @param {object} opts.fs   a createFileops(...) instance
+ * @param {object} opts.fs     a createFileops(...) instance
+ * @param {object} [opts.git]  a createGitCore(...) instance
  */
-export function buildRigRegistry({ fs }) {
+export function buildRigRegistry({ fs, git }) {
   if (!fs) throw new Error('buildRigRegistry requires a fileops instance (fs)');
-  return createRegistry([...buildFileopsCommands(fs)]);
+  return createRegistry([
+    ...buildFileopsCommands(fs),
+    ...(git ? buildGitCommands(git) : []),
+  ]);
 }

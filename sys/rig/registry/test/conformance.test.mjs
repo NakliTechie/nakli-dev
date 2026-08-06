@@ -9,6 +9,7 @@
 // is the sole invoker and wires through to fileops.
 
 import { createFileops, MemoryBackend } from '../../fileops/index.mjs';
+import { createGitCore } from '../../git/git-core.mjs';
 import { buildRigRegistry, KNOWN_SCOPES } from '../index.mjs';
 
 // ── tiny harness ──────────────────────────────────────────────────────────
@@ -28,13 +29,15 @@ function fnv(str) {
   return h >>> 0;
 }
 
-// Seed a fileops with a small tree and build a registry over it.
+// Seed a fileops with a small tree and build a registry over fs + git, so the
+// generated-from-metadata contract covers fs.* and git.* alike.
 async function seeded() {
   const fs = createFileops({ backend: new MemoryBackend() });
   await fs.write('src/a.js', 'const a = 1;\n// TODO tidy\n');
   await fs.write('src/b.txt', 'plain\n');
   await fs.write('readme.md', '# hi\n');
-  return { fs, registry: buildRigRegistry({ fs }) };
+  const git = createGitCore({ fs, dir: '/' });
+  return { fs, git, registry: buildRigRegistry({ fs, git }) };
 }
 
 // Hash of the whole tree — path + bytes, sorted. Discovery must not change it.
@@ -148,6 +151,38 @@ await test('toolSchemas emits LLM-shaped metadata from the registry', async () =
     assert(s.name && s.description && s.inputSchema, `${s.name}: name/description/inputSchema`);
     assert(!('run' in s) && !('execute' in s), `${s.name}: no handler leaked`);
   }
+});
+
+// ── git.* registered on the same registry, driven end-to-end through it ──
+await test('git.* commands register and a full flow drives through invokeCommand', async () => {
+  const { registry } = await seeded();
+  const names = new Set(registry.commands.map((c) => c.name));
+  for (const n of ['git.init', 'git.add', 'git.commit', 'git.status', 'git.log',
+    'git.diff', 'git.branch', 'git.checkout', 'git.resolveRef', 'git.statusMatrix']) {
+    assert(names.has(n), `missing ${n}`);
+  }
+  // The whole flow — fs.* and git.* — goes through the one invokeCommand.
+  assert((await registry.invokeCommand('git.init', { defaultBranch: 'main' })).ok, 'git.init');
+  assert((await registry.invokeCommand('fs.write', { path: 'g.txt', data: 'hi\n' })).ok, 'fs.write');
+  assert((await registry.invokeCommand('git.add', { filepath: 'g.txt' })).ok, 'git.add');
+  const c = await registry.invokeCommand('git.commit', {
+    message: 'via registry', actor: 'operator', identity: { name: 'O', email: 'o@x' }, timestamp: 0,
+  });
+  assert(c.ok && c.oid, 'git.commit via registry');
+  const rr = await registry.invokeCommand('git.resolveRef', { ref: 'HEAD' });
+  eq(rr.oid, c.oid, 'HEAD resolves to the commit, all through the registry');
+});
+
+await test('git.commit as agent through the registry cannot borrow the operator identity', async () => {
+  const { registry } = await seeded();
+  await registry.invokeCommand('git.init', { defaultBranch: 'main' });
+  await registry.invokeCommand('fs.write', { path: 'x.txt', data: 'x\n' });
+  await registry.invokeCommand('git.add', { filepath: 'x.txt' });
+  const c = await registry.invokeCommand('git.commit', {
+    message: 'agent', actor: 'agent', identity: { name: 'Op', email: 'op@x' }, session: { id: 's1' }, timestamp: 0,
+  });
+  assert(c.ok, 'agent commit ok');
+  eq(c.actor, 'agent', 'recorded as agent');
 });
 
 // ── report ──────────────────────────────────────────────────────────────

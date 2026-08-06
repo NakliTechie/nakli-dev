@@ -32,8 +32,11 @@
 // Handlers live on the command via a closure over an injected host (fileops,
 // git core, …), mirroring NakliData's `buildAgentTools(host)`.
 
-/** Grant scopes a command may require. Extended by C2 (git.*) etc. */
-export const KNOWN_SCOPES = new Set(['fs:read', 'fs:write', 'fs:remove']);
+/** Grant scopes a command may require. */
+export const KNOWN_SCOPES = new Set([
+  'fs:read', 'fs:write', 'fs:remove',
+  'git:read', 'git:write', 'git:remote', 'git:push',
+]);
 
 // Fields exposed by discovery. `run` is deliberately absent: projecting a
 // command can never reach its handler.
