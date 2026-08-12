@@ -78,6 +78,9 @@ jobs:
       - name: Verify static-asset delivery exclusions
         run: node scripts/verify-delivery.mjs
 
+      - name: Verify naklios.com redirect Worker
+        run: node scripts/test-naklios-com-redirect.mjs
+
       - name: Verify task folders and first-party desktop defaults
         run: node scripts/test-app-catalog.mjs
 

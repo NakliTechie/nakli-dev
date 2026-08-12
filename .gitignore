@@ -16,6 +16,8 @@ plan/
 !scripts/*
 !docs/
 !docs/**
+!redirects/
+!redirects/**
 !test/
 !test/**
 !.github/

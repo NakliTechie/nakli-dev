@@ -4,6 +4,11 @@ A private, browser-native desktop for single-file tools. Apps stay standalone; N
 
 **Try it: [naklios.dev](https://naklios.dev/)**
 
+`naklios.dev` is the canonical origin. `naklios.com` and
+`www.naklios.com` use the versioned Worker under
+[`redirects/naklios-com/`](redirects/naklios-com/) to preserve the request
+path and query while redirecting to the canonical origin.
+
 Dozens of privacy-first tools, games, and utilities — each a single HTML file that runs entirely in your tab. A new profile starts with one skippable welcome action that creates a real Browser-backed note; storage setup waits until it is actually needed. The desktop is grouped into Essentials, Create & Convert, Think & Research, Work & Build, Privacy & Security, and Play. No build step, backend, or telemetry.
 
 ## Modes

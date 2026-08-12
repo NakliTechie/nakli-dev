@@ -1,0 +1,16 @@
+{
+  "name": "naklios-com-redirect",
+  "main": "./worker.mjs",
+  "compatibility_date": "2026-05-14",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "naklios.com/*",
+      "zone_name": "naklios.com"
+    },
+    {
+      "pattern": "www.naklios.com/*",
+      "zone_name": "naklios.com"
+    }
+  ]
+}

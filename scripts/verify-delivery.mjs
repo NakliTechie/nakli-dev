@@ -24,6 +24,7 @@ const expectedRules = [
   'node_modules/',
   'plan/',
   'scripts/',
+  'redirects/',
   'test/',
   '**/test/',
   '**/*.test.mjs',
