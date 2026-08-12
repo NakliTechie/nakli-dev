@@ -1453,6 +1453,9 @@ const APPS = [
   { id:'reel', name:'Reel', url:'https://reel.naklitechie.com/', embedUrl:'https://naklios.dev/apps/reel/', glyph:'▶', bg:'brand',
     description:'A private browser media player for local MKV, MP4, and WebM files. No upload, account, or telemetry.', tags:['media','privacy','tool'],
     svg:`<circle cx="12" cy="12" r="9"/><polygon points="10,8 17,12 10,16" fill="currentColor" stroke="none"/>` },
+  { id:'nakliamp', name:'NakliAmp', url:'https://nakliamp.naklitechie.com/', embedUrl:'https://naklios.dev/apps/nakliamp/', glyph:'♫', bg:'ok',
+    description:'An M0 preview for playing one local music file without uploads, accounts, or telemetry.', tags:['music','media','privacy','tool'],
+    svg:`<path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>` },
   { id:'mantra', name:'Mantra', url:'https://mantra.naklitechie.com/', glyph:'📿', bg:'act',
     description:'Type a prompt once and see how Claude, GPT, Gemini, and local models answer — side by side. Your API keys never leave your browser.', tags:['ai','developer','tool'], maxMode:'basic',
     svg:`<circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M5.5 12L20 6"/><path d="M5.5 12L20 12"/><path d="M5.5 12L20 18"/>` },
@@ -1754,7 +1757,7 @@ const FOLDERS = [
   { id:'fld-privacy', kind:'folder', name:'Privacy & Security', glyph:'🔐', bg:'brand',
     apps:['tijori','rotor','mehfil'] },
   { id:'fld-games', kind:'folder', name:'Play', glyph:'🎮', bg:'act',
-    apps:['reel','minesweeper','solitaire','spider','kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
+    apps:['reel','nakliamp','minesweeper','solitaire','spider','kolocal','gambit','kingme','tictactoe','strait','chokepoint'] },
 ];
 if (THIRD_PARTY_CATALOG_APPS.length){
   FOLDERS.push({

@@ -25,9 +25,15 @@ try {
   );
   const catalogErrors = await auditAppInventory(rootDir, brokenHtml, manifest, lock);
   assert.ok(catalogErrors.some(error => error.includes('catalog embedUrl')), 'catalog/mirror path drift is rejected');
+
+  await writeFile(path.join(fixture, 'apps', 'forge', 'index.html'), '<!doctype html><title>Forge</title>');
+  const shippedPlanningErrors = await auditAppInventory(fixture, html, manifest, lock);
+  assert.ok(
+    shippedPlanningErrors.some(error => error.includes('forge: on-disk app has no catalog entry')),
+    'a Forge index terminates the planning-only inventory exception',
+  );
 } finally {
   await rm(fixture, { recursive: true, force: true });
 }
 
 console.log('NakliOS deterministic app inventory audit behavior: PASS');
-

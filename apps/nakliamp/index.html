@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="nakliamp-version" content="0.1.0-m0">
+<meta name="description" content="Play music files privately in your browser. Your audio stays on your device.">
+<meta name="theme-color" content="#161310">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<title>NakliAmp — local music player</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#161310;--panel:#1f1a15;--panel-2:#26201a;--line:#3a3026;
+  --text:#efe8da;--muted:#9d9180;--faint:#6f6558;--accent:#e0a24a;
+  --accent-ink:#1a1206;--good:#8fbf7f;--warn:#d98c5f;--refuse:#d27464;
+  --display:"Arial Rounded MT Bold","Trebuchet MS",system-ui,sans-serif;
+  --body:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  --radius:14px;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0}
+body{background:
+  radial-gradient(circle at 18% -10%,rgba(224,162,74,.11),transparent 34rem),
+  radial-gradient(circle at 90% 110%,rgba(100,73,42,.16),transparent 34rem),var(--bg);
+  color:var(--text);font-family:var(--body);font-size:14px}
+button,input{font:inherit}
+button{color:inherit}
+button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}
+.topbar{height:66px;padding:0 clamp(18px,4vw,54px);display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--line);background:rgba(22,19,16,.78);backdrop-filter:blur(18px)}
+.brand{font-family:var(--display);font-size:20px;font-weight:900;letter-spacing:-.04em}.brand em{font-style:normal;color:var(--accent)}
+.version{font:10px var(--mono);color:var(--faint);border:1px solid var(--line);padding:3px 7px;border-radius:999px}
+.path-chip{margin-left:auto;font:10px var(--mono);letter-spacing:.04em;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 36%,var(--line));padding:5px 9px;border-radius:999px}
+.path-chip:empty{display:none}
+main{min-height:0;display:grid;place-items:center;padding:clamp(24px,6vw,76px)}
+.screen{display:none;width:100%}.screen.on{display:block}
+.empty{max-width:720px;margin:auto;text-align:center}
+.record-mark{width:92px;height:92px;margin:0 auto 25px;border-radius:50%;position:relative;border:1px solid #55442f;background:
+  radial-gradient(circle,#161310 0 8%,#e0a24a 9% 14%,#17130f 15% 20%,#35291e 21% 23%,#17130f 24% 36%,#2f251c 37% 39%,#17130f 40% 55%,#2f251c 56% 58%,#17130f 59% 100%);
+  box-shadow:0 22px 60px rgba(0,0,0,.35)}
+.empty h1{font-family:var(--display);font-size:clamp(32px,6vw,58px);line-height:1;letter-spacing:-.055em;margin:0 0 13px}
+.empty .lede{max-width:520px;margin:0 auto;color:var(--muted);font-size:16px;line-height:1.6}
+.drop{max-width:640px;margin:34px auto 0;padding:28px;border:1px dashed #554638;border-radius:18px;background:rgba(31,26,21,.78);transition:border-color .18s,background .18s,transform .18s}
+.drop.drag{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--panel));transform:translateY(-2px)}
+.drop p{margin:0 0 18px;color:var(--muted)}
+.actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.btn{min-height:42px;border:1px solid var(--line);border-radius:10px;padding:9px 16px;background:var(--panel-2);cursor:pointer}
+.btn:hover{border-color:#65513e}.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:750}
+.fine{margin-top:18px;color:var(--faint);font:10px/1.7 var(--mono);letter-spacing:.02em}
+.player{max-width:1040px;margin:auto}
+.player-grid{display:grid;grid-template-columns:minmax(250px,390px) minmax(300px,1fr);gap:clamp(34px,7vw,86px);align-items:center}
+.art{aspect-ratio:1;border:1px solid var(--line);border-radius:24px;position:relative;overflow:hidden;background:
+  linear-gradient(145deg,rgba(245,190,100,.86),rgba(140,75,34,.95) 45%,rgba(42,28,19,.98));box-shadow:0 35px 90px -38px rgba(224,162,74,.58)}
+.art:before{content:"";position:absolute;width:72%;height:72%;border-radius:50%;left:14%;top:14%;background:repeating-radial-gradient(circle,#15120f 0 3px,#282019 4px 6px);box-shadow:0 12px 40px rgba(0,0,0,.42)}
+.art:after{content:"";position:absolute;width:14%;height:14%;border-radius:50%;left:43%;top:43%;background:var(--accent);border:7px solid #1b1612}
+.art-letter{position:absolute;inset:auto 20px 18px;z-index:1;font-family:var(--display);font-weight:900;font-size:clamp(34px,6vw,70px);line-height:.8;color:rgba(255,245,225,.92);text-shadow:0 3px 22px #2d180c}
+.eyebrow{font:10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:12px}
+.track-name{font-family:var(--display);font-size:clamp(27px,4vw,45px);line-height:1.05;letter-spacing:-.045em;margin:0;overflow-wrap:anywhere}
+.track-meta{color:var(--muted);margin:11px 0 26px;font-size:14px}
+.honesty{display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);font:10px var(--mono);color:var(--muted)}
+.honesty .arrow{color:var(--faint)}.honesty .active{color:var(--good)}.honesty .warning{color:var(--warn)}
+.timeline{display:grid;grid-template-columns:44px 1fr 44px;gap:10px;align-items:center;margin:27px 0 20px;color:var(--faint);font:10px var(--mono)}
+input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
+.transport{display:flex;align-items:center;gap:11px}
+.round{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--panel);cursor:pointer;display:grid;place-items:center}
+.round:hover{background:var(--panel-2)}.round.play{width:54px;height:54px;background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-size:17px}
+.volume-wrap{margin-left:12px;display:flex;align-items:center;gap:8px;flex:1;max-width:170px;color:var(--muted)}
+.open-another{margin-left:auto}
+.refusal{max-width:720px;margin:auto}
+.refusal .code{font:10px var(--mono);letter-spacing:.1em;color:var(--refuse);text-transform:uppercase}
+.refusal h2{font-family:var(--display);font-size:clamp(30px,5vw,50px);letter-spacing:-.045em;margin:12px 0}
+.refusal p{color:var(--muted);font-size:16px;line-height:1.65}
+.refusal-card{margin:28px 0;padding:18px 20px;border:1px solid color-mix(in srgb,var(--refuse) 45%,var(--line));border-left:3px solid var(--refuse);border-radius:12px;background:var(--panel)}
+.refusal-card strong{color:var(--refuse)}
+footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:10px 20px;text-align:center;color:var(--faint);font:10px/1.5 var(--mono)}
+.toast{position:fixed;right:22px;bottom:68px;max-width:min(390px,calc(100vw - 44px));padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#211b16;box-shadow:0 18px 50px rgba(0,0,0,.4);color:var(--text);font-size:13px}
+.toast[hidden]{display:none}
+@media(max-width:760px){.topbar{padding:0 18px}.player-grid{grid-template-columns:1fr}.art{max-width:310px;width:74vw;margin:auto}.track{text-align:center}.honesty,.transport{justify-content:center}.open-another{margin-left:0}.volume-wrap{max-width:130px}main{padding:28px 18px 46px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">Nakli<em>Amp</em></div>
+    <span class="version">v0.1.0-m0 · preview</span>
+    <span class="path-chip" id="path-chip"></span>
+  </header>
+
+  <main>
+    <section class="screen empty on" id="empty" aria-labelledby="empty-title">
+      <div class="record-mark" aria-hidden="true"></div>
+      <h1 id="empty-title" data-t="empty.title">Your music. Still yours.</h1>
+      <p class="lede" data-t="empty.body">Open one track from your device. NakliAmp plays it here without an upload, account, or analytics.</p>
+      <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-detail">
+        <p id="drop-detail" data-t="empty.drop">Drop an audio file here, or choose one from your device.</p>
+        <div class="actions">
+          <button class="btn primary" id="open-file" type="button" data-t="action.open">Open audio file</button>
+        </div>
+        <div class="fine">MP3 · FLAC · AAC/M4A · OPUS · OGG/VORBIS · WAV · MKA</div>
+      </div>
+    </section>
+
+    <section class="screen player" id="player" aria-labelledby="track-name">
+      <div class="player-grid">
+        <div class="art" aria-hidden="true"><span class="art-letter" id="art-letter">N</span></div>
+        <div class="track">
+          <div class="eyebrow" data-t="player.now">Now playing locally</div>
+          <h1 class="track-name" id="track-name">Untitled track</h1>
+          <p class="track-meta" id="track-meta">—</p>
+          <div class="honesty" id="honesty" aria-label="Playback path"></div>
+          <div class="timeline">
+            <span id="elapsed">0:00</span>
+            <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek through track">
+            <span id="duration">0:00</span>
+          </div>
+          <div class="transport">
+            <button class="round" id="back" type="button" aria-label="Back 10 seconds">−10</button>
+            <button class="round play" id="play" type="button" aria-label="Play">▶</button>
+            <button class="round" id="forward" type="button" aria-label="Forward 10 seconds">+10</button>
+            <label class="volume-wrap"><span aria-hidden="true">◖</span><input id="volume" type="range" min="0" max="1" step="0.02" value="0.8" aria-label="Volume"></label>
+            <button class="btn open-another" id="open-another" type="button" data-t="action.another">Open another</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen refusal" id="refusal" aria-labelledby="refusal-title">
+      <div class="code" id="refusal-code">ERR_NAKLIAMP_UNKNOWN</div>
+      <h2 id="refusal-title" data-t="refusal.title">This track stays closed.</h2>
+      <p id="refusal-message">NakliAmp could not open this audio file.</p>
+      <div class="refusal-card">
+        <strong data-t="refusal.promise">Nothing was uploaded.</strong>
+        <span data-t="refusal.detail"> The refusal came from the local playback ladder.</span>
+      </div>
+      <button class="btn primary" id="refusal-open" type="button" data-t="action.different">Choose a different file</button>
+    </section>
+  </main>
+
+  <footer data-t="privacy">Local playback only · no account · no cookies · no analytics</footer>
+</div>
+
+<input id="file-input" type="file" accept="audio/*,.mp3,.flac,.m4a,.aac,.ogg,.opus,.wav,.mka,.wma,.ape" hidden>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="module">
+import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
+
+const STRINGS = Object.freeze({
+  en: Object.freeze({
+    'empty.title': 'Your music. Still yours.',
+    'empty.body': 'Open one track from your device. NakliAmp plays it here without an upload, account, or analytics.',
+    'empty.drop': 'Drop an audio file here, or choose one from your device.',
+    'action.open': 'Open audio file',
+    'action.another': 'Open another',
+    'action.different': 'Choose a different file',
+    'player.now': 'Now playing locally',
+    'refusal.title': 'This track stays closed.',
+    'refusal.promise': 'Nothing was uploaded.',
+    'refusal.detail': ' The refusal came from the local playback ladder.',
+    'privacy': 'Local playback only · no account · no cookies · no analytics',
+    'toast.open': 'Reading this track on your device…',
+    'toast.ready': 'Track ready',
+    'toast.error': 'NakliAmp refused this track',
+  }),
+});
+
+const VERSION = document.querySelector('meta[name="nakliamp-version"]').content;
+const locale = 'en';
+const t = key => STRINGS[locale]?.[key] ?? STRINGS.en[key] ?? key;
+document.querySelectorAll('[data-t]').forEach(element => { element.textContent = t(element.dataset.t); });
+
+const $ = selector => document.querySelector(selector);
+const screens = ['empty', 'player', 'refusal'];
+const engine = createNakliAmpEngine({ version: VERSION });
+let uiLoadId = 0;
+let toastTimer = 0;
+let frameId = 0;
+let seeking = false;
+
+function show(screen) {
+  for (const name of screens) $(`#${name}`).classList.toggle('on', name === screen);
+}
+
+function toast(message, timeoutMs = 2600) {
+  clearTimeout(toastTimer);
+  $('#toast').textContent = message;
+  $('#toast').hidden = false;
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, timeoutMs);
+}
+
+function formatTime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function stem(name) {
+  return String(name || 'Untitled track').replace(/\.[^.]+$/, '');
+}
+
+function honestyMarkup(state) {
+  const parts = [
+    String(state.honesty.container || 'audio').toUpperCase(),
+    state.honesty.codec || 'codec',
+    state.honesty.decode,
+    state.honesty.output,
+  ];
+  const host = $('#honesty');
+  host.replaceChildren();
+  parts.forEach((part, index) => {
+    if (index) {
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '→';
+      host.appendChild(arrow);
+    }
+    const token = document.createElement('span');
+    token.textContent = part;
+    if (index === 2) token.className = state.path === 'r1' ? 'active' : 'warning';
+    host.appendChild(token);
+  });
+  if (state.honesty.gapless === false) {
+    const warning = document.createElement('span');
+    warning.className = 'warning';
+    warning.textContent = '· gapless unavailable';
+    host.appendChild(warning);
+  }
+}
+
+function renderTrack(state) {
+  const name = state.media.name || 'Untitled track';
+  $('#track-name').textContent = stem(name);
+  $('#art-letter').textContent = stem(name).trim().slice(0, 1).toUpperCase() || 'N';
+  $('#track-meta').textContent = [
+    state.track?.codec?.toUpperCase(),
+    state.track?.sampleRate ? `${(state.track.sampleRate / 1000).toFixed(1)} kHz` : null,
+    state.track?.channels ? `${state.track.channels} ch` : null,
+    formatBytes(state.media.size),
+  ].filter(Boolean).join(' · ');
+  $('#duration').textContent = formatTime(state.media.duration);
+  $('#seek').max = String(Math.max(0.01, state.media.duration || 0.01));
+  $('#path-chip').textContent = state.path === 'r1' ? 'R1 · REEL ENGINE' : 'R2 · NATIVE FALLBACK';
+  honestyMarkup(state);
+  show('player');
+}
+
+function renderClock() {
+  const state = engine.state();
+  if (state.path) {
+    $('#elapsed').textContent = formatTime(state.clock.positionS);
+    if (!seeking) $('#seek').value = String(state.clock.positionS || 0);
+    $('#play').textContent = state.clock.playing ? 'Ⅱ' : '▶';
+    $('#play').setAttribute('aria-label', state.clock.playing ? 'Pause' : 'Play');
+  }
+  frameId = requestAnimationFrame(renderClock);
+}
+
+function showRefusal(error) {
+  const code = error?.code || 'ERR_NAKLIAMP_UNKNOWN';
+  $('#refusal-code').textContent = code;
+  $('#refusal-message').textContent = error?.message || 'NakliAmp could not open this audio file.';
+  $('#path-chip').textContent = 'R3 · NAMED REFUSAL';
+  show('refusal');
+  toast(t('toast.error'));
+}
+
+async function openMedia(input, { autoplay = true } = {}) {
+  const loadId = ++uiLoadId;
+  toast(t('toast.open'), 10_000);
+  try {
+    await engine.load(input);
+    if (loadId !== uiLoadId) return null;
+    engine.setVolume(Number($('#volume').value));
+    renderTrack(engine.state());
+    toast(t('toast.ready'));
+    if (autoplay) {
+      try { await engine.play(); } catch (error) { toast(error.message, 5000); }
+    }
+    return engine.state();
+  } catch (error) {
+    if (loadId !== uiLoadId || error?.code === 'ERR_NAKLIAMP_LOAD_SUPERSEDED' || error?.code === 'ERR_ENGINE_LOAD_SUPERSEDED') return null;
+    showRefusal(error);
+    throw error;
+  }
+}
+
+async function chooseFile() {
+  if ('showOpenFilePicker' in window) {
+    try {
+      const [handle] = await showOpenFilePicker({
+        multiple: false,
+        types: [{ description: 'Audio files', accept: { 'audio/*': ['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.mka', '.wma', '.ape'] } }],
+      });
+      if (handle) await openMedia(handle);
+    } catch (error) {
+      if (error?.name !== 'AbortError') showRefusal(error);
+    }
+    return;
+  }
+  $('#file-input').click();
+}
+
+async function togglePlay() {
+  const state = engine.state();
+  if (!state.path) return chooseFile();
+  try {
+    if (state.clock.playing) engine.pause();
+    else await engine.play();
+  } catch (error) {
+    showRefusal(error);
+  }
+}
+
+$('#open-file').addEventListener('click', chooseFile);
+$('#open-another').addEventListener('click', chooseFile);
+$('#refusal-open').addEventListener('click', chooseFile);
+$('#play').addEventListener('click', togglePlay);
+$('#back').addEventListener('click', () => engine.seek(engine.state().clock.positionS - 10));
+$('#forward').addEventListener('click', () => engine.seek(engine.state().clock.positionS + 10));
+$('#seek').addEventListener('pointerdown', () => { seeking = true; });
+$('#seek').addEventListener('input', () => { $('#elapsed').textContent = formatTime(Number($('#seek').value)); });
+$('#seek').addEventListener('change', async () => {
+  await engine.seek(Number($('#seek').value));
+  seeking = false;
+});
+$('#volume').addEventListener('input', () => {
+  engine.setVolume(Number($('#volume').value));
+  localStorage.setItem('nakliamp:volume', $('#volume').value);
+});
+$('#file-input').addEventListener('change', async event => {
+  const [file] = event.target.files;
+  if (file) await openMedia(file).catch(() => {});
+  event.target.value = '';
+});
+
+const savedVolume = Number(localStorage.getItem('nakliamp:volume'));
+if (Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 1) $('#volume').value = String(savedVolume);
+
+const drop = $('#drop');
+for (const eventName of ['dragenter', 'dragover']) {
+  drop.addEventListener(eventName, event => { event.preventDefault(); drop.classList.add('drag'); });
+}
+for (const eventName of ['dragleave', 'drop']) {
+  drop.addEventListener(eventName, event => { event.preventDefault(); drop.classList.remove('drag'); });
+}
+drop.addEventListener('drop', event => {
+  const [file] = event.dataTransfer.files;
+  if (file) openMedia(file).catch(() => {});
+});
+drop.addEventListener('keydown', event => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    chooseFile();
+  }
+});
+
+const KEYMAP = Object.freeze({
+  ' ': () => togglePlay(),
+  ArrowLeft: () => engine.state().path && engine.seek(engine.state().clock.positionS - 10),
+  ArrowRight: () => engine.state().path && engine.seek(engine.state().clock.positionS + 10),
+  ArrowUp: () => {
+    const next = Math.min(1, Number($('#volume').value) + 0.05);
+    $('#volume').value = String(next); engine.setVolume(next);
+  },
+  ArrowDown: () => {
+    const next = Math.max(0, Number($('#volume').value) - 0.05);
+    $('#volume').value = String(next); engine.setVolume(next);
+  },
+  m: () => engine.setMuted(!engine.state().clock.muted),
+});
+addEventListener('keydown', event => {
+  if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
+  const action = KEYMAP[event.key];
+  if (!action) return;
+  event.preventDefault();
+  action();
+});
+
+if (new URLSearchParams(location.search).get('harness') === '1') {
+  window.__nakliampHarness = Object.freeze({
+    open: input => openMedia(input, { autoplay: false }),
+    state: () => engine.state(),
+    play: () => engine.play(),
+    pause: () => engine.pause(),
+  });
+}
+
+engine.setVolume(Number($('#volume').value));
+renderClock();
+</script>
+</body>
+</html>

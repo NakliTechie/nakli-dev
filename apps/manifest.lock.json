@@ -28,6 +28,50 @@
       ]
     },
     {
+      "id": "nakliamp",
+      "repo": "NakliTechie/nakliamp",
+      "requestedRef": "main",
+      "resolvedCommit": "8bc461e9d78b5275a04a96e293ddffbf15711691",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html",
+          "sha256": "9be4a0bf4c180b23b82824a180a435b509644428cb743633d739cc5743cc6187",
+          "bytes": 20411
+        },
+        {
+          "source": "VENDOR.md",
+          "destination": "VENDOR.md",
+          "sha256": "29bc822fc79eff6172782917d63630967bb9379b1f9cf93d6dc1949d9318402d",
+          "bytes": 1169
+        },
+        {
+          "source": "engine/nakliamp-engine.mjs",
+          "destination": "engine/nakliamp-engine.mjs",
+          "sha256": "10cf13d9060d5563cdcbd87317de0f271592ce2f817c2e1e2081ac43978fcd8f",
+          "bytes": 14445
+        },
+        {
+          "source": "engine/reel-engine.mjs",
+          "destination": "engine/reel-engine.mjs",
+          "sha256": "56f5372eed1f15f024b17d3c24f39a6a9d60dab17aa0898900db97f23a044971",
+          "bytes": 78684
+        },
+        {
+          "source": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "destination": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "sha256": "1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b",
+          "bytes": 627244
+        },
+        {
+          "source": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "destination": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+          "bytes": 16726
+        }
+      ]
+    },
+    {
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
       "requestedRef": "main",

@@ -1,6 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+const PLANNING_ONLY_DIRECTORIES = new Set(['forge']);
+
 function appObjectsFromHtml(html) {
   const start = html.indexOf('const APPS = [');
   const end = html.indexOf('const FOLDERS = [', start);
@@ -108,6 +110,7 @@ export async function auditAppInventory(rootDir, html, manifest, lock) {
   for (const entry of directories.filter(item => item.isDirectory())) {
     const files = await filesUnder(path.join(rootDir, 'apps', entry.name));
     if (files.length === 0) continue;
+    if (PLANNING_ONLY_DIRECTORIES.has(entry.name) && !files.includes('index.html')) continue;
     const app = byId.get(entry.name);
     if (!app) errors.push(`${entry.name}: on-disk app has no catalog entry`);
     else if (app.kind !== 'system' && !mirrors.has(entry.name)) {
@@ -116,4 +119,3 @@ export async function auditAppInventory(rootDir, html, manifest, lock) {
   }
   return errors;
 }
-

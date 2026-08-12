@@ -102,8 +102,13 @@ assert.match(
 );
 assert.match(
   html,
-  /id:'fld-games'[\s\S]*?apps:\['reel'/,
-  'Reel has one predictable home under Play',
+  /id:'nakliamp'[\s\S]*?url:'https:\/\/nakliamp\.naklitechie\.com\/'[\s\S]*?embedUrl:'https:\/\/naklios\.dev\/apps\/nakliamp\/'/,
+  'NakliAmp keeps its canonical host and uses a same-origin Immersive mirror',
+);
+assert.match(
+  html,
+  /id:'fld-games'[\s\S]*?apps:\['reel','nakliamp'/,
+  'Reel and NakliAmp have one predictable home under Play',
 );
 assert.match(
   html,

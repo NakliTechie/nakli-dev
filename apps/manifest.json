@@ -22,6 +22,37 @@
       ]
     },
     {
+      "id": "nakliamp",
+      "repo": "NakliTechie/nakliamp",
+      "ref": "main",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html"
+        },
+        {
+          "source": "VENDOR.md",
+          "destination": "VENDOR.md"
+        },
+        {
+          "source": "engine/nakliamp-engine.mjs",
+          "destination": "engine/nakliamp-engine.mjs"
+        },
+        {
+          "source": "engine/reel-engine.mjs",
+          "destination": "engine/reel-engine.mjs"
+        },
+        {
+          "source": "vendor/mediabunny/mediabunny-1.51.0.min.mjs",
+          "destination": "vendor/mediabunny/mediabunny-1.51.0.min.mjs"
+        },
+        {
+          "source": "vendor/mediabunny/LICENSE-MPL-2.0.txt",
+          "destination": "vendor/mediabunny/LICENSE-MPL-2.0.txt"
+        }
+      ]
+    },
+    {
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
       "ref": "main",

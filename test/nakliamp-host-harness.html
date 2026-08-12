@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NakliAmp NakliOS host smoke</title>
+<style>#nakliamp{position:fixed;left:-10000px;top:0;width:900px;height:700px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="nakliamp" aria-hidden="true" tabindex="-1"></iframe>
+<script type="module">
+const result = document.querySelector('#result');
+const frame = document.querySelector('#nakliamp');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function waitFor(check, message, timeoutMs = 10_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+function toneFile(WindowFile) {
+  const sampleRate = 8_000;
+  const sampleCount = 2_000;
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const write = (offset, value) => [...value].forEach((character, index) => view.setUint8(offset + index, character.charCodeAt(0)));
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, sampleCount * 2, true);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = Math.sin(2 * Math.PI * 440 * index / sampleRate) * 0.2;
+    view.setInt16(44 + index * 2, Math.round(sample * 0x7fff), true);
+  }
+  return new WindowFile([buffer], 'nakliamp-host-tone.wav', { type: 'audio/wav' });
+}
+
+async function run() {
+  const loaded = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp mirror boot timed out')), 10_000);
+    frame.addEventListener('load', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+  frame.src = '../apps/nakliamp/index.html?harness=1&host=naklios';
+  await loaded;
+
+  const app = frame.contentWindow;
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp mirror harness is unavailable');
+  assert(app.document.querySelector('.version').textContent.includes('preview'), 'NakliAmp mirror omitted the preview label');
+  assert(app.document.body.textContent.includes('no analytics'), 'NakliAmp mirror omitted the privacy promise');
+
+  await harness.open(toneFile(app.File));
+  assert(harness.state().path === 'r1', 'NakliAmp mirror did not use the pinned Reel path');
+  assert(app.document.querySelector('#player').classList.contains('on'), 'NakliAmp mirror did not render the player');
+  await harness.play();
+  await waitFor(() => harness.state().clock.positionS > 0.05, 'NakliAmp mirror playback clock did not advance');
+  harness.pause();
+
+  const resources = app.performance.getEntriesByType('resource').map(entry => new URL(entry.name));
+  assert(resources.length >= 3, 'NakliAmp mirror did not load its engine resources');
+  assert(
+    resources.every(resource => resource.origin === location.origin),
+    `Mirrored NakliAmp requested a cross-origin resource: ${resources.find(resource => resource.origin !== location.origin)}`,
+  );
+
+  return {
+    version: app.document.querySelector('.version').textContent,
+    path: harness.state().path,
+    resources: resources.map(resource => resource.pathname),
+  };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp NakliOS host smoke';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp NakliOS host smoke';
+});
+</script>
+</body>
+</html>
