@@ -1,0 +1,10 @@
+.*
+**/.*
+node_modules/
+plan/
+scripts/
+test/
+**/test/
+**/*.test.mjs
+apps/forge/
+wrangler.jsonc

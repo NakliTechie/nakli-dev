@@ -75,6 +75,9 @@ jobs:
       - name: Verify NakliAmp mirror, locality, and preview contract
         run: node scripts/test-nakliamp-integration.mjs
 
+      - name: Verify static-asset delivery exclusions
+        run: node scripts/verify-delivery.mjs
+
       - name: Verify task folders and first-party desktop defaults
         run: node scripts/test-app-catalog.mjs
 

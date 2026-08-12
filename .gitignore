@@ -4,6 +4,7 @@ plan/
 !README.md
 !LICENSE
 !.gitignore
+!.assetsignore
 !wrangler.jsonc
 !sdk/
 !sdk/*
