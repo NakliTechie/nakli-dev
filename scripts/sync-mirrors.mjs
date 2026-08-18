@@ -29,10 +29,28 @@ async function readJson(file, fallback) {
   }
 }
 
+class HttpError extends Error {
+  constructor(status, statusText, url) {
+    super(`${status} ${statusText}: ${url}`);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
 async function fetchBytes(url, headers) {
   const response = await fetch(url, { headers, redirect: 'follow' });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${url}`);
+  if (!response.ok) throw new HttpError(response.status, response.statusText, url);
   return Buffer.from(await response.arrayBuffer());
+}
+
+// A mirror whose source repository the token cannot read. Two of the three
+// sources are private repositories, and the workflow runs with the default
+// repo-scoped github.token, so GitHub answers 404 (not 403) for them. Those
+// mirrors keep their existing lock entry and on-disk artifacts and are
+// reported as skipped, so one unreadable source no longer stops every other
+// mirror from syncing.
+function isUnreadable(error) {
+  return error instanceof HttpError && (error.status === 404 || error.status === 403);
 }
 
 async function fetchJson(url, headers) {
@@ -72,23 +90,35 @@ const headers = {
 
 console.log(`Resolving ${targets.length} mirror(s) to immutable commits…`);
 const resolved = [];
+const skipped = [];
 for (const app of targets) {
-  const commitApi = `https://api.github.com/repos/${app.repo}/commits/${encodeURIComponent(app.requestedRef)}`;
-  const commit = await fetchJson(commitApi, headers);
-  if (!/^[0-9a-f]{40}$/.test(commit.sha || '')) {
-    throw new Error(`${app.id}: GitHub did not return a full commit SHA`);
+  try {
+    const commitApi = `https://api.github.com/repos/${app.repo}/commits/${encodeURIComponent(app.requestedRef)}`;
+    const commit = await fetchJson(commitApi, headers);
+    if (!/^[0-9a-f]{40}$/.test(commit.sha || '')) {
+      throw new Error(`${app.id}: GitHub did not return a full commit SHA`);
+    }
+    const files = [];
+    for (const file of app.files) {
+      const rawUrl = `https://raw.githubusercontent.com/${app.repo}/${commit.sha}/${encodeSourcePath(file.source)}`;
+      const bytes = await fetchBytes(rawUrl, headers);
+      files.push({
+        ...file,
+        bytes,
+        sha256: sha256(bytes),
+      });
+    }
+    resolved.push({ app, commit: commit.sha, files });
+  } catch (error) {
+    // Asking for one mirror by name and not being able to read it is an
+    // error; skipping is only for the unattended sweep over every mirror.
+    if (ids.size || !isUnreadable(error)) throw error;
+    if (!lockById.has(app.id)) {
+      throw new Error(`${app.id}: ${error.message} — and no lock entry to fall back on`);
+    }
+    skipped.push(app.id);
+    console.warn(`  WARN ${app.id}: ${error.message} — skipped, keeping the locked copy`);
   }
-  const files = [];
-  for (const file of app.files) {
-    const rawUrl = `https://raw.githubusercontent.com/${app.repo}/${commit.sha}/${encodeSourcePath(file.source)}`;
-    const bytes = await fetchBytes(rawUrl, headers);
-    files.push({
-      ...file,
-      bytes,
-      sha256: sha256(bytes),
-    });
-  }
-  resolved.push({ app, commit: commit.sha, files });
 }
 
 let changed = 0;
@@ -118,4 +148,8 @@ const lock = {
 };
 const lockBytes = Buffer.from(`${JSON.stringify(lock, null, 2)}\n`);
 if (await writeIfChanged(lockPath, lockBytes)) changed += 1;
+console.log(`Synced ${resolved.length} of ${targets.length} mirror(s).`);
+if (skipped.length) {
+  console.warn(`${skipped.length} skipped (source unreadable): ${skipped.join(', ')}`);
+}
 console.log(`Done. ${changed} file(s) changed; validate with node scripts/validate-mirrors.mjs.`);
