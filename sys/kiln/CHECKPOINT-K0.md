@@ -31,6 +31,8 @@ and real Pyodide are interchangeable.
   traceback, an interruptible loop, output-cap). Not shipped.
 - **pyodide-runtime.mjs** — the REAL executor over a loaded Pyodide + a
   SharedArrayBuffer interrupt byte; the code that runs inside the Worker.
+- **worker.mjs / worker-runtime.mjs** — the dedicated module Worker and its
+  main-thread proxy. The proxy owns the interrupt byte and governed Rig RPC.
 
 ## What the gate verifies (headless, mock runtime)
 
@@ -68,18 +70,20 @@ is line-buffered and strips the trailing newline — `print(x)` captured as `"42
 not `"42\n"`. Switched to `setStdout({write})` (raw bytes, streaming decoder) for
 byte-exact capture. This is the value of the browser pass.
 
-## Still a follow-on — the SAB interrupt needs the Worker
+## Dedicated-Worker verification (2026-08-12)
 
-The runaway-loop interrupt (`while True` → `KeyboardInterrupt` via the SAB byte)
-is **not** verifiable with Pyodide on the main thread: a tight Python loop blocks
-the event loop, so the main-thread timer that sets the interrupt byte can never
-fire (confirmed empirically — the tab hangs). This is exactly why the handoff
-mandates *a Worker hosting Pyodide*: the interrupt is set from the free main
-thread while the Worker blocks. The `setInterruptBuffer` wiring in
-`pyodide-runtime` is correct; it is only exercisable through the Worker
-transport, which remains the K0 browser follow-on (needs COOP/COEP cross-origin
-isolation for `SharedArrayBuffer`; COEP `credentialless` lets the CDN still
-load).
+`test/kiln-worker-harness.html` passed in a cross-origin-isolated Chromium page
+against real Pyodide 0.26.4. A runaway `while True` returned `timeout`; an
+explicit interrupt returned `interrupted`; the namespace remained usable after
+both. The harness uses the headered `test/serve-kiln.mjs` server.
 
 The **consent-gated CDN loader** (`PYODIDE_INDEX_URL`, `v0.26.4`, ~12 MiB shown
 before fetch) plugs into the verified `loadRuntime` seam.
+
+## Open boundary — post-load network APIs
+
+The consent gate proves that Kiln does not fetch Pyodide before approval. This
+checkpoint does not yet prove that model-authored Python cannot reach Worker
+network globals after Pyodide loads. Disable and browser-test `fetch`,
+`XMLHttpRequest`, `WebSocket`, and equivalent egress before model execution is
+enabled in Forge.

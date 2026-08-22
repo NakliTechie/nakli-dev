@@ -80,6 +80,7 @@ export function createKernelCore({ runtime, now = () => Date.now() }) {
       cellId,
       truncated: !!out.truncated,
     };
+    if (out.fsSync) result.fsSync = out.fsSync;
     if (out.traceback) result.traceback = out.traceback;
     return result;
   }

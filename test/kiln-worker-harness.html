@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kiln Worker integration</title>
+  <style>
+    body { font: 14px ui-monospace, monospace; padding: 1rem; background:#0b0d10; color:#d7dbe0; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Kiln Worker integration</h1>
+  <pre id="out">loading Pyodide in the Worker…</pre>
+  <script type="module">
+    const out = document.getElementById('out');
+    const results = [];
+    const eq = (actual, expected, message) => {
+      if (actual !== expected) throw new Error(`${message || 'ne'}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
+    };
+    const assert = (condition, message) => { if (!condition) throw new Error(message || 'assert'); };
+    async function check(name, fn) {
+      try { await fn(); results.push({ name, ok: true }); }
+      catch (error) { results.push({ name, ok: false, detail: String(error?.stack || error) }); }
+    }
+
+    let runtime;
+    try {
+      assert(self.crossOriginIsolated, 'crossOriginIsolated must be true');
+      const { MemoryBackend } = await import('/sys/rig/fileops/index.mjs');
+      const { createGrant, createOpLog, createAgentFace } = await import('/sys/rig/agent/index.mjs');
+      const { buildRigRegistry } = await import('/sys/rig/registry/index.mjs');
+      const { createFsBridge } = await import('/sys/kiln/fs-bridge.mjs');
+      const { generateRigModule } = await import('/sys/kiln/rig-bindings.mjs');
+      const { createKiln, createWorkerRuntime } = await import('/sys/kiln/index.mjs');
+
+      const backend = new MemoryBackend();
+      const bridge = createFsBridge({ backend, mount: 'workspace' });
+      await bridge.write('seed.txt', 'from Rig');
+      await backend.write('outside.txt', new TextEncoder().encode('outside secret'));
+      const registry = buildRigRegistry({ fs: bridge._fs });
+      const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove'] });
+      const logFs = createFsBridge({ backend: new MemoryBackend(), mount: 'audit' })._fs;
+      const opLog = createOpLog({ fs: logFs });
+      const face = createAgentFace({ registry, grant, opLog, actor: 'agent', caller: 'browser-worker' });
+      const generated = generateRigModule(registry);
+      const kiln = createKiln({
+        consent: () => true,
+        loadRuntime: async () => {
+          runtime = await createWorkerRuntime({ face, fsBridge: bridge, rigModuleSource: generated.source });
+          return runtime;
+        },
+      });
+      const ready = await kiln.ensureReady();
+      assert(ready.ok, 'Worker runtime loaded');
+
+      await check('Pyodide runs in the dedicated Worker', async () => {
+        assert(runtime.workerInfo.version === '0.26.4', 'pinned Pyodide loaded');
+        eq(runtime.workerInfo.mountPath, '/workspace', 'scoped mount path');
+      });
+
+      await check('namespace persists across Worker executions', async () => {
+        eq((await kiln.exec('set', 'value = 42')).status, 'ok', 'assignment');
+        eq((await kiln.exec('get', 'print(value)')).stdout, '42\n', 'persistent value');
+      });
+
+      await check('runaway Python is interrupted and the Worker remains usable', async () => {
+        const timed = await kiln.exec('loop', 'while True:\n    pass', { timeoutMs: 500 });
+        eq(timed.status, 'timeout', 'timeout status');
+        assert(timed.ms < 5000, 'interrupt returned within five seconds');
+        eq((await kiln.exec('after-loop', 'print(value)')).stdout, '42\n', 'namespace remained usable');
+      });
+
+      await check('explicit interrupt stops the selected Worker cell', async () => {
+        const running = kiln.exec('explicit-loop', 'while True:\n    pass', { timeoutMs: 60000 });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        eq(kiln.interrupt('explicit-loop').ok, true, 'interrupt request accepted');
+        const stopped = await running;
+        eq(stopped.status, 'interrupted', 'explicit interrupt status');
+      });
+
+      await check('Python open reads and writes the scoped Rig mount byte-identically', async () => {
+        const code = [
+          'import os',
+          'os.makedirs("nested", exist_ok=True)',
+          'with open("seed.txt", "rb") as handle:',
+          '    source = handle.read()',
+          'with open("nested/written.bin", "wb") as handle:',
+          '    handle.write(source + bytes([0, 255]))',
+        ].join('\n');
+        const run = await kiln.exec('fs-roundtrip', code);
+        eq(run.status, 'ok', 'Python filesystem execution: ' + (run.traceback || run.stderr || ''));
+        eq(run.fsSync.errors.length, 0, 'filesystem sync errors');
+        const read = await bridge.read('nested/written.bin');
+        eq([...read.data].join(','), [...new TextEncoder().encode('from Rig'), 0, 255].join(','), 'round-trip bytes');
+      });
+
+      await check('Python cannot traverse above the scoped mount', async () => {
+        const code = [
+          'blocked = []',
+          'for candidate in ("../outside.txt", "/etc/passwd"):',
+          '    try:',
+          '        open(candidate, "rb").read()',
+          '        blocked.append("LEAK")',
+          '    except PermissionError:',
+          '        blocked.append("BLOCKED")',
+          'print(",".join(blocked))',
+        ].join('\n');
+        const run = await kiln.exec('fs-escape', code);
+        eq(run.status, 'ok', 'guarded execution');
+        eq(run.stdout, 'BLOCKED,BLOCKED\n', 'both escape paths refused');
+      });
+
+      await check('generated rig module calls the governed registry synchronously', async () => {
+        const run = await kiln.exec('rig-read', 'import rig\nprint(rig.read("seed.txt", encoding="utf-8")["data"])');
+        eq(run.status, 'ok', 'rig.read execution: ' + (run.traceback || run.stderr || ''));
+        eq(run.stdout, 'from Rig\n', 'registry result returned to Python');
+      });
+
+      await check('out-of-grant rig call raises RigGrantError', async () => {
+        const run = await kiln.exec('rig-denied', 'import rig\nrig.read("../outside.txt", encoding="utf-8")');
+        eq(run.status, 'error', 'denied call status');
+        assert(/RigGrantError/.test(run.traceback), 'typed RigGrantError in traceback: ' + (run.traceback || run.stderr || ''));
+      });
+
+      await check('destructive rig call stages without deleting', async () => {
+        const run = await kiln.exec('rig-remove', 'import rig\nproposal = rig.remove("seed.txt")\nprint(proposal["staged"])');
+        eq(run.status, 'ok', 'remove call returned a proposal: ' + (run.traceback || run.stderr || ''));
+        eq(run.stdout, 'True\n', 'proposal visible in Python');
+        assert((await bridge.readText('seed.txt')).ok, 'file retained before operator accept');
+        eq(face.pendingProposals().length, 1, 'proposal visible to operator');
+        const log = await opLog.read();
+        assert(log.some((entry) => entry.command === 'fs.remove' && entry.status === 'staged'), 'staged action logged');
+      });
+
+      await runtime.close();
+      const passed = results.filter((result) => result.ok).length;
+      const failed = results.length - passed;
+      out.textContent = `Kiln Worker integration: ${passed}/${results.length} passed` + (failed ? ` — ${failed} FAILED` : '');
+      for (const result of results) {
+        out.textContent += '\n' + (result.ok ? '  PASS ' : '  FAIL ') + result.name;
+        if (result.detail) out.textContent += '\n      ' + result.detail;
+      }
+      window.__kilnWorkerResults = { passed, failed, total: results.length, results };
+      document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+    } catch (error) {
+      if (runtime) await runtime.close().catch(() => {});
+      out.textContent = 'HARNESS ERROR: ' + String(error?.stack || error);
+      window.__kilnWorkerResults = { error: String(error?.stack || error) };
+      document.title = 'HARNESS ERROR';
+    }
+  </script>
+</body>
+</html>

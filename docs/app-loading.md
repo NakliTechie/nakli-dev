@@ -18,6 +18,14 @@ Use the smallest trust level that works:
 4. **New tab / Basic mode:** for apps that cannot safely or reliably run in an
    iframe.
 
+**Future escape hatch.** A same-origin mirror still runs inside an iframe. If a
+required capability remains broken because of the iframe browsing context
+itself — including storage, filesystem, permissions, or cross-origin-isolation
+constraints — vendor a reviewed snapshot into NakliOS and run it as a
+host-owned app. Make this decision per app after a reproducible failure. Record
+the upstream source, pinned revision, local changes, and refresh procedure so
+the vendored copy does not become an untraceable fork.
+
 Every mirror is declared in `apps/manifest.json`, resolved to an immutable
 upstream commit in `apps/manifest.lock.json`, and hash-checked. Run:
 

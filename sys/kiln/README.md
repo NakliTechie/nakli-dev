@@ -35,10 +35,10 @@ own (that's Forge).
 
 ## Status
 
-Shipped and tested: the kernel itself — running code, keeping state, interrupt,
-reset, inspect, output limits, and the download-consent gate — verified against
-real Python in the browser. In progress: the file bridge and the generated
-Python `rig` module; the assistant side comes later.
+Implemented and tested: the kernel, dedicated Worker transport, interrupt path,
+scoped file bridge, and generated Python `rig` module. Browser checks cover real
+Pyodide, byte-identical file writes, traversal rejection, grant errors, and
+staged destructive actions. The verifier kernel and assistant side come later.
 
 > Unrelated to `~/Code/kiln`, a separate project that happens to share the name.
 

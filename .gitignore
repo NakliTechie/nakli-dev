@@ -31,3 +31,12 @@ plan/
 !.dev.vars.example
 .env*
 !.env.example
+.env
+agy.mcp.json
+cline.mcp.json
+cursor.mcp.json
+factory.mcp.json
+gemini.mcp.json
+.vscode/mcp.json
+opencode.json
+windsurf.mcp.json

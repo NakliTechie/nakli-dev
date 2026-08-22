@@ -11,7 +11,7 @@ the Rig command registry. **Mobile is not a squeezed desktop:** a distinct singl
 shape with a surface switcher. No AI is load-bearing; every surface works with no model.
 
 **Status:** planning. No code yet. Chunk **C5**, built strictly against the reference +
-mockup below (needs Rig C4b + Kiln K2 first). Tokens as CSS custom properties from day
+mockup below. Rig C4b and Kiln K2 are available, so the build is unblocked. Tokens as CSS custom properties from day
 one; in-app prompt/confirm, never native dialogs; designed empty/error states; a11y and
 i18n from the first commit.
 

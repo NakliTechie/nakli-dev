@@ -6,7 +6,7 @@
 // Naming (matches the handoff examples rig.read / rig.git.status): the `fs`
 // namespace flattens to top-level (rig.read, rig.write); every other namespace
 // nests (git.status → rig.git.status). Each generated function forwards to a
-// host-provided `_rig_call(name, args)` which routes through the agent face —
+// host-provided `_rig_call(name, argsJson)` which routes through the agent face —
 // out-of-grant raises RigGrantError, a destructive command returns a staged
 // proposal. This module only GENERATES the source + a manifest for testing; it
 // never invokes a handler.
@@ -70,7 +70,7 @@ function renderFunction(b, selfArg) {
   return [
     `def ${b.funcName}(${sig}):`,
     indent(`"""${doc}"""`, 4),
-    indent(`return _rig_call(${JSON.stringify(b.command)}, {${argEntries}})`, 4),
+    indent(`return _rig_invoke(${JSON.stringify(b.command)}, {${argEntries}})`, 4),
   ].join('\n');
 }
 
@@ -102,7 +102,39 @@ export function generateRigModule(registry) {
   parts.push('class RigGrantError(RigError):');
   parts.push('    """A command was refused because its path or scope is outside the active grant."""');
   parts.push('');
-  parts.push('# `_rig_call(name, args)` is provided by the Kiln host: it routes through the');
+  parts.push('import base64 as _rig_base64');
+  parts.push('import builtins as _rig_builtins');
+  parts.push('import json as _rig_json');
+  parts.push('');
+  parts.push('def _rig_encode(value):');
+  parts.push('    if isinstance(value, (_rig_builtins.bytes, _rig_builtins.bytearray, _rig_builtins.memoryview)):');
+  parts.push('        return {"__kiln_type": "bytes", "base64": _rig_base64.b64encode(_rig_builtins.bytes(value)).decode("ascii")}');
+  parts.push('    if isinstance(value, _rig_builtins.dict):');
+  parts.push('        return {_rig_builtins.str(k): _rig_encode(v) for k, v in value.items()}');
+  parts.push('    if isinstance(value, (_rig_builtins.list, _rig_builtins.tuple)):');
+  parts.push('        return [_rig_encode(v) for v in value]');
+  parts.push('    return value');
+  parts.push('');
+  parts.push('def _rig_decode(value):');
+  parts.push('    if isinstance(value, _rig_builtins.dict) and value.get("__kiln_type") == "bytes":');
+  parts.push('        return _rig_base64.b64decode(value["base64"])');
+  parts.push('    if isinstance(value, _rig_builtins.dict):');
+  parts.push('        return {k: _rig_decode(v) for k, v in value.items()}');
+  parts.push('    if isinstance(value, _rig_builtins.list):');
+  parts.push('        return [_rig_decode(v) for v in value]');
+  parts.push('    return value');
+  parts.push('');
+  parts.push('def _rig_invoke(name, args):');
+  parts.push('    raw = _rig_call(name, _rig_json.dumps(_rig_encode(args), ensure_ascii=False))');
+  parts.push('    result = _rig_decode(_rig_json.loads(raw))');
+  parts.push('    if isinstance(result, _rig_builtins.dict) and not result.get("ok", False) and not result.get("staged", False):');
+  parts.push('        message = result.get("message", "Rig command failed")');
+  parts.push('        if result.get("code") == "EGRANT":');
+  parts.push('            raise RigGrantError(message)');
+  parts.push('        raise RigError(message)');
+  parts.push('    return result');
+  parts.push('');
+  parts.push('# `_rig_call(name, argsJson)` is provided by the Kiln host: it routes through the');
   parts.push('# Rig agent face, raising RigGrantError on an out-of-grant call and returning a');
   parts.push('# staged proposal for a destructive command.');
   parts.push('');

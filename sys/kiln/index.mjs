@@ -10,3 +10,10 @@
 export { createKiln } from './kiln.mjs';
 export { createKernelCore, DEFAULT_TIMEOUT_MS, DEFAULT_OUTPUT_CAP } from './kernel-core.mjs';
 export { MockRuntime } from './mock-runtime.mjs';
+export {
+  createWorkerRuntime,
+  snapshotBridge,
+  syncWorkerSnapshot,
+  toRigJsonValue,
+  fromRigJsonValue,
+} from './worker-runtime.mjs';

@@ -93,6 +93,8 @@ await test('source structure: top-level defs, a git class, and rig.git binding',
   assert(/^git = _Git\(\)/m.test(gen.source), 'git = _Git()');
   assert(/class RigGrantError\(RigError\)/.test(gen.source), 'RigGrantError defined');
   assert(/_rig_call\(/.test(gen.source), 'forwards to _rig_call');
+  assert(/_rig_invoke\(/.test(gen.source), 'routes through the typed invoke wrapper');
+  assert(/__kiln_type/.test(gen.source), 'binary values use the Kiln JSON codec');
 });
 
 const total = passed + failures.length;
