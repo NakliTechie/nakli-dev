@@ -371,40 +371,42 @@ input{font:inherit; color:inherit;}
   padding-top:14vh;
 }
 
-/* ── FIRST RUN ── */
-.nw-welcome-backdrop{
-  position:absolute; inset:0;
-  display:flex; align-items:center; justify-content:center;
-  padding:24px;
-  background:color-mix(in srgb, var(--body) 68%, rgba(0,0,0,.62));
-  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+/* ── FIRST RUN — spotlight coach-mark tour ── */
+.nw-tour-layer{position:fixed; inset:0; z-index:5000; pointer-events:none;}
+.nw-tour-spotlight{
+  position:fixed; z-index:5001;
+  border:2px solid var(--brand); border-radius:12px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--brand) 30%, transparent),
+    0 0 0 9999px color-mix(in srgb, var(--body) 30%, rgba(0,0,0,.72));
+  pointer-events:none;
+  transition:top .26s ease, left .26s ease, width .26s ease, height .26s ease;
 }
-.nw-welcome{
-  width:min(480px, 100%);
-  border:1px solid var(--line-strong); border-radius:18px;
-  background:var(--panel); color:var(--ink);
-  box-shadow:var(--shadow);
-  padding:28px;
+.nw-tour-card{
+  position:fixed; z-index:5002;
+  width:min(360px, calc(100vw - 24px));
+  border:1px solid var(--line-strong); border-radius:14px;
+  background:var(--panel); color:var(--ink); box-shadow:var(--shadow);
+  padding:18px; pointer-events:auto;
 }
-.nw-welcome-mark{
-  width:44px; height:44px; border-radius:12px;
-  display:flex; align-items:center; justify-content:center;
-  margin-bottom:18px;
-  background:linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 58%, var(--act)));
-  color:var(--panel); font-size:22px; font-weight:800;
+.nw-tour-progress{
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--faint); margin-bottom:8px;
 }
-.nw-welcome h2{margin:0 0 10px; font-size:24px; letter-spacing:-.02em;}
-.nw-welcome p{margin:0; color:var(--muted); line-height:1.55; font-size:14px;}
-.nw-welcome-actions{display:flex; flex-wrap:wrap; gap:10px; margin-top:24px;}
-.nw-welcome-primary,
-.nw-welcome-secondary{
-  min-height:42px; padding:9px 16px; border-radius:9px;
-  border:1px solid var(--line-strong); font-weight:650;
+.nw-tour-card h2{margin:0 0 8px; font-size:17px; letter-spacing:-.01em;}
+.nw-tour-body{margin:0; font-size:13.5px; line-height:1.55; color:var(--muted);}
+.nw-tour-actions{display:flex; gap:8px; margin-top:18px; align-items:center;}
+.nw-tour-actions .nw-tour-skip{margin-right:auto;}
+.nw-tour-btn{
+  min-height:36px; padding:7px 14px; border-radius:9px;
+  border:1px solid var(--line-strong); background:var(--row); color:var(--ink);
+  font:inherit; font-weight:600; cursor:pointer;
 }
-.nw-welcome-primary{background:var(--brand); color:var(--panel); border-color:var(--brand);}
-.nw-welcome-secondary{background:var(--row); color:var(--ink);}
-.nw-welcome-primary:hover{filter:brightness(1.06);}
-.nw-welcome-secondary:hover{border-color:var(--brand);}
+.nw-tour-btn:hover{border-color:var(--brand);}
+.nw-tour-btn:disabled{opacity:.45; cursor:default;}
+.nw-tour-btn.primary{background:var(--brand); border-color:var(--brand); color:var(--panel);}
+.nw-tour-btn.primary:hover{filter:brightness(1.06);}
+.nw-tour-btn:focus-visible{outline:2px solid var(--brand); outline-offset:2px;}
 
 /* ── SPOTLIGHT ── */
 .nw-spotlight{
@@ -1879,9 +1881,8 @@ const LS_KEY = {
   theme:'nakliOS.theme',
   layout:'nakliOS.layout',
 };
-const WELCOME_KEY = 'nakliOS.welcome.v1';
 // Capture this before boot writes the default theme/layout. A returning user
-// should not be shown onboarding just because the welcome flag is new.
+// should not be shown onboarding just because the tour flag is new.
 const HAD_EXISTING_PROFILE = Object.keys(localStorage)
   .some(key => {
     const normalized = key.toLowerCase();
@@ -7352,44 +7353,147 @@ function openApp(app, options = {}){
   return window.open(app.url, '_blank', 'noopener');
 }
 
-function openWelcome(){
-  if (HAD_EXISTING_PROFILE || localStorage.getItem(WELCOME_KEY)) return;
-  const root = document.getElementById('overlay-root');
-  if (!root || document.getElementById('welcome-backdrop')) return;
+// A guided spotlight tour replaces the old welcome modal: new users land
+// straight on the desktop and a coach-mark walks them through the pieces
+// they'd otherwise have to discover. Ported from Slate's tour. Replayable
+// from Settings → About. Skipping still marks it done (no re-nag).
+const TOUR_KEY = 'nakliOS.tour.v1';
+const TOUR_STEPS = [
+  { target:'#spotlight-btn', title:'Welcome to NakliOS',
+    body:'Your private browser desktop — every tool runs in this tab and nothing leaves your device. Press ⌘K (or click here) to find any app by name, tag, or plain description.' },
+  { target:'#icon-area', title:'Grouped by task',
+    body:'Your tools are organised into folders like Create & Convert, Work & Build, and Play. Click a folder to open it, or an app to launch it in a window.' },
+  { target:'#fsa-chip', title:'Storage stays optional',
+    body:'Connect a Folder or an encrypted Crate only when an app actually needs to save something. Until then, nothing is written anywhere.' },
+  { target:'#nw-dock', title:'Essentials on the dock',
+    body:'Your most-used tools sit on the dock for one-click access. Drag them to reorder whenever you like.' },
+  { target:'#settings-btn', title:'Make it yours',
+    body:'Themes, storage, AI, and adding your own apps all live in Settings. You can replay this tour from there anytime.' },
+];
 
-  const wrap = document.createElement('div');
-  wrap.className = 'nw-welcome-backdrop';
-  wrap.id = 'welcome-backdrop';
-  wrap.innerHTML = `
-    <section class="nw-welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-copy">
-      <div class="nw-welcome-mark" aria-hidden="true">n</div>
-      <h2 id="welcome-title">Welcome to NakliOS</h2>
-      <p id="welcome-copy">Your private browser desktop: create first, and connect a Folder or encrypted Crate only when an app needs it.</p>
-      <div class="nw-welcome-actions">
-        <button class="nw-welcome-primary" id="welcome-create-note" type="button">Create a note</button>
-        <button class="nw-welcome-secondary" id="welcome-explore" type="button">Explore the desktop</button>
+let tourLayer = null, tourIndex = 0, tourSteps = [], tourPrevFocus = null;
+
+function tourTargetEl(step){
+  return document.querySelector(step.target) || document.getElementById('icon-grid') || document.body;
+}
+function tourTargetVisible(step){
+  const el = document.querySelector(step.target);
+  // Keep any present, non-hidden target. Size is read live at render time, so
+  // chrome that fills in after boot (e.g. the dock) still gets its own step.
+  return !!el && getComputedStyle(el).display !== 'none';
+}
+function positionTour(){
+  if (!tourLayer) return;
+  const el = tourTargetEl(tourSteps[tourIndex]);
+  const spot = tourLayer.querySelector('.nw-tour-spotlight');
+  const card = tourLayer.querySelector('.nw-tour-card');
+  const r = el.getBoundingClientRect();
+  const pad = 6, vw = window.innerWidth, vh = window.innerHeight;
+  spot.style.top = Math.max(4, r.top - pad) + 'px';
+  spot.style.left = Math.max(4, r.left - pad) + 'px';
+  spot.style.width = Math.min(vw - 8, r.width + pad * 2) + 'px';
+  spot.style.height = Math.min(vh - 8, r.height + pad * 2) + 'px';
+  const gap = 16, margin = 12, cw = card.offsetWidth, ch = card.offsetHeight;
+  let cTop, cLeft = r.left;
+  if (r.bottom + gap + ch <= vh - margin) cTop = r.bottom + gap;
+  else if (r.top - gap - ch >= margin) cTop = r.top - gap - ch;
+  else cTop = vh - ch - margin;
+  cLeft = Math.min(Math.max(margin, cLeft), vw - cw - margin);
+  cTop = Math.min(Math.max(margin, cTop), vh - ch - margin);
+  card.style.top = cTop + 'px';
+  card.style.left = cLeft + 'px';
+}
+function renderTourStep(){
+  const step = tourSteps[tourIndex];
+  tourTargetEl(step).scrollIntoView({ block:'nearest', inline:'nearest' });
+  const card = tourLayer.querySelector('.nw-tour-card');
+  card.querySelector('.nw-tour-progress').textContent = `Quick tour · ${tourIndex + 1} of ${tourSteps.length}`;
+  card.querySelector('h2').textContent = step.title;
+  card.querySelector('.nw-tour-body').textContent = step.body;
+  card.querySelector('.nw-tour-back').disabled = tourIndex === 0;
+  const next = card.querySelector('.nw-tour-next');
+  next.textContent = tourIndex === tourSteps.length - 1 ? 'Finish' : 'Next';
+  card.style.visibility = 'hidden';
+  requestAnimationFrame(() => { positionTour(); card.style.visibility = 'visible'; next.focus(); });
+}
+function tourNext(){
+  if (tourIndex < tourSteps.length - 1){ tourIndex++; renderTourStep(); }
+  else finishTour();
+}
+function tourKeydown(event){
+  if (!tourLayer) return;
+  event.stopPropagation();
+  if (event.key === 'Escape'){ event.preventDefault(); finishTour(); }
+  else if (event.key === 'ArrowRight'){ event.preventDefault(); tourNext(); }
+  else if (event.key === 'ArrowLeft'){ event.preventDefault(); if (tourIndex > 0){ tourIndex--; renderTourStep(); } }
+  else if (event.key === 'Tab'){
+    event.preventDefault();
+    const btns = [...tourLayer.querySelectorAll('button:not([disabled])')];
+    if (!btns.length) return;
+    let i = btns.indexOf(document.activeElement);
+    i = event.shiftKey ? (i <= 0 ? btns.length - 1 : i - 1) : (i >= btns.length - 1 ? 0 : i + 1);
+    btns[i].focus();
+  }
+}
+function closeTour(){
+  if (!tourLayer) return;
+  const layer = tourLayer; tourLayer = null;
+  window.removeEventListener('resize', positionTour);
+  document.removeEventListener('keydown', tourKeydown, true);
+  layer.remove();
+  if (tourPrevFocus && tourPrevFocus.isConnected) tourPrevFocus.focus();
+  tourPrevFocus = null;
+}
+function finishTour(){ localStorage.setItem(TOUR_KEY, '1'); closeTour(); }
+function startTour({ force = false } = {}){
+  if (tourLayer) return false;
+  if (!force && localStorage.getItem(TOUR_KEY)) return false;
+  tourSteps = TOUR_STEPS.filter(tourTargetVisible);
+  if (!tourSteps.length) return false;
+  tourPrevFocus = document.activeElement;
+  tourIndex = 0;
+  tourLayer = document.createElement('div');
+  tourLayer.className = 'nw-tour-layer';
+  tourLayer.innerHTML = `
+    <div class="nw-tour-spotlight" aria-hidden="true"></div>
+    <section class="nw-tour-card" role="dialog" aria-modal="true" aria-labelledby="nw-tour-title" aria-describedby="nw-tour-body">
+      <div class="nw-tour-progress"></div>
+      <h2 id="nw-tour-title"></h2>
+      <p class="nw-tour-body" id="nw-tour-body" aria-live="polite"></p>
+      <div class="nw-tour-actions">
+        <button class="nw-tour-btn nw-tour-skip" type="button">Skip</button>
+        <button class="nw-tour-btn nw-tour-back" type="button">Back</button>
+        <button class="nw-tour-btn primary nw-tour-next" type="button">Next</button>
       </div>
     </section>`;
-  root.appendChild(wrap);
-
-  const dismiss = () => {
-    localStorage.setItem(WELCOME_KEY, '1');
-    document.removeEventListener('keydown', onKey);
-    wrap.remove();
+  (document.getElementById('overlay-root') || document.body).appendChild(tourLayer);
+  tourLayer.querySelector('.nw-tour-skip').addEventListener('click', finishTour);
+  tourLayer.querySelector('.nw-tour-back').addEventListener('click', () => { if (tourIndex > 0){ tourIndex--; renderTourStep(); } });
+  tourLayer.querySelector('.nw-tour-next').addEventListener('click', tourNext);
+  window.addEventListener('resize', positionTour);
+  document.addEventListener('keydown', tourKeydown, true);
+  renderTourStep();
+  return true;
+}
+// New profiles only — a returning user isn't re-onboarded. The dock renders
+// async and is `display:none` until it has items, so wait for it to settle
+// (populated on desktop, or staying hidden on mobile) before the filter runs.
+function maybeStartFirstRunTour(){
+  if (HAD_EXISTING_PROFILE || localStorage.getItem(TOUR_KEY)) return;
+  let waited = 0;
+  const tick = () => {
+    // Don't trust the mobile/dock signal until the viewport has a real
+    // measurement — a transient 0-width during boot would falsely read as
+    // mobile and drop the dock step.
+    const measured = window.innerWidth > 0;
+    const dock = document.getElementById('nw-dock');
+    const dockReady = !!dock && dock.children.length > 0;
+    const mobile = measured && document.body.classList.contains('is-mobile');
+    if ((measured && (dockReady || mobile)) || waited >= 3000){ startTour(); return; }
+    waited += 120;
+    setTimeout(tick, 120);
   };
-  const onKey = event => {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    dismiss();
-  };
-  document.addEventListener('keydown', onKey);
-  wrap.querySelector('#welcome-explore').addEventListener('click', dismiss);
-  wrap.querySelector('#welcome-create-note').addEventListener('click', () => {
-    dismiss();
-    const notes = APPS.find(app => app.id === 'notes');
-    if (notes) openApp(notes, { action:'new-note' });
-  });
-  setTimeout(() => wrap.querySelector('#welcome-create-note')?.focus(), 0);
+  setTimeout(tick, 400);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -7736,6 +7840,7 @@ function openSpotlight(){
   input.addEventListener('keydown', e => {
     if (e.key === 'Escape') { close(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); active++; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); render(); }
     else if (e.key === 'Enter') {
       const items = rank(input.value.trim());
       if (items[active]) { close(); openApp(items[active]); }
@@ -8448,6 +8553,7 @@ function openSettings(section){
       <a class="nw-foot-link" href="https://github.com/NakliTechie/nakli-dev" target="_blank">View source on GitHub →</a>
       <a class="nw-foot-link" href="https://naklitechie.github.io/" target="_blank">Portfolio: naklitechie.github.io →</a>
     </div>
+    <button class="nw-fs-btn-primary" id="replay-tour" type="button" style="margin-top:12px;">↻ Replay welcome tour</button>
   `;
   root.appendChild(wrap);
   setTimeout(() => {
@@ -8885,6 +8991,10 @@ function openSettings(section){
     const app = await openAddAppDialog();
     if (app) openApp(app);
     else openSettings('apps');
+  });
+  wrap.querySelector('#replay-tour')?.addEventListener('click', () => {
+    closeSettings();
+    setTimeout(() => startTour({ force:true }), 60);
   });
   wrap.querySelectorAll('.third-party-open').forEach(button => {
     button.addEventListener('click', () => {
@@ -11450,7 +11560,7 @@ async function init(){
   document.getElementById('spotlight-btn').addEventListener('click', openSpotlight);
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('mode-pill').addEventListener('click', e => { e.stopPropagation(); openSettings(); });
-  setTimeout(openWelcome, 0);
+  maybeStartFirstRunTour();
 
   // Right-click on empty desktop → "New sticky note"
   document.getElementById('icon-area').addEventListener('contextmenu', e => {

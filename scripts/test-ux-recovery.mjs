@@ -57,10 +57,12 @@ assert.doesNotMatch(host, /if \(isMobile\(\)\) return 'basic'/,
   'mobile profiles must retain the selected windowed experience now that windows fit');
 assert.match(host, /const HAD_EXISTING_PROFILE = Object\.keys\(localStorage\)/,
   'first-run onboarding must distinguish returning profiles before boot writes defaults');
-assert.match(host, /id="welcome-create-note"[\s\S]*?Create a note/,
-  'first-run onboarding must lead with a useful creation action');
-assert.match(host, /openApp\(notes, \{ action:'new-note' \}\)/,
-  'the welcome action must launch Notes with an explicit creation intent');
+assert.match(host, /const TOUR_STEPS = \[/,
+  'first-run onboarding must present a guided coach-mark tour');
+assert.match(host, /function maybeStartFirstRunTour\(\)/,
+  'the first-run tour must trigger only for new profiles');
+assert.match(host, /id="replay-tour"[\s\S]*?Replay welcome tour/,
+  'the tour must be replayable from Settings');
 assert.match(host, /id:'files'[\s\S]*?Folder or Crate/,
   'Files remains deliberately scoped to connected Folder or Crate storage');
 assert.doesNotMatch(files, /indexedDB\.open|localStorage\.setItem/,
