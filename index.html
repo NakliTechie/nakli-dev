@@ -6405,6 +6405,434 @@ function aiHostImageNative(prompt, options = {}){
   });
 }
 
+// ════════════════════════════════════════════════════════════════════
+// SEMANTIC INDEX (RAG) — host-owned embedding + vector search service
+// ════════════════════════════════════════════════════════════════════
+// One MiniLM worker embeds text locally (VaultMind's proven pipeline).
+// The index spans the whole connected backend root, persists at
+// system/rag/index.json on that backend, and re-embeds only files whose
+// size/mtime fingerprint changed. Apps reach it through naklios.ai.search,
+// which clamps results to apps/<id>/; Spotlight uses the full index.
+
+const RAG_MODEL_KEY = 'all-MiniLM-L6-v2';
+const RAG_DIM = 384;
+const RAG_INDEX_PATH = 'system/rag/index.json';
+const RAG_MAX_FILES = 500;
+const RAG_MAX_CHUNKS = 3000;
+const RAG_MAX_FILE_CHARS = 512 * 1024;
+const RAG_BATCH = 16;
+const RAG_SCORE_FLOOR = 0.25;
+const RAG_TEXT_EXT = new Set([
+  'md','txt','json','jsonl','csv','tsv','js','mjs','css','html','htm',
+  'xml','yml','yaml',
+]);
+
+const ragHost = {
+  state:'idle',            // idle | loading | ready | error
+  error:null,
+  worker:null,
+  device:null,
+  loadPromise:null,
+  embedChain:Promise.resolve(),
+  embedCounter:0,
+  indexing:false,
+  backendId:null,
+  files:new Map(),         // path → { fp, chunks:[{text, vec:Float32Array}] }
+};
+
+function ragReadDecision(){
+  try { return JSON.parse(localStorage.getItem('nakliOS.rag.v1') || 'null'); }
+  catch(_){ return null; }
+}
+
+// Host-level consent for building/using the index, plus the per-app manifest
+// gate third-party apps already pass for chat inference.
+async function ragEnsurePermission(appLabel){
+  const saved = ragReadDecision();
+  if (saved?.granted === true) return true;
+  if (saved?.granted === false) return false;
+  const bid = backendsAvailable()[0];
+  const where = bid === 'crate'
+    ? 'encrypted Crate'
+    : 'NakliOS Folder';
+  const ok = await nakliosConfirm(
+    `Let NakliOS build a private semantic search index of your ${where}?\n\n` +
+    `Text is split into chunks and embedded entirely on this device with a small local model (~25&nbsp;MB one-time download). Nothing leaves the browser. The index itself lives inside your ${where} at <code>${_dlgEscape(RAG_INDEX_PATH)}</code>.`,
+    {
+      title:'Enable semantic search?',
+      okLabel:'Build index',
+      cancelLabel:'Not now',
+      allowHtmlBody:true,
+    },
+  );
+  localStorage.setItem('nakliOS.rag.v1', JSON.stringify({ granted:!!ok }));
+  broadcastCapabilities();
+  return ok;
+}
+
+// Advertised to apps like fs: possible when a runtime exists and the app may
+// use inference. First search call asks consent, exactly like fs prompts bind.
+function ragCapabilityForApp(appId){
+  return typeof Worker !== 'undefined' &&
+    backendsAvailable().length > 0 &&
+    aiManifestAllows(appId);
+}
+
+function ragSetState(next, error = null){
+  ragHost.state = next;
+  ragHost.error = error ? String(error?.message || error) : null;
+  try { broadcastCapabilities(); } catch(_){}
+}
+
+function ragLoadWorker(){
+  if (ragHost.loadPromise) return ragHost.loadPromise;
+  ragSetState('loading');
+  const attempt = device => new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL('sys/rag/embed-worker.js', document.baseURI),
+      { type:'module', name:'naklios-rag-embed' },
+    );
+    let settled = false;
+    worker.addEventListener('message', event => {
+      const msg = event.data || {};
+      if (msg.type === 'ready' && !settled){
+        settled = true;
+        ragHost.worker = worker;
+        ragHost.device = device;
+        resolve(worker);
+      } else if (msg.type === 'error' && !settled){
+        settled = true;
+        try { worker.terminate(); } catch(_){}
+        reject(new Error(msg.message || 'Embedding model failed to load'));
+      }
+    });
+    worker.addEventListener('error', event => {
+      if (settled) return;
+      settled = true;
+      try { worker.terminate(); } catch(_){}
+      reject(new Error(event.message || 'Embedding worker crashed'));
+    });
+    worker.postMessage({ type:'load', device });
+  });
+  ragHost.loadPromise = attempt(navigator.gpu ? 'webgpu' : 'wasm')
+    .catch(err => navigator.gpu ? attempt('wasm') : Promise.reject(err))
+    .then(worker => { ragSetState('ready'); return worker; })
+    .catch(err => { ragHost.loadPromise = null; ragSetState('error', err); throw err; });
+  return ragHost.loadPromise;
+}
+
+function ragEmbed(texts){
+  const run = async () => {
+    const worker = await ragLoadWorker();
+    const id = ++ragHost.embedCounter;
+    return new Promise((resolve, reject) => {
+      const handler = event => {
+        const msg = event.data || {};
+        if (msg.id !== id) return;
+        worker.removeEventListener('message', handler);
+        if (msg.type === 'embeddings') resolve(msg.vectors || []);
+        else reject(new Error(msg.message || 'Embedding failed'));
+      };
+      worker.addEventListener('message', handler);
+      worker.postMessage({ type:'embed', id, texts });
+    });
+  };
+  ragHost.embedChain = ragHost.embedChain.then(run, run);
+  return ragHost.embedChain;
+}
+
+function ragVecToB64(vec){
+  const bytes = new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK){
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function ragB64ToVec(b64){
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+
+function ragBackendRef(backendId){
+  const id = backendId || backendsAvailable()[0];
+  const backend = id && BACKENDS[id];
+  if (!backend || !backend.isConnected()) throw new Error('No storage backend connected');
+  return { id, backend };
+}
+
+// Swap in the persisted index when the active backend changed this session.
+async function ragLoadIndexForBackend(id){
+  if (ragHost.backendId === id) return;
+  ragHost.backendId = id;
+  ragHost.files = new Map();
+  const { backend } = ragBackendRef(id);
+  try {
+    const raw = await backend.read(RAG_INDEX_PATH);
+    const text = raw instanceof Uint8Array
+      ? new TextDecoder().decode(raw)
+      : String(raw);
+    const data = JSON.parse(text);
+    if (data?.version === 1 && data.model === RAG_MODEL_KEY && data.backendId === id){
+      for (const [path, rec] of Object.entries(data.files || {})){
+        ragHost.files.set(path, {
+          fp:rec.fp,
+          chunks:(rec.chunks || []).map(([text, v]) => ({ text, vec:ragB64ToVec(v) })),
+        });
+      }
+    }
+  } catch(_){ /* first run or unreadable index — start empty */ }
+}
+
+async function ragPersistIndex(){
+  if (!ragHost.backendId) return;
+  const { id, backend } = ragBackendRef(ragHost.backendId);
+  const files = {};
+  let chunkCount = 0;
+  for (const [path, rec] of ragHost.files){
+    chunkCount += rec.chunks.length;
+    files[path] = {
+      fp:rec.fp,
+      chunks:rec.chunks.map(c => [c.text, ragVecToB64(c.vec)]),
+    };
+  }
+  const payload = JSON.stringify({
+    version:1,
+    model:RAG_MODEL_KEY,
+    dim:RAG_DIM,
+    backendId:id,
+    savedAt:new Date().toISOString(),
+    files,
+  });
+  await backend.write(RAG_INDEX_PATH, new TextEncoder().encode(payload));
+  return { files:Object.keys(files).length, chunks:chunkCount };
+}
+
+// VaultMind's sentence-aware chunker, ported verbatim.
+function ragChunkText(text, maxChars = 800, overlapChars = 150){
+  const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+  const chunks = [];
+  let cur = '';
+  for (const s of sentences){
+    if (cur.length + s.length > maxChars && cur.length > 0){
+      chunks.push(cur.trim());
+      const words = cur.split(/\s+/);
+      let olen = 0;
+      const overlap = [];
+      for (let i = words.length - 1; i >= 0 && olen < overlapChars; i--){
+        olen += words[i].length + 1;
+        overlap.unshift(words[i]);
+      }
+      cur = overlap.join(' ') + ' ' + s;
+    } else {
+      cur += (cur ? ' ' : '') + s;
+    }
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks;
+}
+
+function ragCosine(a, b){
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++){
+    dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
+}
+
+// Bring the index up to date with the backend: walk text files, keep chunks
+// whose fingerprint (size:mtimeMs) is unchanged, embed only new/changed ones.
+async function ragSyncIndex(onProgress = () => {}){
+  const { id } = ragBackendRef();
+  await ragLoadIndexForBackend(id);
+  const fileops = await rigFileops({ backendId:id });
+  const walk = await fileops.list('', { recursive:true });
+  if (!walk.ok) throw new Error(walk.message || 'Index walk failed');
+  const candidates = walk.entries.filter(entry =>
+    entry.type === 'file' &&
+    !entry.path.startsWith('system/') &&
+    RAG_TEXT_EXT.has((entry.name.split('.').pop() || '').toLowerCase())
+  );
+  if (candidates.length > RAG_MAX_FILES){
+    candidates.length = RAG_MAX_FILES;
+  }
+  // Fingerprint every candidate; decide what needs (re-)embedding.
+  const seen = new Set();
+  const stale = [];   // { path, text }
+  let totalChunks = [...ragHost.files.values()]
+    .reduce((sum, rec) => sum + rec.chunks.length, 0);
+  let budget = Math.max(0, RAG_MAX_CHUNKS - totalChunks);
+  for (const entry of candidates){
+    if (budget <= 0) break;
+    const st = await fileops.stat(entry.path);
+    if (!st.ok) continue;
+    const fp = `${st.stat.size}:${st.stat.mtimeMs}`;
+    seen.add(entry.path);
+    const cached = ragHost.files.get(entry.path);
+    if (cached && cached.fp === fp) continue;
+    const file = await fileops.read(entry.path, { encoding:'utf-8' });
+    if (!file.ok) continue;
+    const text = String(file.data).slice(0, RAG_MAX_FILE_CHARS);
+    const pieces = ragChunkText(text);
+    const room = Math.min(pieces.length, budget);
+    if (room < pieces.length) pieces.length = room;
+    if (!pieces.length){
+      if (cached) ragHost.files.set(entry.path, { fp, chunks:[] });
+      else seen.delete(entry.path);
+      continue;
+    }
+    stale.push({ path:entry.path, fp, pieces });
+    budget -= pieces.length;
+  }
+  // Drop vanished files and remember unchanged paths so they survive the merge.
+  for (const path of [...ragHost.files.keys()]){
+    if (!seen.has(path)) ragHost.files.delete(path);
+  }
+  const pendingChunks = stale.reduce((sum, item) => sum + item.pieces.length, 0);
+  if (!pendingChunks) return { embedded:0 };
+  ragHost.indexing = true;
+  ragSetState(ragHost.state === 'ready' ? 'ready' : ragHost.state);
+  let done = 0;
+  try {
+    for (const item of stale){
+      const vectors = [];
+      for (let i = 0; i < item.pieces.length; i += RAG_BATCH){
+        const batch = item.pieces.slice(i, i + RAG_BATCH);
+        vectors.push(...await ragEmbed(batch));
+        done += batch.length;
+        onProgress({ done, total:pendingChunks, path:item.path });
+      }
+      ragHost.files.set(item.path, {
+        fp:item.fp,
+        chunks:vectors.map((vec, k) => ({ text:item.pieces[k], vec })),
+      });
+    }
+  } finally {
+    ragHost.indexing = false;
+  }
+  return { embedded:done };
+}
+
+// Full-folder search used by Spotlight and by the app-clamped SDK surface.
+async function ragSearchCore(query, { limit = 8, prefix = '' } = {}){
+  const needle = String(query || '').trim();
+  if (!needle) return [];
+  const cleanPrefix = String(prefix || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  await ragSyncIndex();
+  const [queryVec] = await ragEmbed([needle.slice(0, 2000)]);
+  const hits = [];
+  for (const [path, rec] of ragHost.files){
+    if (cleanPrefix && !(path === cleanPrefix || path.startsWith(cleanPrefix + '/'))) continue;
+    for (const chunk of rec.chunks){
+      const score = ragCosine(queryVec, chunk.vec);
+      if (score >= RAG_SCORE_FLOOR){
+        hits.push({ path, text:chunk.text, score });
+      }
+    }
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, Math.max(1, Math.min(32, Number(limit) || 8)));
+}
+
+function ragIndexStats(){
+  let chunks = 0;
+  for (const rec of ragHost.files.values()) chunks += rec.chunks.length;
+  return {
+    state:ragHost.state,
+    backend:ragHost.backendId,
+    files:ragHost.files.size,
+    chunks,
+    indexing:ragHost.indexing,
+    device:ragHost.device,
+  };
+}
+
+// postMessage entry: search clamped to the calling app's namespace.
+async function ragHostSearch(source, msg, appId){
+  if (!aiManifestAllows(appId)){
+    throw new Error('This app did not declare the inference permission');
+  }
+  const query = String(msg.query || '').trim();
+  if (!query) throw new Error('A search query is required');
+  const granted = await ragEnsurePermission(appId);
+  if (!granted) throw new Error('Semantic search permission was not granted');
+  const clampRoot = `apps/${appId}`;
+  const requested = String(msg.prefix || '')
+    .split('/').filter(seg => seg && seg !== '.' && seg !== '..').join('/');
+  const prefix = requested ? `${clampRoot}/${requested}` : clampRoot;
+  const emit = progress => {
+    if (typeof msg.requestId !== 'string') return;
+    try {
+      source.postMessage({
+        type:'naklios:rag:event',
+        requestId:msg.requestId,
+        event:'indexing',
+        ...progress,
+      }, '*');
+    } catch(_){}
+  };
+  const sync = await ragSyncIndex(emit);
+  if (sync.embedded){
+    void ragPersistIndex().catch(err => console.warn('rag persist failed:', err));
+  }
+  const hits = await ragSearchCore(query, { limit:msg.limit, prefix });
+  return { hits, stats:ragIndexStats() };
+}
+
+// Host-native search for Spotlight (full folder, no namespace clamp).
+async function ragSearchNative(query, options = {}){
+  if (ragReadDecision()?.granted !== true) return null;   // not enabled yet
+  const sync = await ragSyncIndex(options.onProgress || (() => {}));
+  if (sync.embedded){
+    void ragPersistIndex().catch(err => console.warn('rag persist failed:', err));
+  }
+  const hits = await ragSearchCore(query, options);
+  return { hits, stats:ragIndexStats() };
+}
+
+// Open one indexed file in Editor by minting the same window-lifetime grant
+// the Files → Open With flow uses. Spotlight is host UI, so no per-app
+// storage permission applies — but the file must be text and under 2 MB.
+async function ragOpenResultInEditor(path){
+  const target = APPS.find(app => app.id === 'editor' && app.kind === 'system');
+  if (!target) throw new Error('Editor is unavailable');
+  const cleanPath = String(path || '').replace(/^\/+/, '');
+  if (!cleanPath || !EDITABLE_FILE_RE.test(cleanPath)){
+    throw new Error('Editor opens text and source-code files');
+  }
+  const { id, backend } = ragBackendRef();
+  const data = await backend.read(cleanPath);
+  if (String(data).length > FILE_GRANT_MAX_CHARS){
+    throw new Error('Editor opens text files up to 2 MB');
+  }
+  const token = newFileGrantToken();
+  fileGrants.set(token, {
+    token,
+    targetAppId:'editor',
+    sourceAppId:'spotlight',
+    sourcePath:cleanPath,
+    safePath:cleanPath,
+    name:cleanPath.split('/').filter(Boolean).at(-1) || 'Untitled',
+    backendId:id,
+    backendIdentity:fileGrantBackendIdentity(id),
+    targetSource:null,
+  });
+  openApp(target, { action:'open-file' });
+  const win = openWindows.editor;
+  if (!win){
+    fileGrants.delete(token);
+    throw new Error('Editor could not be opened');
+  }
+  win._pendingFileGrantTokens = [...(win._pendingFileGrantTokens || []), token];
+  deliverPendingFileGrants(win);
+  return true;
+}
+
+
 function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
@@ -6435,6 +6863,8 @@ function capabilitySnapshot(appId){
     aiImageProvider:aiImageModel.runtime,
     aiImageLocal:aiImageModel.scope !== 'external',
     aiImageState:aiImageHost.state,
+    aiSearch: ragCapabilityForApp(appId),
+    aiSearchState:ragHost.state,
   };
 }
 
@@ -6877,6 +7307,21 @@ window.addEventListener('message', async e => {
     if (msg.requestId) {
       try { e.source.postMessage(reply, '*'); } catch(_){}
     }
+  } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:rag:')){
+    const reply = { type:'naklios:rag:reply', requestId:msg.requestId };
+    try {
+      const appId = getAppId();
+      if (!appId) throw new Error('Unknown app');
+      const op = msg.type.slice('naklios:rag:'.length);
+      if (op === 'search') reply.result = await ragHostSearch(e.source, msg, appId);
+      else if (op === 'status') reply.result = ragIndexStats();
+      else throw new Error('Unknown semantic search operation');
+    } catch (err){
+      reply.error = String(err?.message || err);
+    }
+    if (msg.requestId) {
+      try { e.source.postMessage(reply, '*'); } catch(_){}
+    }
   }
 });
 
@@ -7122,7 +7567,7 @@ function openSpotlight(){
     <div class="nw-spotlight" role="dialog" aria-label="Search apps">
       <input type="text" id="spot-input" role="combobox" aria-autocomplete="list"
         aria-controls="spot-list" aria-expanded="true"
-        placeholder="Search apps by name, tag, or description…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        placeholder="Search apps by name, tag, or description — or describe what you're looking for…" autocomplete="off" autocapitalize="off" spellcheck="false">
       <div class="nw-spot-list" id="spot-list" role="listbox" aria-label="Matching apps"></div>
     </div>
   `;
@@ -7130,6 +7575,9 @@ function openSpotlight(){
   const input = wrap.querySelector('#spot-input');
   const list = wrap.querySelector('#spot-list');
   let active = 0;
+  // Semantic hits over the connected backend's index. Apps match by keyword;
+  // this section adds meaning-based file matches below them.
+  const semantic = { state:'idle', hits:[], token:0, timer:null };
 
   function rank(q){
     if (!q) {
@@ -7155,6 +7603,102 @@ function openSpotlight(){
     return scored.slice(0, 12).map(x => x.app);
   }
 
+  function semanticHTML(){
+    const q = input.value.trim();
+    if (!q) return '';
+    if (!backendsAvailable().length) return '';   // nothing to index yet
+    const decision = ragReadDecision();
+    if (decision?.granted === false || decision === null) {
+      return `<div class="nw-spot-item" id="spot-semantic-enable" role="button" tabindex="0">
+        <div class="nw-spot-glyph">🔎</div>
+        <div style="flex:1; min-width:0;">
+          <div class="nw-spot-name">Enable semantic search</div>
+          <div class="nw-spot-desc">Find files by meaning across your connected Folder or Crate — embedded entirely on this device.</div>
+        </div>
+      </div>`;
+    }
+    if (semantic.state === 'searching' || semantic.state === 'indexing'){
+      return `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">Searching meaning…</span></div>`;
+    }
+    if (semantic.state === 'ready' && semantic.hits.length){
+      return semantic.hits.map((hit, i) => `
+        <div class="nw-spot-item is-semantic" data-sem-idx="${i}" role="option">
+          <div class="nw-spot-glyph">📄</div>
+          <div style="flex:1; min-width:0;">
+            <div class="nw-spot-name">${_dlgEscape(hit.path.split('/').pop() || 'file')}</div>
+            <div class="nw-spot-desc">${_dlgEscape(hit.text.slice(0, 140))}</div>
+          </div>
+          <div class="nw-spot-meta">${_dlgEscape(hit.path)} · ${Math.round(hit.score * 100)}%</div>
+        </div>`).join('');
+    }
+    return '';
+  }
+
+  function wireSemantic(){
+    list.querySelectorAll('[data-sem-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const hit = semantic.hits[+el.dataset.semIdx];
+        if (!hit) return;
+        close();
+        ragOpenResultInEditor(hit.path).catch(err => {
+          console.warn('Semantic result open failed:', err);
+        });
+      });
+    });
+    const enable = list.querySelector('#spot-semantic-enable');
+    if (enable){
+      const offer = async () => {
+        if (await ragEnsurePermission()){
+          void runSemantic(input.value.trim());
+        } else {
+          render();
+        }
+      };
+      enable.addEventListener('click', () => void offer());
+      enable.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); void offer(); }
+      });
+    }
+  }
+
+  async function runSemantic(q){
+    if (!q){ semantic.state = 'idle'; semantic.hits = []; render(); return; }
+    const myToken = ++semantic.token;
+    semantic.state = 'searching';
+    render();
+    try {
+      const res = await ragSearchNative(q, {
+        limit:6,
+        onProgress(){
+          if (myToken === semantic.token && semantic.state !== 'indexing'){
+            semantic.state = 'indexing';
+            render();
+          }
+        },
+      });
+      if (myToken !== semantic.token) return;
+      semantic.hits = res?.hits || [];
+    } catch(_){
+      semantic.hits = [];
+    }
+    if (myToken !== semantic.token) return;
+    semantic.state = 'ready';
+    render();
+  }
+
+  function scheduleSemantic(){
+    const q = input.value.trim();
+    clearTimeout(semantic.timer);
+    if (!q){
+      semantic.token++;
+      semantic.state = 'idle';
+      semantic.hits = [];
+      return;
+    }
+    if (ragReadDecision()?.granted !== true) return;   // rendered as the enable offer
+    semantic.timer = setTimeout(() => void runSemantic(q), 350);
+  }
+
   function render(){
     const items = rank(input.value.trim());
     if (active >= items.length) active = 0;
@@ -7169,6 +7713,8 @@ function openSpotlight(){
         <div class="nw-spot-meta">${_dlgEscape(app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || '')}</div>
       </div>
     `).join('') || `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">No matches.</span></div>`;
+    list.insertAdjacentHTML('beforeend', semanticHTML());
+    wireSemantic();
     const activeOption = items.length ? `spot-option-${active}` : '';
     if (activeOption) input.setAttribute('aria-activedescendant', activeOption);
     else input.removeAttribute('aria-activedescendant');
@@ -7186,11 +7732,10 @@ function openSpotlight(){
     wrap.remove();
   }
 
-  input.addEventListener('input', () => { active = 0; render(); });
+  input.addEventListener('input', () => { active = 0; render(); scheduleSemantic(); });
   input.addEventListener('keydown', e => {
     if (e.key === 'Escape') { close(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); active++; render(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active-1); render(); }
     else if (e.key === 'Enter') {
       const items = rank(input.value.trim());
       if (items[active]) { close(); openApp(items[active]); }

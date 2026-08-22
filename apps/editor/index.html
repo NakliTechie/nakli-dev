@@ -15,14 +15,20 @@ button,input,textarea{font:inherit}button{border:1px solid var(--line);border-ra
 header{display:flex;gap:9px;align-items:center;padding:8px 11px;background:var(--panel);border-bottom:1px solid var(--line)}.brand{font-weight:750;letter-spacing:.02em}.brand b{color:var(--brand)}.spacer{flex:1}.locations{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px}.locations button{border:0;background:transparent;padding:4px 8px;color:var(--muted)}.locations button.active{background:var(--panel2);color:var(--ink)}.locations button.disabled{opacity:.55}
 .tabs{display:flex;min-height:35px;overflow:auto;background:var(--panel);border-bottom:1px solid var(--line)}.tab{display:flex;align-items:center;gap:6px;min-width:110px;max-width:230px;border:0;border-right:1px solid var(--line);border-radius:0;background:transparent;color:var(--muted);padding:7px 9px}.tab.active{background:var(--body);color:var(--ink)}.tab .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tab .dirty{color:var(--brand)}.tab .close{margin-left:auto;padding:0;border:0;background:none;color:inherit}
 .main{display:grid;grid-template-columns:250px 1fr;min-height:0}.sidebar{display:grid;grid-template-rows:auto auto 1fr auto;min-height:0;border-right:1px solid var(--line);background:color-mix(in srgb,var(--panel) 76%,var(--body))}.side-head{display:flex;align-items:center;gap:6px;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.side-search{margin:0 8px 7px;width:calc(100% - 16px);border:1px solid var(--line);border-radius:7px;background:var(--body);color:var(--ink);padding:7px 8px}.tree{overflow:auto;padding:4px 6px 12px}.tree details{padding-left:8px}.tree summary{padding:4px;cursor:pointer;color:var(--muted);user-select:none}.tree-file,.result{display:block;width:100%;border:0;background:transparent;text-align:left;padding:5px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}.tree-file.active{background:color-mix(in srgb,var(--brand) 20%,var(--panel));color:var(--ink)}.search-results{max-height:38%;overflow:auto;border-top:1px solid var(--line);padding:6px}.result small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis}.empty{padding:20px 12px;color:var(--muted);text-align:center}
-.workspace{display:grid;grid-template-rows:auto auto 1fr;min-width:0;min-height:0}.toolbar{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--panel);border-bottom:1px solid var(--line)}.findbar{display:none;gap:6px;padding:6px 9px;background:var(--panel2);border-bottom:1px solid var(--line)}.findbar.open{display:flex}.findbar input{min-width:0;flex:1;border:1px solid var(--line);border-radius:6px;background:var(--body);color:var(--ink);padding:5px 7px}.editor-shell{position:relative;display:grid;grid-template-columns:auto 1fr;min-height:0;background:var(--body)}.line-numbers{margin:0;padding:12px 9px 80px;min-width:45px;overflow:hidden;text-align:right;color:color-mix(in srgb,var(--muted) 68%,transparent);background:var(--panel);border-right:1px solid var(--line);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none}.editor{width:100%;height:100%;resize:none;border:0;outline:0;background:var(--body);color:var(--ink);padding:12px 14px 80px;tab-size:2;white-space:pre;overflow:auto;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.welcome{grid-column:1/-1;display:grid;place-items:center;color:var(--muted);text-align:center;padding:30px}.welcome[hidden]{display:none}.recovery{position:absolute;left:55px;right:12px;top:10px;z-index:5;display:none;align-items:center;gap:8px;padding:9px 11px;border:1px solid color-mix(in srgb,var(--brand) 58%,var(--line));border-radius:8px;background:var(--panel2);box-shadow:0 8px 30px rgba(0,0,0,.35)}.recovery.show{display:flex}.recovery span{flex:1}
+.workspace{display:grid;grid-template-rows:auto auto 1fr;min-width:0;min-height:0}.toolbar{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--panel);border-bottom:1px solid var(--line)}.findbar{display:none;gap:6px;padding:6px 9px;background:var(--panel2);border-bottom:1px solid var(--line)}.findbar.open{display:flex}.findbar input{min-width:0;flex:1;border:1px solid var(--line);border-radius:6px;background:var(--body);color:var(--ink);padding:5px 7px}.editor-shell{position:relative;display:grid;grid-template-columns:auto 1fr;min-height:0;background:var(--body)}.line-numbers{margin:0;padding:12px 9px 80px;min-width:45px;overflow:hidden;text-align:right;color:color-mix(in srgb,var(--muted) 68%,transparent);background:var(--panel);border-right:1px solid var(--line);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none}.editor{width:100%;height:100%;resize:none;border:0;outline:0;background:var(--body);color:var(--ink);padding:12px 14px 80px;tab-size:2;white-space:pre;overflow:auto;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.welcome{grid-column:1/-1;display:grid;place-items:center;color:var(--muted);text-align:center;padding:30px}.welcome[hidden]{display:none}.recovery{position:absolute;left:55px;right:12px;top:10px;z-index:5;display:none;align-items:center;gap:8px;padding:9px 11px;border:1px solid color-mix(in srgb,var(--brand) 58%,var(--line));border-radius:8px;background:var(--panel2);box-shadow:0 8px 30px rgba(0,0,0,.35)}.recovery.show{display:flex}.recovery span{flex:1}.ask-answer{display:none;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line);white-space:pre-wrap;font-size:.85rem;max-height:38vh;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.ask-answer.open{display:block}
+    <button id="toggle-find">Find / Replace</button>
+    <button id="ask-toggle">Ask AI</button>
+    <button id="indent">Indent</button>
+    <button id="outdent">Outdent</button>
+    <span class="spacer"></span><span id="file-origin"></span>
+  </div>
 footer{display:flex;gap:13px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--muted)}footer .save-state{color:var(--ok)}
 dialog{width:min(500px,calc(100vw - 30px));padding:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:0 20px 70px rgba(0,0,0,.55)}dialog::backdrop{background:rgba(0,0,0,.6)}.dialog-body{padding:18px}.dialog-body h2{margin:0 0 13px;font-size:16px}.field{display:grid;gap:5px;margin:10px 0;color:var(--muted)}.field input,.field textarea{width:100%;border:1px solid var(--line);border-radius:7px;background:var(--body);color:var(--ink);padding:8px}.field textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.dialog-error{min-height:1.3em;color:var(--danger)}.dialog-actions{display:flex;justify-content:flex-end;gap:7px;padding:0 18px 18px}.primary{background:var(--brand);border-color:var(--brand);color:#fff}.palette-list{display:grid;gap:5px}.palette-list button{text-align:left;padding:9px}.toast{position:fixed;right:16px;bottom:35px;z-index:50;max-width:min(430px,calc(100vw - 32px));padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;background:var(--panel);box-shadow:0 10px 35px rgba(0,0,0,.5)}
 @media(max-width:700px){.main{grid-template-columns:1fr}.sidebar{display:none}.locations button{font-size:0}.locations button::first-letter{font-size:12px}.toolbar button span{display:none}}
 </style>
 </head>
 <body>
-<script src="../../sdk/naklios.js?v=2026-08-01-files-v1"></script>
+<script src="../../sdk/naklios.js?v=2026-08-22-rag-v1"></script>
 <script src="core.js"></script>
 <header>
   <div class="brand"><b>&lt;/&gt;</b> Editor</div>
@@ -43,6 +49,7 @@ dialog{width:min(500px,calc(100vw - 30px));padding:0;border:1px solid var(--line
   <section class="workspace">
     <div class="toolbar">
       <button id="toggle-find">Find / Replace</button>
+      <button id="ask-toggle">Ask AI</button>
       <button id="indent">Indent</button>
       <button id="outdent">Outdent</button>
       <span class="spacer"></span><span id="file-origin"></span>
@@ -52,6 +59,11 @@ dialog{width:min(500px,calc(100vw - 30px));padding:0;border:1px solid var(--line
       <input id="replace-text" placeholder="Replace" aria-label="Replace">
       <button id="find-next">Next</button><button id="replace-one">Replace</button><button id="replace-all">All</button><button id="close-find" aria-label="Close find">✕</button>
     </div>
+    <div class="findbar" id="askbar">
+      <input id="ask-text" placeholder="Ask about this project…" aria-label="Ask about this project">
+      <button id="ask-submit">Ask</button><button id="close-ask" aria-label="Close Ask">✕</button>
+    </div>
+    <div class="ask-answer" id="ask-answer" hidden></div>
     <div class="editor-shell">
       <pre class="line-numbers" id="line-numbers" aria-hidden="true">1</pre>
       <textarea class="editor" id="editor" aria-label="Code editor" spellcheck="false" disabled></textarea>
@@ -63,8 +75,7 @@ dialog{width:min(500px,calc(100vw - 30px));padding:0;border:1px solid var(--line
 <footer><span id="location-status">Browser</span><span id="language">Plain text</span><span id="cursor">Ln 1, Col 1</span><span class="spacer"></span><span class="save-state" id="save-state">Ready</span></footer>
 
 <dialog id="new-dialog" aria-labelledby="new-title"><form id="new-form" method="dialog"><div class="dialog-body"><h2 id="new-title">New project file</h2><label class="field">Relative path<input id="new-path" value="src/main.js" autocomplete="off"></label><label class="field">Contents<textarea id="new-content"></textarea></label><div class="dialog-error" id="new-error" role="status"></div></div><div class="dialog-actions"><button type="button" id="new-cancel">Cancel</button><button class="primary" type="submit">Create</button></div></form></dialog>
-<dialog id="palette" aria-labelledby="palette-title"><div class="dialog-body"><h2 id="palette-title">Commands</h2><div class="palette-list"><button data-command="new">New file</button><button data-command="save">Save all</button><button data-command="find">Find / replace</button><button data-command="search">Search project contents</button><button data-command="format-json">Format JSON</button></div></div><div class="dialog-actions"><button id="palette-close">Close</button></div></dialog>
-
+<dialog id="palette" aria-labelledby="palette-title"><div class="dialog-body"><h2 id="palette-title">Commands</h2><div class="palette-list"><button data-command="new">New file</button><button data-command="save">Save all</button><button data-command="find">Find / replace</button><button data-command="search">Search project contents</button><button data-command="ask">Ask AI about this project</button><button data-command="format-json">Format JSON</button></div></div><div class="dialog-actions"><button id="palette-close">Close</button></div></dialog>
 <script>
 (() => {
 'use strict';
@@ -125,6 +136,48 @@ async function closeTab(tab){try{if(tab.dirty)await saveTab(tab)}catch(error){to
 
 async function ensureSubscription(){unsubscribe?.();unsubscribe=null;if(activeLocation==='browser')return;try{unsubscribe=await naklios.fs.subscribe('',event=>{if(event.op==='disconnected'){unsubscribe=null;setSave('Storage disconnected; recoveries remain in Browser',false);return}const tab=tabs.find(item=>item.kind==='project'&&item.location===activeLocation&&item.path===event.path);if(!tab){void refreshTree();return}if(tab.dirty){toast(`${tab.name} changed elsewhere. Your unsaved recovery was kept.`);return}void adapter.read(tab.path).then(content=>{tab.content=tab.saved=content;render()}).catch(()=>{})})}catch(error){setSave('Live updates unavailable: '+error.message,false)}}
 
+// ── Ask AI about this project ──
+// Retrieval rides the host semantic index (apps/editor/ namespace); answers
+// stream through the shared NakliOS AI broker. Browser-only workspaces skip
+// retrieval and just ask.
+let askRun=0;
+async function projectAsk(){
+  const question=$('ask-text').value.trim();
+  const out=$('ask-answer');
+  if(!question){out.hidden=false;out.textContent='Type a question first.';return}
+  const run=++askRun;
+  out.hidden=false;out.textContent='Thinking…';
+  $('ask-submit').disabled=true;
+  try{
+    let context='';
+    if(activeLocation!=='browser'&&naklios.capabilities.aiSearch){
+      const res=await naklios.ai.search({query:question,limit:6,onIndexing:p=>{if(run===askRun)out.textContent=`Indexing ${p.done}/${p.total} chunks…`}});
+      if(run!==askRun)return;
+      if(res.hits.length)context=res.hits.map(hit=>`[${hit.path}]\n${hit.text}`).join('\n\n');
+    }
+    if(!naklios.capabilities.ai)throw new Error('NakliOS AI is unavailable or not permitted for Editor');
+    const messages=[{role:'user',content:context
+      ?`You are helping with a small code/notes workspace. Relevant excerpts follow.\n\n${context}\n\nQuestion: ${question}`
+      :question}];
+    const stream=await naklios.ai.chat.completions.create({messages,stream:true});
+    let text='';
+    for await(const chunk of stream){
+      if(run!==askRun)return;
+      text+=chunk.choices?.[0]?.delta?.content||'';
+      out.textContent=text;
+    }
+    if(!text)out.textContent='No answer came back. Check Settings → AI.';
+  }catch(error){
+    if(run===askRun)out.textContent='Ask failed: '+error.message;
+  }finally{
+    if(run===askRun)$('ask-submit').disabled=false;
+  }
+}
+$('ask-toggle').onclick=()=>{$('findbar').classList.remove('open');$('askbar').classList.toggle('open');$('ask-answer').hidden=true;if($('askbar').classList.contains('open'))$('ask-text').focus()};
+$('close-ask').onclick=()=>{askRun++;$('askbar').classList.remove('open');$('ask-answer').hidden=true};
+$('ask-submit').onclick=()=>void projectAsk();
+$('ask-text').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();void projectAsk()}});
+
 async function createFile(){let path;try{path=Core.normalisePath($('new-path').value)}catch(error){$('new-error').textContent=error.message;return}if(await adapter.exists(path)){$('new-error').textContent='A file already exists at that path.';return}try{await adapter.write(path,$('new-content').value);$('new-dialog').close();await refreshTree();await openProjectFile(path);setSave('Saved')}catch(error){$('new-error').textContent=error.message}}
 async function projectSearch(){const query=$('project-search').value.trim(),run=++searchRun,root=$('search-results');if(!query){root.hidden=true;return}root.hidden=false;root.innerHTML='<div class="empty">Searching…</div>';const results=[];for(const path of projectFiles){if(run!==searchRun)return;try{const text=await adapter.read(path),matches=Core.searchText(text,query,{});if(matches.length){const at=matches[0].index;results.push({path,snippet:text.slice(Math.max(0,at-40),at+100).replace(/\s+/g,' ')})}}catch(_){}}root.replaceChildren();if(!results.length){root.innerHTML='<div class="empty">No content matches.</div>';return}for(const result of results){const button=document.createElement('button');button.className='result';button.innerHTML='<strong></strong><small></small>';button.querySelector('strong').textContent=result.path;button.querySelector('small').textContent=result.snippet;button.onclick=()=>void openProjectFile(result.path);root.append(button)}}
 
@@ -138,8 +191,8 @@ $('editor').addEventListener('input',()=>{const tab=activeTab();if(!tab)return;t
 $('editor').addEventListener('scroll',()=>{$('line-numbers').scrollTop=$('editor').scrollTop});$('editor').addEventListener('click',updateCursor);$('editor').addEventListener('keyup',updateCursor);
 $('editor').addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();indent(e.shiftKey)}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void saveAll()}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='f'){e.preventDefault();$('findbar').classList.add('open');$('find-text').focus()}if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();$('palette').showModal()}});
 $('new-file').onclick=()=>{$('new-error').textContent='';$('new-dialog').showModal();$('new-path').focus();$('new-path').select()};$('new-cancel').onclick=()=>$('new-dialog').close();$('new-form').addEventListener('submit',e=>{e.preventDefault();void createFile()});$('save-all').onclick=()=>void saveAll();
-$('toggle-find').onclick=()=>{$('findbar').classList.toggle('open');if($('findbar').classList.contains('open'))$('find-text').focus()};$('close-find').onclick=()=>$('findbar').classList.remove('open');$('find-next').onclick=findNext;$('replace-one').onclick=replaceSelection;$('replace-all').onclick=replaceAll;$('indent').onclick=()=>indent(false);$('outdent').onclick=()=>indent(true);
-$('project-search').addEventListener('input',renderTree);$('project-search').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();void projectSearch()}});$('commands').onclick=()=>$('palette').showModal();$('palette-close').onclick=()=>$('palette').close();$('palette').addEventListener('click',e=>{const command=e.target.closest('[data-command]')?.dataset.command;if(!command)return;$('palette').close();if(command==='new')$('new-file').click();if(command==='save')void saveAll();if(command==='find')$('toggle-find').click();if(command==='search'){$('project-search').focus();void projectSearch()}if(command==='format-json')formatJson()});
+$('toggle-find').onclick=()=>{$('askbar').classList.remove('open');$('findbar').classList.toggle('open');if($('findbar').classList.contains('open'))$('find-text').focus()};$('close-find').onclick=()=>$('findbar').classList.remove('open');$('find-next').onclick=findNext;$('replace-one').onclick=replaceSelection;$('replace-all').onclick=replaceAll;$('indent').onclick=()=>indent(false);$('outdent').onclick=()=>indent(true);
+$('project-search').addEventListener('input',renderTree);$('project-search').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();void projectSearch()}});$('commands').onclick=()=>$('palette').showModal();$('palette-close').onclick=()=>$('palette').close();$('palette').addEventListener('click',e=>{const command=e.target.closest('[data-command]')?.dataset.command;if(!command)return;$('palette').close();if(command==='new')$('new-file').click();if(command==='save')void saveAll();if(command==='find')$('toggle-find').click();if(command==='search'){$('project-search').focus();void projectSearch()}if(command==='ask'){$('findbar').classList.remove('open');$('askbar').classList.add('open');$('ask-answer').hidden=true;$('ask-text').focus()}if(command==='format-json')formatJson()});
 $('restore-recovery').onclick=()=>{const tab=activeTab();if(!tab?.recovery)return;tab.content=tab.recovery.content;tab.dirty=tab.content!==tab.saved;tab.recovery=null;render();scheduleSave(tab)};$('discard-recovery').onclick=()=>{const tab=activeTab();if(!tab)return;tab.recovery=null;void recoveryDelete(tab.recoveryKey);render()};
 
 naklios.files.onOpen(grant=>void openGrant(grant));naklios.beforeClose(()=>saveAll());naklios.theme.onChange(theme=>{if(!theme?.colors)return;for(const [key,value] of Object.entries(theme.colors))document.documentElement.style.setProperty(`--${key}`,value)});naklios.theme.request();

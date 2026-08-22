@@ -80,6 +80,8 @@
     aiImageProvider: null,
     aiImageLocal: true,
     aiImageState: 'idle',
+    aiSearchState: 'idle',
+    aiSearch: false,
   };
 
   // Request/reply correlation for fs RPCs
@@ -88,6 +90,7 @@
   var fsSubscriptions = new Map(); // subscriptionId → callback
   var aiRequests = new Map(); // requestId → streamed request state
   var aiImageRequests = new Map(); // requestId → image request state
+  var ragSearches = new Map();     // requestId → semantic-search progress callback
   var fileOpenListeners = new Set(); // exact-file grants delivered by the host
   var pendingFileGrants = [];
 
@@ -99,19 +102,19 @@
     } catch (_) {}
   }
 
-  function rpc(type, payload) {
+  function rpc(type, payload, timeoutMs) {
     if (!inNakliOS) return Promise.reject(new Error('Not hosted — naklios.* unavailable standalone'));
     return new Promise(function (resolve, reject) {
       var requestId = 'r' + (++rpcCounter) + '_' + Date.now();
       pendingRpc.set(requestId, { resolve: resolve, reject: reject });
       send(type, Object.assign({ requestId: requestId }, payload || {}));
-      // 30s timeout — host should respond near-instantly; this is a safety net.
+      // Default 30s safety net; long operations (index building) pass more.
       setTimeout(function () {
         if (pendingRpc.has(requestId)) {
           pendingRpc.delete(requestId);
           reject(new Error('naklios RPC timeout: ' + type));
         }
-      }, 30000);
+      }, timeoutMs || 30000);
     });
   }
 
@@ -285,9 +288,22 @@
       capabilities.aiImageState = typeof msg.aiImageState === 'string'
         ? msg.aiImageState
         : 'idle';
+      capabilities.aiSearchState = typeof msg.aiSearchState === 'string'
+        ? msg.aiSearchState
+        : 'idle';
+      capabilities.aiSearch = msg.aiSearch === true;
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}
       });
+    } else if (msg.type === 'naklios:rag:event' && msg.requestId) {
+      var ragRequest = ragSearches.get(msg.requestId);
+      if (ragRequest && msg.event === 'indexing') {
+        try {
+          ragRequest.onIndexing && ragRequest.onIndexing({
+            done: msg.done, total: msg.total, path: msg.path,
+          });
+        } catch (_) {}
+      }
     } else if (msg.type === 'naklios:ai:event' && msg.requestId) {
       var aiRequest = aiRequests.get(msg.requestId);
       if (!aiRequest) return;
@@ -368,7 +384,8 @@
       else fileOpenListeners.forEach(function (cb) {
         try { cb(grant); } catch (_) {}
       });
-    } else if ((msg.type === 'naklios:fs:reply' || msg.type === 'naklios:file:reply') && msg.requestId) {
+    } else if ((msg.type === 'naklios:fs:reply' || msg.type === 'naklios:file:reply' ||
+                msg.type === 'naklios:rag:reply') && msg.requestId) {
       var p = pendingRpc.get(msg.requestId);
       if (!p) return;
       pendingRpc.delete(msg.requestId);
@@ -398,6 +415,7 @@
           fsSubscribe: true,
           aiStream: true,
           aiImages: true,
+          aiSearch: true,
         },
       });
     },
@@ -494,6 +512,43 @@
       },
       images: {
         generate: createAiImage,
+      },
+      // Semantic search over the app's own namespace on the connected
+      // backend. The host builds/refreshes a local embedding index on first
+      // use (one consent prompt) and returns ranked chunks.
+      search: function (options) {
+        if (!inNakliOS) {
+          return Promise.reject(new Error('Not hosted — naklios.ai unavailable standalone'));
+        }
+        if (!capabilities.aiSearch) {
+          return Promise.reject(new Error('NakliOS semantic search is unavailable or not permitted'));
+        }
+        options = options || {};
+        var requestId = 's' + (++rpcCounter) + '_' + Date.now();
+        return new Promise(function (resolve, reject) {
+          ragSearches.set(requestId, {
+            onIndexing: typeof options.onIndexing === 'function' ? options.onIndexing : null,
+          });
+          pendingRpc.set(requestId, { resolve: resolve, reject: reject });
+          send('naklios:rag:search', {
+            requestId: requestId,
+            query: String(options.query || ''),
+            limit: options.limit,
+            prefix: options.prefix,
+          });
+          // Index building embeds every changed chunk locally; allow 15 min.
+          setTimeout(function () {
+            if (pendingRpc.has(requestId)) {
+              pendingRpc.delete(requestId);
+              reject(new Error('naklios RPC timeout: naklios:rag:search'));
+            }
+          }, 15 * 60 * 1000);
+        }).finally(function () {
+          ragSearches.delete(requestId);
+        });
+      },
+      searchStatus: function () {
+        return rpc('naklios:rag:status', {});
       },
       cancelAll: function () {
         aiRequests.forEach(function (_, requestId) {
