@@ -9,6 +9,29 @@ import { PYODIDE_INDEX_URL } from './pyodide-runtime.mjs';
 
 const enc = new TextEncoder();
 
+// Truncate a UTF-8 byte array to at most `maxBytes` without splitting a
+// multibyte sequence: back off from the cut point over any continuation bytes
+// (0b10xxxxxx) so a partial trailing codepoint is dropped, not corrupted (L-K7).
+export function truncateUtf8Bytes(bytes, maxBytes) {
+  if (bytes.length <= maxBytes) return bytes;
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end);
+}
+
+// The set of registry command names the generated Python module actually
+// exposes. Every generated binding forwards through `_rig_invoke("<command>",
+// …)`, so the invoke targets in the source ARE the binding manifest. Locking
+// rig-call to this set stops forged `postMessage({type:'rig-call', name})`
+// reaching a command with no Python binding (M-K2).
+export function deriveRigAllowlist(source) {
+  const names = new Set();
+  const re = /_rig_invoke\(\s*"((?:[^"\\]|\\.)*)"/g;
+  let match;
+  while ((match = re.exec(source || '')) !== null) names.add(match[1]);
+  return names;
+}
+
 function bytesEqual(a, b) {
   if (!a || !b || a.byteLength !== b.byteLength) return false;
   for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
@@ -83,13 +106,21 @@ function snapshotMaps(snapshot) {
   };
 }
 
-export async function syncWorkerSnapshot({ before, after, face, fsBridge }) {
+export async function syncWorkerSnapshot({ before, after, face, fsBridge, allowUngoverned = false }) {
   const prior = snapshotMaps(before || { dirs: [], files: [] });
   const next = snapshotMaps(after || { dirs: [], files: [] });
   const result = { writes: [], directories: [], staged: [], errors: [] };
   const invoke = face
     ? (name, input) => face.invoke(name, input)
     : async (name, input) => {
+        // No governed face. Face-less writes bypass the grant + op-log, so they
+        // are refused unless the session opted in explicitly (M-K5).
+        if (!allowUngoverned) {
+          return {
+            ok: false, code: 'EUNGOVERNED',
+            message: `refusing ungoverned ${name}: this Kiln session has no Rig face (set allowUngovernedWrites to permit direct fsBridge writes)`,
+          };
+        }
         const op = name.slice(3);
         if (op === 'write') return fsBridge.write(input.path, input.data);
         if (op === 'mkdir') return fsBridge.mkdir(input.path, { createParents: input.createParents });
@@ -130,15 +161,31 @@ export async function createWorkerRuntime({
   face = null,
   fsBridge = null,
   rigModuleSource = '',
+  rigAllowlist = null,
   indexURL = PYODIDE_INDEX_URL,
   mountPath = '/workspace',
   rigRpcBytes = 8 << 20,
+  allowUngovernedWrites = false,
+  initTimeoutMs = 120000,
+  runCodeTimeoutMs = 60000,
   WorkerClass = globalThis.Worker,
 } = {}) {
   if (typeof WorkerClass !== 'function') throw new Error('Kiln requires Worker support');
   if (typeof SharedArrayBuffer !== 'function') {
     throw new Error('Kiln requires cross-origin isolation for SharedArrayBuffer');
   }
+  // A storage-backed session with no governed face would write straight to the
+  // bridge (no grant, no op-log). Refuse to stand one up unless it opted in.
+  if (fsBridge && !face && !allowUngovernedWrites) {
+    throw new Error('Kiln requires a Rig face for a storage-backed session (or set allowUngovernedWrites)');
+  }
+  // Rig-call is locked to exactly the generated Python bindings (M-K2).
+  const allowlist = rigAllowlist
+    ? (rigAllowlist instanceof Set ? rigAllowlist : new Set(rigAllowlist))
+    : deriveRigAllowlist(rigModuleSource);
+  // Paths a staged fs.remove is holding: masked from the snapshot sent to the
+  // Worker so loadSnapshot cannot resurrect them mid-session (M-K4).
+  const stagedRemovals = new Set();
 
   const workerModuleUrl = new URL('./worker.mjs', import.meta.url).href;
   const blobUrl = URL.createObjectURL(new Blob([
@@ -161,6 +208,19 @@ export async function createWorkerRuntime({
     const target = new Uint8Array(message.payloadBuffer);
     try {
       if (!face) throw new Error('Rig is unavailable in this Kiln session');
+      if (allowlist.size > 0 && !allowlist.has(message.name)) {
+        // Forged rig-call: a name with no generated Python binding. Return a
+        // typed miss instead of letting it reach an ungoverned command (M-K2).
+        const denial = enc.encode(JSON.stringify(toRigJsonValue({
+          ok: false, code: 'ENOCMD',
+          message: `rig-call denied: '${message.name}' is not an exposed Kiln binding`,
+        })));
+        const bytes = truncateUtf8Bytes(denial, target.length);
+        target.set(bytes);
+        Atomics.store(control, 1, bytes.length);
+        Atomics.store(control, 2, 1);
+        return;
+      }
       const args = fromRigJsonValue(JSON.parse(message.argsJson));
       const result = await face.invoke(message.name, args);
       const payload = enc.encode(JSON.stringify(toRigJsonValue(result)));
@@ -169,7 +229,7 @@ export async function createWorkerRuntime({
       Atomics.store(control, 1, payload.length);
       Atomics.store(control, 2, 1);
     } catch (error) {
-      const payload = enc.encode(String(error?.message || error)).subarray(0, target.length);
+      const payload = truncateUtf8Bytes(enc.encode(String(error?.message || error)), target.length);
       target.set(payload);
       Atomics.store(control, 1, payload.length);
       Atomics.store(control, 2, -1);
@@ -193,14 +253,39 @@ export async function createWorkerRuntime({
     else request.reject(new Error(message.value?.message || 'Kiln Worker request failed'));
   });
   worker.addEventListener('error', (event) => {
+    // A Worker-level error means the heap is gone; mark it unusable so a later
+    // request() rejects instead of re-enqueuing onto a dead Worker (M-K3b).
+    closed = true;
     settleAll(new Error(event.message || 'Kiln Worker failed'));
   });
+  worker.addEventListener('messageerror', (event) => {
+    // A structured-clone failure crossing the boundary settles the same way as
+    // an error rather than hanging the pending request forever (M-K3a).
+    closed = true;
+    settleAll(new Error(event?.message || 'Kiln Worker message could not be deserialized'));
+  });
 
-  function request(op, payload = {}) {
+  function request(op, payload = {}, timeoutMs = 0) {
     if (closed) return Promise.reject(new Error('Kiln Worker is closed'));
     const id = ++requestId;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      let timer = null;
+      pending.set(id, {
+        resolve: (value) => { if (timer) clearTimeout(timer); resolve(value); },
+        reject: (error) => { if (timer) clearTimeout(timer); reject(error); },
+      });
+      if (timeoutMs > 0 && timeoutMs !== Infinity) {
+        timer = setTimeout(() => {
+          if (!pending.has(id)) return;
+          pending.delete(id);
+          // A timed-out request means the Worker is presumed wedged: mark it
+          // unusable and fail any siblings too (M-K3c).
+          closed = true;
+          const error = new Error(`Kiln Worker '${op}' timed out after ${timeoutMs}ms`);
+          settleAll(error);
+          reject(error);
+        }, timeoutMs);
+      }
       worker.postMessage({ type: 'request', id, op, ...payload });
     });
   }
@@ -211,17 +296,47 @@ export async function createWorkerRuntime({
     mountPath,
     rigRpcBytes,
     rigModuleSource,
-  });
+  }, initTimeoutMs);
   URL.revokeObjectURL(blobUrl);
 
+  // Drop paths under a staged removal so loadSnapshot cannot re-materialize
+  // them next cell, while the host copy is retained for operator accept (M-K4).
+  function maskStagedRemovals(snapshot) {
+    if (stagedRemovals.size === 0) return snapshot;
+    const isMasked = (path) => {
+      for (const removed of stagedRemovals) {
+        if (path === removed || path.startsWith(removed + '/')) return true;
+      }
+      return false;
+    };
+    return {
+      dirs: (snapshot.dirs || []).filter((path) => !isMasked(path)),
+      files: (snapshot.files || []).filter((file) => !isMasked(file.path)),
+    };
+  }
+
+  function reconcileStagedRemovals(fsSync, after) {
+    // A path re-created this cell is no longer removed — stop masking it.
+    const present = new Set((after.files || []).map((file) => file.path));
+    for (const path of [...stagedRemovals]) if (present.has(path)) stagedRemovals.delete(path);
+    // Newly staged fs.remove proposals join the mask set.
+    for (const entry of fsSync.staged || []) {
+      if (entry && entry.command === 'fs.remove' && entry.input && typeof entry.input.path === 'string') {
+        stagedRemovals.add(entry.input.path);
+      }
+    }
+  }
+
   async function runCode(code, options = {}) {
-    const before = await snapshotBridge(fsBridge);
-    const value = await request('runCode', { code, options, snapshot: before });
+    const before = maskStagedRemovals(await snapshotBridge(fsBridge));
+    const value = await request('runCode', { code, options, snapshot: before }, runCodeTimeoutMs);
     namespace = value.namespace || {};
     delete value.namespace;
     const after = value.snapshot || { dirs: [], files: [] };
     delete value.snapshot;
-    value.fsSync = await syncWorkerSnapshot({ before, after, face, fsBridge });
+    const fsSync = await syncWorkerSnapshot({ before, after, face, fsBridge, allowUngoverned: allowUngovernedWrites });
+    value.fsSync = fsSync;
+    reconcileStagedRemovals(fsSync, after);
     return value;
   }
 

@@ -19,6 +19,15 @@ export const PYODIDE_VERSION = 'v0.26.4';
 export const PYODIDE_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`;
 export const PYODIDE_APPROX_BYTES = 12 * 1024 * 1024; // ~12 MiB core, for the consent prompt
 
+// Pinned SHA-256 of the entry module (`pyodide.mjs`) for the version above, so
+// the loader can prove the CDN served the exact bytes it expected before it runs
+// them (M-K6). This covers the ENTRY module only; the core wasm/asm and package
+// wheels loadPyodide subsequently fetches are still trusted to the CDN + their
+// own pyodide-lock.json digests — see README "Stays sandboxed" for the residual
+// trust boundary. Recompute with:
+//   curl -sSL https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs | shasum -a 256
+export const PYODIDE_ENTRY_SHA256 = '7f24c6655a79eacf0061d3d4e6a60dc0b1938812d15c52d7ff8b37d9e0689e51';
+
 // Strip anything secret-shaped from a traceback before it crosses to the UI or
 // the op-log (§9). Mirrors the scrollback redactor.
 const TOKEN_PATTERNS = [

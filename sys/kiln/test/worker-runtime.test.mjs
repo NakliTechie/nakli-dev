@@ -5,12 +5,16 @@ import { MemoryBackend } from '../../rig/fileops/index.mjs';
 import { createGrant, createOpLog, createAgentFace } from '../../rig/agent/index.mjs';
 import { buildRigRegistry } from '../../rig/registry/index.mjs';
 import { createFsBridge } from '../fs-bridge.mjs';
+import { generateRigModule } from '../rig-bindings.mjs';
 import {
+  deriveRigAllowlist,
   fromRigJsonValue,
   snapshotBridge,
   syncWorkerSnapshot,
   toRigJsonValue,
+  truncateUtf8Bytes,
 } from '../worker-runtime.mjs';
+import { neuterNetworkEgress, NETWORK_EGRESS_GLOBALS } from '../worker.mjs';
 
 let passed = 0;
 const failures = [];
@@ -80,6 +84,58 @@ await test('Worker snapshot cannot persist outside the active grant', async () =
   eq(synced.errors.length, 1, 'one grant error');
   eq(synced.errors[0].result.code, 'EGRANT', 'typed grant denial');
   eq((await bridge.read('denied.txt')).code, 'ENOENT', 'denied write absent');
+});
+
+await test('network-egress globals are stubbed to throwing functions (C-K1)', async () => {
+  // The Worker neuters these before any user cell; assert every stub throws the
+  // Kiln denial rather than reaching the network.
+  const fakeGlobal = { navigator: { sendBeacon: () => 'sent' } };
+  neuterNetworkEgress(fakeGlobal);
+  for (const name of NETWORK_EGRESS_GLOBALS) {
+    assert(typeof fakeGlobal[name] === 'function', `${name} replaced with a function`);
+    let threw = false;
+    try { fakeGlobal[name](); } catch (error) { threw = /network access is disabled in Kiln/.test(error.message); }
+    assert(threw, `${name} throws the Kiln network-disabled error`);
+  }
+  let beaconThrew = false;
+  try { fakeGlobal.navigator.sendBeacon('http://x'); } catch (error) { beaconThrew = /network access is disabled in Kiln/.test(error.message); }
+  assert(beaconThrew, 'navigator.sendBeacon throws the Kiln network-disabled error');
+  // postMessage must NOT be neutered — the Rig channel depends on it.
+  assert(!NETWORK_EGRESS_GLOBALS.includes('postMessage'), 'postMessage left intact for the Rig channel');
+});
+
+await test('rig-call allowlist rejects a name with no generated binding (M-K2)', async () => {
+  const { bridge } = makeGovernedMount();
+  const registry = buildRigRegistry({ fs: bridge._fs });
+  const allowlist = deriveRigAllowlist(generateRigModule(registry).source);
+  assert(allowlist.has('fs.read'), 'a real command is on the allowlist');
+  // The exact predicate handleRigCall enforces before face.invoke:
+  const denied = (name) => allowlist.size > 0 && !allowlist.has(name);
+  assert(denied('fs.__forged'), 'a forged fs command is denied');
+  assert(denied('admin.wipe'), 'an unexposed namespaced command is denied');
+  assert(!denied('fs.read'), 'an exposed command is admitted');
+});
+
+await test('face-less snapshot writes are refused unless explicitly ungoverned (M-K5)', async () => {
+  const { bridge } = makeGovernedMount();
+  const before = { dirs: [], files: [] };
+  const after = { dirs: [], files: [{ path: 'x.txt', data: new Uint8Array([1]) }] };
+  const refused = await syncWorkerSnapshot({ before, after, face: null, fsBridge: bridge });
+  eq(refused.errors.length, 1, 'ungoverned write refused');
+  eq(refused.errors[0].result.code, 'EUNGOVERNED', 'typed ungoverned refusal');
+  eq((await bridge.read('x.txt')).code, 'ENOENT', 'no silent write landed');
+  const allowed = await syncWorkerSnapshot({ before, after, face: null, fsBridge: bridge, allowUngoverned: true });
+  eq(allowed.errors.length, 0, 'opt-in write permitted');
+  eq([...(await bridge.read('x.txt')).data].join(','), '1', 'opt-in write landed');
+});
+
+await test('Rig error truncation cuts on a UTF-8 boundary (L-K7)', async () => {
+  const bytes = new TextEncoder().encode('abc€'); // '€' = 3 bytes E2 82 AC
+  const cut = truncateUtf8Bytes(bytes, 4); // 4 would split the euro after its first byte
+  eq(cut.length, 3, 'partial trailing sequence dropped');
+  eq(new TextDecoder('utf-8', { fatal: true }).decode(cut), 'abc', 'decodes cleanly, no split codepoint');
+  const whole = truncateUtf8Bytes(bytes, 100);
+  eq(whole.length, bytes.length, 'under-cap input is returned unchanged');
 });
 
 const total = passed + failures.length;

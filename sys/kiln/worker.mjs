@@ -5,15 +5,75 @@
 // and lets synchronous generated `rig.*` functions wait for the main thread's
 // governed registry result without exposing a second capability path.
 
-import { createPyodideRuntime } from './pyodide-runtime.mjs';
+import { createPyodideRuntime, PYODIDE_ENTRY_SHA256 } from './pyodide-runtime.mjs';
 
 let runtime = null;
 let pyodide = null;
 let mountPath = '/workspace';
 let rigRpcBytes = 8 << 20;
 let queue = Promise.resolve();
+let networkNeutered = false;
 
 const textDecoder = new TextDecoder();
+
+// Worker-global names that reach the network. Pyodide's `js` module resolves
+// these to the Worker globals, and its urllib / pyfetch shims route through
+// `js.fetch`, so replacing them with throwing stubs is the single chokepoint
+// that denies model-authored Python any egress (C-K1). `postMessage` is
+// deliberately NOT here — the Rig back-channel depends on it.
+export const NETWORK_EGRESS_GLOBALS = [
+  'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource',
+  'Request', 'importScripts', 'Worker', 'SharedWorker',
+];
+
+// Replace every network-egress global on `target` with a stub that throws a
+// clear error. Idempotent, and safe to run once Pyodide (and any packages) are
+// loaded but before the first user cell. Exported so headless tests can assert
+// the stubs are installed without a real Worker.
+export function neuterNetworkEgress(target = globalThis) {
+  const deny = (label) => {
+    const stub = function kilnNetworkDisabled() {
+      throw new Error(`${label}: network access is disabled in Kiln`);
+    };
+    return stub;
+  };
+  for (const name of NETWORK_EGRESS_GLOBALS) {
+    const stub = deny(name);
+    try {
+      Object.defineProperty(target, name, { value: stub, configurable: true, writable: true });
+    } catch (_) {
+      try { target[name] = stub; } catch (_) {}
+    }
+  }
+  const nav = target.navigator;
+  if (nav && typeof nav.sendBeacon === 'function') {
+    try { nav.sendBeacon = deny('navigator.sendBeacon'); } catch (_) {}
+  }
+  return target;
+}
+
+// Fetch the Pyodide entry module, verify its bytes against the pinned digest,
+// and import it from a blob URL so only vetted bytes ever execute (M-K6). When
+// no digest is configured the loader falls back to a direct CDN import (the
+// documented residual-trust path).
+async function importPyodideEntry(indexURL, expectedSha256) {
+  const entryURL = indexURL + 'pyodide.mjs';
+  if (!expectedSha256) return import(entryURL);
+  const response = await fetch(entryURL);
+  if (!response.ok) throw new Error(`Kiln could not fetch the Pyodide entry module (${response.status})`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  if (hex !== expectedSha256) {
+    throw new Error(`Kiln Pyodide entry integrity check failed: expected ${expectedSha256}, got ${hex}`);
+  }
+  const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+  try {
+    return await import(blobUrl);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
 
 function reply(id, ok, value) {
   self.postMessage({ type: 'response', id, ok, value });
@@ -59,6 +119,12 @@ function takeSnapshot() {
       const full = dir.replace(/\/$/, '') + '/' + name;
       const childRel = rel ? rel + '/' + name : name;
       const st = pyodide.FS.lstat(full);
+      if (pyodide.FS.isLink(st.mode)) {
+        // The snapshot format carries only files and directories; a symlink
+        // would be silently dropped on the next loadSnapshot. Reject it loudly
+        // rather than lose it (L-K7).
+        throw new Error(`Kiln does not support symlinks in the workspace: ${childRel}`);
+      }
       if (pyodide.FS.isDir(st.mode)) {
         dirs.push(childRel);
         walk(full, childRel);
@@ -156,7 +222,10 @@ _kiln_os.chdir(_KILN_ROOT)
 }
 
 async function initialize(message) {
-  const { loadPyodide } = await import(message.indexURL + 'pyodide.mjs');
+  const expectedSha256 = message.pyodideEntrySha256 !== undefined
+    ? message.pyodideEntrySha256
+    : PYODIDE_ENTRY_SHA256;
+  const { loadPyodide } = await importPyodideEntry(message.indexURL, expectedSha256);
   const interruptBuffer = new Uint8Array(message.interruptBuffer);
   mountPath = message.mountPath || mountPath;
   rigRpcBytes = message.rigRpcBytes || rigRpcBytes;
@@ -166,6 +235,9 @@ async function initialize(message) {
   runtime = createPyodideRuntime(pyodide, interruptBuffer);
   installRigModule(message.rigModuleSource);
   installFilesystemGuard();
+  // Deny network egress now: Pyodide is up and every package is loaded, and no
+  // user cell has run yet. Any later `import js; js.fetch(...)` hits a stub.
+  if (!networkNeutered) { neuterNetworkEgress(globalThis); networkNeutered = true; }
   return { version: pyodide.version, mountPath };
 }
 
@@ -207,6 +279,10 @@ async function handle(message) {
   }
 }
 
-self.addEventListener('message', (event) => {
-  queue = queue.then(() => handle(event.data));
-});
+// Guarded so the module can be imported outside a Worker (headless tests reach
+// the exported helpers without a `self`).
+if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+  self.addEventListener('message', (event) => {
+    queue = queue.then(() => handle(event.data));
+  });
+}

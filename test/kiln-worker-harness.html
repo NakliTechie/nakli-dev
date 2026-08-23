@@ -132,6 +132,23 @@
         assert(log.some((entry) => entry.command === 'fs.remove' && entry.status === 'staged'), 'staged action logged');
       });
 
+      await check('network egress is denied inside the Worker (C-K1)', async () => {
+        const code = [
+          'import js',
+          'blocked = []',
+          'for attempt in ("fetch", "WebSocket", "XMLHttpRequest"):',
+          '    try:',
+          '        getattr(js, attempt)("https://example.com")',
+          '        blocked.append("LEAK")',
+          '    except Exception:',
+          '        blocked.append("BLOCKED")',
+          'print(",".join(blocked))',
+        ].join('\n');
+        const run = await kiln.exec('egress', code);
+        eq(run.status, 'ok', 'egress attempt executed: ' + (run.traceback || run.stderr || ''));
+        eq(run.stdout, 'BLOCKED,BLOCKED,BLOCKED\n', 'js.fetch / WebSocket / XMLHttpRequest all throw');
+      });
+
       await runtime.close();
       const passed = results.filter((result) => result.ok).length;
       const failed = results.length - passed;
