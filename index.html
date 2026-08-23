@@ -6436,6 +6436,7 @@ const ragHost = {
   loadPromise:null,
   embedChain:Promise.resolve(),
   embedCounter:0,
+  syncChain:Promise.resolve(),
   indexing:false,
   backendId:null,
   files:new Map(),         // path → { fp, chunks:[{text, vec:Float32Array}] }
@@ -6522,19 +6523,44 @@ function ragLoadWorker(){
   return ragHost.loadPromise;
 }
 
+const RAG_EMBED_TIMEOUT_MS = 60000;
+
+// A crash mid-embed used to leave the promise unsettled, wedging embedChain
+// (and every later search) forever. Guard every embed with an error listener
+// and a timeout, and drop the dead worker so the next call reloads a fresh one.
 function ragEmbed(texts){
   const run = async () => {
     const worker = await ragLoadWorker();
     const id = ++ragHost.embedCounter;
     return new Promise((resolve, reject) => {
+      let done = false;
+      const cleanup = () => {
+        done = true;
+        worker.removeEventListener('message', handler);
+        worker.removeEventListener('error', onError);
+        clearTimeout(timer);
+      };
+      const fail = message => {
+        if (done) return;
+        cleanup();
+        // Tear the worker down so embedChain can recover on the next call.
+        try { worker.terminate(); } catch(_){}
+        if (ragHost.worker === worker) ragHost.worker = null;
+        ragHost.loadPromise = null;
+        ragSetState('idle');
+        reject(new Error(message));
+      };
       const handler = event => {
         const msg = event.data || {};
         if (msg.id !== id) return;
-        worker.removeEventListener('message', handler);
+        cleanup();
         if (msg.type === 'embeddings') resolve(msg.vectors || []);
         else reject(new Error(msg.message || 'Embedding failed'));
       };
+      const onError = event => fail(event.message || 'Embedding worker crashed');
+      const timer = setTimeout(() => fail('Embedding timed out'), RAG_EMBED_TIMEOUT_MS);
       worker.addEventListener('message', handler);
+      worker.addEventListener('error', onError);
       worker.postMessage({ type:'embed', id, texts });
     });
   };
@@ -6645,9 +6671,18 @@ function ragCosine(a, b){
   return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
 }
 
+// Spotlight's debounced search and an app's ai.search can fire concurrently;
+// both mutate ragHost.files. Serialize every sync through one in-flight chain
+// so a walk never deletes entries another pass is mid-writing.
+function ragSyncIndex(onProgress = () => {}){
+  const run = () => ragSyncIndexInner(onProgress);
+  ragHost.syncChain = ragHost.syncChain.then(run, run);
+  return ragHost.syncChain;
+}
+
 // Bring the index up to date with the backend: walk text files, keep chunks
 // whose fingerprint (size:mtimeMs) is unchanged, embed only new/changed ones.
-async function ragSyncIndex(onProgress = () => {}){
+async function ragSyncIndexInner(onProgress = () => {}){
   const { id } = ragBackendRef();
   await ragLoadIndexForBackend(id);
   const fileops = await rigFileops({ backendId:id });
@@ -6661,18 +6696,20 @@ async function ragSyncIndex(onProgress = () => {}){
   if (candidates.length > RAG_MAX_FILES){
     candidates.length = RAG_MAX_FILES;
   }
-  // Fingerprint every candidate; decide what needs (re-)embedding.
-  const seen = new Set();
-  const stale = [];   // { path, text }
+  // Every walked candidate is retained; the chunk budget only limits how much
+  // new/changed content we (re-)embed this pass. Marking `seen` up front (not
+  // inside the budget loop) stops the delete pass from evicting valid cached
+  // files that merely sort after the budget boundary.
+  const seen = new Set(candidates.map(entry => entry.path));
+  const stale = [];   // { path, fp, pieces }
   let totalChunks = [...ragHost.files.values()]
     .reduce((sum, rec) => sum + rec.chunks.length, 0);
   let budget = Math.max(0, RAG_MAX_CHUNKS - totalChunks);
   for (const entry of candidates){
-    if (budget <= 0) break;
+    if (budget <= 0) break;   // stop embedding new work; files stay `seen`
     const st = await fileops.stat(entry.path);
     if (!st.ok) continue;
     const fp = `${st.stat.size}:${st.stat.mtimeMs}`;
-    seen.add(entry.path);
     const cached = ragHost.files.get(entry.path);
     if (cached && cached.fp === fp) continue;
     const file = await fileops.read(entry.path, { encoding:'utf-8' });
@@ -6683,13 +6720,12 @@ async function ragSyncIndex(onProgress = () => {}){
     if (room < pieces.length) pieces.length = room;
     if (!pieces.length){
       if (cached) ragHost.files.set(entry.path, { fp, chunks:[] });
-      else seen.delete(entry.path);
       continue;
     }
     stale.push({ path:entry.path, fp, pieces });
     budget -= pieces.length;
   }
-  // Drop vanished files and remember unchanged paths so they survive the merge.
+  // Drop only files that truly vanished from the walk.
   for (const path of [...ragHost.files.keys()]){
     if (!seen.has(path)) ragHost.files.delete(path);
   }
@@ -6723,7 +6759,8 @@ async function ragSearchCore(query, { limit = 8, prefix = '' } = {}){
   const needle = String(query || '').trim();
   if (!needle) return [];
   const cleanPrefix = String(prefix || '').replace(/^\/+/, '').replace(/\/+$/, '');
-  await ragSyncIndex();
+  // Callers (ragHostSearch / ragSearchNative) already sync before searching —
+  // no second full walk + stat here.
   const [queryVec] = await ragEmbed([needle.slice(0, 2000)]);
   const hits = [];
   for (const [path, rec] of ragHost.files){
@@ -7682,6 +7719,10 @@ function openSpotlight(){
   // Semantic hits over the connected backend's index. Apps match by keyword;
   // this section adds meaning-based file matches below them.
   const semantic = { state:'idle', hits:[], token:0, timer:null };
+  // The rendered rows (apps + semantic section) and the subset that arrow keys
+  // and Enter can land on — so keyboard reaches file hits, not just apps.
+  let rows = [];
+  let navIndices = [];
 
   function rank(q){
     if (!q) {
@@ -7707,13 +7748,47 @@ function openSpotlight(){
     return scored.slice(0, 12).map(x => x.app);
   }
 
-  function semanticHTML(){
+  // One ordered row list: apps first, then the semantic section (enable offer /
+  // live status / meaning hits / connect-storage hint). Everything except the
+  // status line is a navigable row.
+  function buildRows(){
     const q = input.value.trim();
-    if (!q) return '';
-    if (!backendsAvailable().length) return '';   // nothing to index yet
-    const decision = ragReadDecision();
-    if (decision?.granted === false || decision === null) {
-      return `<div class="nw-spot-item" id="spot-semantic-enable" role="button" tabindex="0">
+    const list = rank(q).map(app => ({ type:'app', app }));
+    if (!q) return list;
+    if (backendsAvailable().length){
+      const decision = ragReadDecision();
+      if (decision?.granted === false){
+        // user declined — no semantic section
+      } else if (decision?.granted !== true){
+        list.push({ type:'enable' });
+      } else if (semantic.state === 'searching' || semantic.state === 'indexing'){
+        list.push({ type:'status', text:'Searching meaning…' });
+      } else if (semantic.state === 'ready'){
+        for (const hit of semantic.hits) list.push({ type:'semantic', hit });
+      }
+    } else {
+      // UX-4: a meaning query with no backend used to dead-end at "No matches".
+      list.push({ type:'connect' });
+    }
+    return list;
+  }
+
+  function rowHTML(row, i, isActive){
+    const attrs = `id="spot-row-${i}" data-row-idx="${i}" role="option" aria-selected="${isActive}"`;
+    const sel = isActive ? 'is-active' : '';
+    if (row.type === 'app'){
+      const app = row.app;
+      return `<div class="nw-spot-item ${sel}" ${attrs}>
+        <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : _dlgEscape(app.glyph || app.name.charAt(0))}</div>
+        <div style="flex:1; min-width:0;">
+          <div class="nw-spot-name">${_dlgEscape(app.name)}</div>
+          <div class="nw-spot-desc">${_dlgEscape((app.description || '').replace(/&mdash;/g,'—').replace(/&rarr;/g,'→').replace(/&times;/g,'×'))}</div>
+        </div>
+        <div class="nw-spot-meta">${_dlgEscape(app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || '')}</div>
+      </div>`;
+    }
+    if (row.type === 'enable'){
+      return `<div class="nw-spot-item ${sel}" ${attrs}>
         <div class="nw-spot-glyph">🔎</div>
         <div style="flex:1; min-width:0;">
           <div class="nw-spot-name">Enable semantic search</div>
@@ -7721,47 +7796,40 @@ function openSpotlight(){
         </div>
       </div>`;
     }
-    if (semantic.state === 'searching' || semantic.state === 'indexing'){
-      return `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">Searching meaning…</span></div>`;
+    if (row.type === 'connect'){
+      return `<div class="nw-spot-item ${sel}" ${attrs}>
+        <div class="nw-spot-glyph">🔎</div>
+        <div style="flex:1; min-width:0;">
+          <div class="nw-spot-name">Connect storage to search by meaning</div>
+          <div class="nw-spot-desc">Semantic search reads a connected Folder or encrypted Crate — connect one in Settings to turn it on.</div>
+        </div>
+      </div>`;
     }
-    if (semantic.state === 'ready' && semantic.hits.length){
-      return semantic.hits.map((hit, i) => `
-        <div class="nw-spot-item is-semantic" data-sem-idx="${i}" role="option">
-          <div class="nw-spot-glyph">📄</div>
-          <div style="flex:1; min-width:0;">
-            <div class="nw-spot-name">${_dlgEscape(hit.path.split('/').pop() || 'file')}</div>
-            <div class="nw-spot-desc">${_dlgEscape(hit.text.slice(0, 140))}</div>
-          </div>
-          <div class="nw-spot-meta">${_dlgEscape(hit.path)} · ${Math.round(hit.score * 100)}%</div>
-        </div>`).join('');
+    if (row.type === 'semantic'){
+      const hit = row.hit;
+      return `<div class="nw-spot-item is-semantic ${sel}" ${attrs}>
+        <div class="nw-spot-glyph">📄</div>
+        <div style="flex:1; min-width:0;">
+          <div class="nw-spot-name">${_dlgEscape(hit.path.split('/').pop() || 'file')}</div>
+          <div class="nw-spot-desc">${_dlgEscape(hit.text.slice(0, 140))}</div>
+        </div>
+        <div class="nw-spot-meta">${_dlgEscape(hit.path)} · ${Math.round(hit.score * 100)}%</div>
+      </div>`;
     }
-    return '';
+    return `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">${_dlgEscape(row.text || '')}</span></div>`;
   }
 
-  function wireSemantic(){
-    list.querySelectorAll('[data-sem-idx]').forEach(el => {
-      el.addEventListener('click', () => {
-        const hit = semantic.hits[+el.dataset.semIdx];
-        if (!hit) return;
-        close();
-        ragOpenResultInEditor(hit.path).catch(err => {
-          console.warn('Semantic result open failed:', err);
-        });
-      });
-    });
-    const enable = list.querySelector('#spot-semantic-enable');
-    if (enable){
-      const offer = async () => {
-        if (await ragEnsurePermission()){
-          void runSemantic(input.value.trim());
-        } else {
-          render();
-        }
-      };
-      enable.addEventListener('click', () => void offer());
-      enable.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); void offer(); }
-      });
+  async function activateRow(row){
+    if (!row) return;
+    if (row.type === 'app'){ close(); openApp(row.app); }
+    else if (row.type === 'semantic'){
+      close();
+      ragOpenResultInEditor(row.hit.path).catch(err => console.warn('Semantic result open failed:', err));
+    }
+    else if (row.type === 'connect'){ close(); openSettings('storage'); }
+    else if (row.type === 'enable'){
+      if (await ragEnsurePermission()) void runSemantic(input.value.trim());
+      else render();
     }
   }
 
@@ -7804,30 +7872,18 @@ function openSpotlight(){
   }
 
   function render(){
-    const items = rank(input.value.trim());
-    if (active >= items.length) active = 0;
-    list.innerHTML = items.map((app, i) => `
-      <div class="nw-spot-item ${i === active ? 'is-active' : ''}" id="spot-option-${i}"
-        role="option" aria-selected="${i === active}" data-idx="${i}">
-        <div class="nw-spot-glyph" style="background:color-mix(in srgb, var(--${app.bg || 'brand'}) 22%, var(--row));">${app.svg ? `<svg class="nw-icon-svg" viewBox="0 0 24 24" aria-hidden="true">${app.svg}</svg>` : _dlgEscape(app.glyph || app.name.charAt(0))}</div>
-        <div style="flex:1; min-width:0;">
-          <div class="nw-spot-name">${_dlgEscape(app.name)}</div>
-          <div class="nw-spot-desc">${_dlgEscape((app.description || '').replace(/&mdash;/g,'—').replace(/&rarr;/g,'→').replace(/&times;/g,'×'))}</div>
-        </div>
-        <div class="nw-spot-meta">${_dlgEscape(app.kind === 'classic' ? 'built-in' : (app.tags || [])[0] || '')}</div>
-      </div>
-    `).join('') || `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">No matches.</span></div>`;
-    list.insertAdjacentHTML('beforeend', semanticHTML());
-    wireSemantic();
-    const activeOption = items.length ? `spot-option-${active}` : '';
-    if (activeOption) input.setAttribute('aria-activedescendant', activeOption);
+    rows = buildRows();
+    navIndices = rows.map((row, i) => (row.type === 'status' ? -1 : i)).filter(i => i >= 0);
+    if (active >= navIndices.length) active = 0;
+    if (active < 0) active = 0;
+    const activeRowIdx = navIndices.length ? navIndices[active] : -1;
+    list.innerHTML = rows.length
+      ? rows.map((row, i) => rowHTML(row, i, i === activeRowIdx)).join('')
+      : `<div class="nw-spot-item" role="status"><span class="nw-spot-desc">No matches.</span></div>`;
+    if (activeRowIdx >= 0) input.setAttribute('aria-activedescendant', `spot-row-${activeRowIdx}`);
     else input.removeAttribute('aria-activedescendant');
-    list.querySelectorAll('.nw-spot-item[data-idx]').forEach(el => {
-      el.addEventListener('click', () => {
-        const idx = +el.dataset.idx;
-        const items2 = rank(input.value.trim());
-        if (items2[idx]) { close(); openApp(items2[idx]); }
-      });
+    list.querySelectorAll('.nw-spot-item[data-row-idx]').forEach(el => {
+      el.addEventListener('click', () => void activateRow(rows[+el.dataset.rowIdx]));
     });
   }
 
@@ -7842,8 +7898,8 @@ function openSpotlight(){
     else if (e.key === 'ArrowDown') { e.preventDefault(); active++; render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); render(); }
     else if (e.key === 'Enter') {
-      const items = rank(input.value.trim());
-      if (items[active]) { close(); openApp(items[active]); }
+      e.preventDefault();
+      if (navIndices.length) void activateRow(rows[navIndices[active]]);
     }
   });
   wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
