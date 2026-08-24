@@ -152,7 +152,22 @@ function renderGit(sub, res) {
 
 export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   if (!registry || !face) throw new Error('createShell requires { registry, face }');
-  const state = { cwd, history: [] };
+  const state = { cwd, history: [], vars: new Map([['HOME', '/']]) };
+
+  // $VAR / ${VAR} / $? / $PWD expansion. NOTE: the tokenizer already stripped
+  // quotes, so (unlike POSIX) single-quotes don't suppress expansion here — a
+  // known simplification tracked under the POSIX-later agenda.
+  function expand(token) {
+    return String(token).replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$\?/g,
+      (m, braced, bare) => {
+        if (m === '$?') return String(lastCode);
+        const name = braced || bare;
+        if (name === 'PWD') return '/' + state.cwd;
+        return state.vars.has(name) ? state.vars.get(name) : '';
+      },
+    );
+  }
   let pending = null; // { proposalId, verb }
   let lastCode = 0;
 
@@ -275,10 +290,24 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       const res = await face.invoke('fs.write', { path, data: '', createParents: true });
       return { text: res.ok ? '' : `touch: ${res.message || 'failed'}`, code: res.ok ? 0 : 1 };
     },
+    env() {
+      const lines = [...state.vars.entries()].sort().map(([k, v]) => `${k}=${v}`);
+      lines.push(`PWD=/${state.cwd}`);
+      return { text: lines.join('\n'), code: 0 };
+    },
+    export(args) {
+      for (const a of args) {
+        const eq = a.indexOf('=');
+        if (eq > 0) state.vars.set(a.slice(0, eq), a.slice(eq + 1));
+      }
+      return { text: '', code: 0 };
+    },
+    unset(args) { for (const a of args) state.vars.delete(a); return { text: '', code: 0 }; },
     help() {
       const cmds = ['cd', 'pwd', 'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail', 'wc',
-        'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python', 'clear', 'history', 'which'];
-      return { text: 'commands: ' + cmds.join(' '), code: 0 };
+        'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python',
+        'env', 'export', 'unset', 'clear', 'history', 'which'];
+      return { text: 'commands: ' + cmds.join(' ') + '\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD', code: 0 };
     },
   };
 
@@ -289,7 +318,22 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     return m ? Number(m.slice(1)) : dflt;
   }
 
-  async function runStage(argv, stdin) {
+  const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+  async function runStage(rawArgv, stdin) {
+    // Leading NAME=value tokens set shell variables; if nothing follows, the
+    // stage is a pure assignment.
+    let argv = rawArgv;
+    let ai = 0;
+    while (ai < argv.length && ASSIGN.test(argv[ai])) {
+      const eq = argv[ai].indexOf('=');
+      state.vars.set(argv[ai].slice(0, eq), expand(argv[ai].slice(eq + 1)));
+      ai++;
+    }
+    if (ai > 0) argv = argv.slice(ai);
+    if (argv.length === 0) return { text: '', code: 0 };
+    // Expand $VARs in the remaining tokens.
+    argv = argv.map(expand);
     const verb = argv[0];
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);
@@ -390,7 +434,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
         return { output: out.join('\n'), awaitingConfirm: res.staged };
       }
       if (stmt.redirect) {
-        const path = normalizePath(state.cwd, stmt.redirect.path);
+        const path = normalizePath(state.cwd, expand(stmt.redirect.path));
         const chunk = withTrailingNewline(res.text);
         let data = chunk;
         if (stmt.redirect.append) {

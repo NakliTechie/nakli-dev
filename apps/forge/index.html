@@ -112,7 +112,8 @@
 
     // ── completion cache: refreshed after every command (the editor's Tab is sync). ──
     const KNOWN = ['cd', 'pwd', 'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail', 'wc',
-      'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python', 'clear', 'history', 'help', 'which'];
+      'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python',
+      'env', 'export', 'unset', 'clear', 'history', 'help', 'which'];
     let dirCache = {};
     async function refreshCache() {
       const here = await face.invoke('fs.list', { path: shell.cwd });

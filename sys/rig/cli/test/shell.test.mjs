@@ -158,6 +158,39 @@ await test('git: init, add, commit (staged), status, log', async () => {
   assert(/first/.test(log), `log shows message: ${log}`);
 });
 
+await test('variables: assignment, $VAR, ${VAR}, export/env/unset', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'NAME=world');
+  eq(await run(shell, 'echo hello $NAME'), 'hello world', '$VAR expands');
+  eq(await run(shell, 'echo ${NAME}!'), 'world!', '${VAR} braces');
+  await run(shell, 'export FOO=bar');
+  const env = await run(shell, 'env');
+  assert(/FOO=bar/.test(env) && /HOME=\//.test(env) && /PWD=\//.test(env), `env lists vars: ${env}`);
+  await run(shell, 'unset NAME');
+  eq(await run(shell, 'echo [$NAME]'), '[]', 'unset clears');
+});
+
+await test('$? reflects the last exit code; $PWD tracks cwd', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, 'echo $?'), '0', 'zero after success');
+  await run(shell, 'cat nope.txt');           // fails
+  eq(await run(shell, 'echo $?'), '1', 'one after failure');
+  await run(shell, 'mkdir -p src');
+  await run(shell, 'cd src');
+  eq(await run(shell, 'echo $PWD'), '/src', '$PWD tracks cwd');
+});
+
+await test('variables expand in redirects and cd targets', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'F=out.txt');
+  await run(shell, 'echo hi > $F');
+  eq(await run(shell, 'cat out.txt'), 'hi', 'redirect target expanded');
+  await run(shell, 'mkdir -p work');
+  await run(shell, 'D=work');
+  await run(shell, 'cd $D');
+  eq(await run(shell, 'pwd'), '/work', 'cd target expanded');
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
