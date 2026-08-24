@@ -320,6 +320,26 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
 
   const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+  // Bash-style filename globbing: a token with * or ? expands to matching paths
+  // (cwd-relative; the glob command returns root-relative, so strip the cwd
+  // prefix). No match → the literal token is kept (nullglob off). Flags (-x) and
+  // env-looking tokens are left alone.
+  async function expandGlobs(tokens) {
+    const out = [];
+    const prefix = state.cwd ? state.cwd + '/' : '';
+    for (const t of tokens) {
+      if (/[*?]/.test(t) && !t.startsWith('-')) {
+        const res = await face.invoke('fs.glob', { pattern: t, cwd: state.cwd });
+        if (res.ok && res.matches.length) {
+          out.push(...res.matches.map((m) => (m.startsWith(prefix) ? m.slice(prefix.length) : m)).sort());
+          continue;
+        }
+      }
+      out.push(t);
+    }
+    return out;
+  }
+
   async function runStage(rawArgv, stdin) {
     // Leading NAME=value tokens set shell variables; if nothing follows, the
     // stage is a pure assignment.
@@ -332,8 +352,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     }
     if (ai > 0) argv = argv.slice(ai);
     if (argv.length === 0) return { text: '', code: 0 };
-    // Expand $VARs in the remaining tokens.
+    // Expand $VARs, then globs (`*.txt`) in the argument tokens.
     argv = argv.map(expand);
+    argv = [argv[0], ...(await expandGlobs(argv.slice(1)))];
     const verb = argv[0];
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);

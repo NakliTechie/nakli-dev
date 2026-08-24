@@ -191,6 +191,20 @@ await test('variables expand in redirects and cd targets', async () => {
   eq(await run(shell, 'pwd'), '/work', 'cd target expanded');
 });
 
+await test('glob expansion: *.txt expands, no-match stays literal', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo A > a.txt');
+  await run(shell, 'echo B > b.txt');
+  await run(shell, 'echo C > c.md');
+  eq(await run(shell, 'echo *.txt'), 'a.txt b.txt', '*.txt expands to sorted matches');
+  eq(await run(shell, 'cat *.txt'), 'A\nB', 'cat over a glob reads each match');
+  eq(await run(shell, 'echo *.xyz'), '*.xyz', 'no match keeps the literal (nullglob off)');
+  await run(shell, 'mkdir -p src');
+  await run(shell, 'echo X > src/x.txt');
+  await run(shell, 'cd src');
+  eq(await run(shell, 'echo *.txt'), 'x.txt', 'glob is cwd-relative after cd');
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
