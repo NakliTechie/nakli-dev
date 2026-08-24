@@ -125,6 +125,31 @@ function renderResult(name, res, { long } = {}) {
   return '';
 }
 
+// Map an isomorphic-git statusMatrix row [filepath, head, workdir, stage] to a
+// short porcelain code. null = unmodified (omit from `git status`).
+function statusCode(row) {
+  const [f, head, work, stage] = row;
+  if (head === 1 && work === 1 && stage === 1) return null; // clean
+  if (head === 0 && stage === 0) return `?? ${f}`;           // untracked
+  if (head === 0) return `A  ${f}`;                          // staged new
+  if (work === 0) return `${stage === 0 ? 'D ' : ' D'} ${f}`; // deleted
+  const staged = stage !== 1;                                // differs from HEAD in index
+  const dirty = work === 2 && stage === 1;                   // differs from index in tree
+  return `${staged ? 'M' : ' '}${dirty ? 'M' : ' '} ${f}`;
+}
+
+function renderGit(sub, res) {
+  if (sub === 'status') {
+    if (res.matrix) return res.matrix.map(statusCode).filter(Boolean).join('\n') || '(clean)';
+    if (typeof res.status === 'string') return res.status;
+  }
+  if (res.commits) return res.commits.map((c) => `${c.oid.slice(0, 7)} ${c.commit.message.split('\n')[0]}`).join('\n');
+  if (res.branches) return res.branches.join('\n');
+  if (typeof res.diff === 'string') return res.diff;
+  if (res.oid) return `[${res.oid.slice(0, 7)}]`;
+  return 'ok';
+}
+
 export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   if (!registry || !face) throw new Error('createShell requires { registry, face }');
   const state = { cwd, history: [] };
@@ -278,15 +303,49 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       const res = await face.invoke('fs.glob', { pattern: (base ? base + '/' : '') + '**', cwd: '' });
       return res.ok ? { text: res.matches.join('\n'), code: 0 } : { text: `find: ${res.message}`, code: 1 };
     }
+    if (verb === 'git') return runGit(args);
     const cmdName = REGISTRY_ALIAS[verb] || (registry.describeCommand(verb) ? verb : null);
-    if (verb === 'git') {
-      const sub = args[0];
-      const gitName = `git.${sub}`;
-      if (!registry.describeCommand(gitName)) return { text: `git: '${sub}' is not a rig git command`, code: 1 };
-      return runRegistry(gitName, args.slice(1), stdin);
-    }
     if (cmdName) return runRegistry(cmdName, args, stdin);
     return { text: `${verb}: command not found`, code: 127 };
+  }
+
+  // git <sub> [args]: map porcelain to the Rig git.* registry commands. Paths
+  // resolve against cwd (git core dir is the root). Commits go through the face
+  // as agent@rig.local and stage like any destructive op.
+  async function runGit(args) {
+    const sub = args[0];
+    const rest = args.slice(1);
+    const positional = rest.filter((a) => !a.startsWith('-'));
+    const rel = (p) => normalizePath(state.cwd, p);
+    if (!sub) return { text: 'usage: git <init|add|rm|commit|status|log|diff|branch|checkout>', code: 1 };
+
+    let name; let input = {};
+    switch (sub) {
+      case 'init': input = {}; name = 'git.init'; break;
+      case 'add': name = 'git.add'; input = { filepath: rel(positional[0] || '') }; break;
+      case 'rm': name = 'git.remove'; input = { filepath: rel(positional[0] || '') }; break;
+      case 'commit': {
+        const mi = rest.findIndex((a) => a === '-m' || a === '--message');
+        const message = mi >= 0 ? rest[mi + 1] : positional[0];
+        if (!message) return { text: 'git commit: need -m "<message>"', code: 1 };
+        name = 'git.commit'; input = { message, actor: 'agent' };
+        break;
+      }
+      case 'status':
+        if (positional[0]) { name = 'git.status'; input = { filepath: rel(positional[0]) }; }
+        else { name = 'git.statusMatrix'; input = {}; }
+        break;
+      case 'log': name = 'git.log'; input = flagNum(rest, 0) ? { depth: flagNum(rest, 0) } : {}; break;
+      case 'diff': name = 'git.diff'; input = positional[0] ? { ref: positional[0] } : {}; break;
+      case 'branch': name = 'git.branch'; input = positional[0] ? { name: positional[0] } : {}; break;
+      case 'checkout': name = 'git.checkout'; input = { ref: positional[0] || '' }; break;
+      default: return { text: `git: '${sub}' is not a rig git command`, code: 1 };
+    }
+    if (!registry.describeCommand(name)) return { text: `git: '${sub}' is unavailable (no git core wired)`, code: 1 };
+    const res = await face.invoke(name, input);
+    if (res.staged) return { staged: res.proposalId, verb: `git ${sub}` };
+    if (!res.ok) return { text: `git ${sub}: ${res.code || 'error'}: ${res.message || 'failed'}`, code: 1 };
+    return { text: renderGit(sub, res), code: 0 };
   }
 
   async function runPipeline(pipeline) {

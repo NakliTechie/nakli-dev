@@ -8,6 +8,7 @@
 // xterm is not involved — this is the headless system under test.
 
 import { createFileops, MemoryBackend } from '../../fileops/index.mjs';
+import { createGitCore } from '../../git/git-core.mjs';
 import { buildRigRegistry } from '../../registry/index.mjs';
 import { createGrant, createOpLog, createAgentFace } from '../../agent/index.mjs';
 import { createShell } from '../shell.mjs';
@@ -23,12 +24,17 @@ function eq(a, b, msg) {
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 
-function freshShell() {
+function freshShell({ git: withGit = false } = {}) {
   const backend = new MemoryBackend();
   const fs = createFileops({ backend });
-  const registry = buildRigRegistry({ fs });
-  const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove'] });
-  const opLog = createOpLog({ fs });
+  const git = withGit ? createGitCore({ fs, dir: '/' }) : undefined;
+  const registry = buildRigRegistry({ fs, git });
+  const grant = createGrant({
+    prefixes: [''],
+    scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'],
+  });
+  // Op-log on its own backend so its jsonl never pollutes a git working tree.
+  const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
   const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
   return { face, shell: createShell({ registry, face }) };
 }
@@ -133,6 +139,23 @@ await test('mv and cp move/copy through the registry', async () => {
   eq(await run(shell, 'cat c.txt'), 'data', 'mv target');
   const afterMv = await run(shell, 'cat b.txt');
   assert(/error|not|ENOENT/i.test(afterMv), 'mv removed source');
+});
+
+await test('git: init, add, commit (staged), status, log', async () => {
+  const { shell } = freshShell({ git: true });
+  eq(await run(shell, 'git init'), 'ok', 'git init');
+  await run(shell, 'echo hello > a.txt');
+  const untracked = await run(shell, 'git status');
+  assert(/\?\?\s+a\.txt/.test(untracked), `untracked shown: ${untracked}`);
+  eq(await run(shell, 'git add a.txt'), 'ok', 'git add');
+  const staged = await run(shell, 'git status');
+  assert(/A\s+a\.txt/.test(staged), `staged shown: ${staged}`);
+  const commitPrompt = await run(shell, 'git commit -m "first"');
+  assert(/destructive/.test(commitPrompt), `commit stages: ${commitPrompt}`);
+  await run(shell, 'y');
+  eq(await run(shell, 'git status'), '(clean)', 'clean after commit');
+  const log = await run(shell, 'git log');
+  assert(/first/.test(log), `log shows message: ${log}`);
 });
 
 if (failures.length) {
