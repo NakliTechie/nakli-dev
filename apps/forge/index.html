@@ -161,7 +161,14 @@
       try { res = await shell.feed(line); }
       catch (e) { term.write(`\x1b[38;2;194;86;75m${String(e && e.message || e)}${RESET}\r\n`); res = { output: '' }; }
       if (res.cleared) term.clear();
-      if (res.output) term.write(res.output.replace(/\n/g, '\r\n') + '\r\n');
+      // Shell output is plain text (the app adds its own colour separately), so
+      // scrub every C0 control except tab/newline before writing — a file whose
+      // bytes contain ANSI/OSC escapes can't then drive the terminal (matters
+      // once external content, not just this scratch workspace, can land).
+      if (res.output) {
+        const safe = res.output.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').replace(/\n/g, '\r\n');
+        term.write(safe + '\r\n');
+      }
       await refreshCache();
       syncPrompt();
       writePrompt();
@@ -176,10 +183,18 @@
       if (r.submit != null) await runCommand(r.submit);
     });
 
+    // Decode a data-seq attribute into its control bytes. JSON.parse chokes on
+    // \x escapes (JSON has none), so handle \x / \u / \t / \r / \n ourselves.
+    function unescapeSeq(s) {
+      return String(s == null ? '' : s)
+        .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+        .replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+    }
     // Mobile key bar → feed the raw sequence as if typed.
     document.getElementById('keybar').addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
-      const seq = JSON.parse('"' + b.dataset.seq + '"');
+      const seq = unescapeSeq(b.dataset.seq);
       term.focus();
       const r = editor.feed(seq);
       if (r.output) term.write(r.output);
