@@ -71,8 +71,8 @@ assert.match(
 );
 assert.match(html, /await crateInteractiveUnlock\(\)/,
   'passphrase entry stays in NakliOS after import');
-assert.match(html, /id="crate-connect-handoff"[\s\S]*?Open Crate setup/,
-  'Settings exposes the receiver with a file fallback');
+assert.match(html, /id="crate-connect-handoff"[\s\S]*?Set up Crate/,
+  'Settings exposes the receiver as the primary connect action');
 
 for (const phrase of [
   'The only accepted payload is the existing encrypted `.crate-creds` v1 JSON',

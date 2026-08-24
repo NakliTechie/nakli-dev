@@ -874,6 +874,14 @@ body.is-mobile .nw-dock{display:none;}
 .nw-dlg-manual .nw-dlg-form{ gap:10px; min-width:340px; max-width:420px; }
 .nw-dlg-field{ display:flex; flex-direction:column; gap:3px; }
 .nw-dlg-label{ font-size:11px; color:var(--muted); letter-spacing:0.02em; }
+.nw-dlg-fieldhint{ margin:0; font-size:10.5px; line-height:1.4; color:var(--faint); }
+.nw-dlg-fieldhint a{ color:var(--brand); }
+.nw-dlg-callout{
+  margin:0; padding:8px 10px; border-radius:8px;
+  border:1px solid var(--line); background:var(--row);
+  font-size:11px; line-height:1.45; color:var(--muted);
+}
+.nw-dlg-callout strong{ color:var(--ink); }
 .nw-dlg-input{
   padding:7px 10px;
   background:var(--row); color:var(--ink);
@@ -3439,36 +3447,43 @@ function nakliosManualCreds(opts = {}){
       <form method="dialog" class="nw-dlg-form">
         <h3 class="nw-dlg-title" id="nw-manual-creds-title">${_dlgEscape(opts.title || 'Enter credentials')}</h3>
         ${opts.body ? `<p class="nw-dlg-hint" id="nw-manual-creds-hint">${_dlgEscape(opts.body)}</p>` : ''}
+        <p class="nw-dlg-callout">New to this? The easier path is <strong>Open Crate setup…</strong> — it walks you through Cloudflare and hands the encrypted setup straight back. Use this form if you already have your R2 bucket and API keys.</p>
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Bucket name</span>
           <input name="bucketName" type="text" autocomplete="off"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  required class="nw-dlg-input">
+          <p class="nw-dlg-fieldhint">The name of your Cloudflare R2 bucket.</p>
         </label>
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Cloudflare Account ID</span>
           <input name="accountId" type="text" autocomplete="off"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  required class="nw-dlg-input mono">
+          <p class="nw-dlg-fieldhint">32-hex, in the right sidebar of your Cloudflare dashboard. <a href="https://dash.cloudflare.com/?to=/:account/r2/overview" target="_blank" rel="noopener">Open R2 ↗</a></p>
         </label>
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Access Key ID</span>
           <input name="accessKey" type="text" autocomplete="off"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  required class="nw-dlg-input mono">
+          <p class="nw-dlg-fieldhint">From an R2 API token with <strong>Object Read &amp; Write</strong>. <a href="https://dash.cloudflare.com/?to=/:account/r2/api-tokens" target="_blank" rel="noopener">Manage R2 API tokens ↗</a></p>
         </label>
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Secret Access Key</span>
           <input name="secretKey" type="password" autocomplete="off"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  required class="nw-dlg-input mono">
+          <p class="nw-dlg-fieldhint">Shown only once when you create the token — paste it now.</p>
         </label>
         <label class="nw-dlg-field">
           <span class="nw-dlg-label">Folder passphrase</span>
           <input name="passphrase" type="password" autocomplete="current-password"
                  autocapitalize="off" autocorrect="off" spellcheck="false"
                  required class="nw-dlg-input">
+          <p class="nw-dlg-fieldhint">The passphrase you chose when you created this Crate.</p>
         </label>
+        <p class="nw-dlg-callout">Your bucket also needs a CORS policy allowing <code>${_dlgEscape(location.origin)}</code>. If the connection fails on CORS, NakliOS shows the exact policy to paste and a link to the right Cloudflare page.</p>
         <p class="nw-dlg-inline-error" hidden></p>
         <menu class="nw-dlg-actions">
           <button value="cancel" type="button" class="nw-dlg-btn">Cancel</button>
@@ -7401,7 +7416,7 @@ const TOUR_STEPS = [
   { target:'#icon-area', title:'Grouped by task',
     body:'Your tools are organised into folders like Create & Convert, Work & Build, and Play. Click a folder to open it, or an app to launch it in a window.' },
   { target:'#fsa-chip', title:'Storage stays optional',
-    body:'Connect a Folder or an encrypted Crate only when an app actually needs to save something. Until then, nothing is written anywhere.' },
+    body:'Connect a Folder, or set up an encrypted Crate for end-to-end multi-device sync — only when an app needs to save. Until then nothing is written anywhere. Settings → Storage walks you through Crate.' },
   { target:'#nw-dock', title:'Essentials on the dock',
     body:'Your most-used tools sit on the dock for one-click access. Drag them to reorder whenever you like.' },
   { target:'#settings-btn', title:'Make it yours',
@@ -8342,14 +8357,14 @@ function openSettings(section){
       </div>
     ` : `
       <div class="nw-fs-connect-actions">
-        <button class="nw-fs-btn-primary" id="crate-connect-file">Use <code>.crate-creds</code> file…</button>
-        <button class="nw-fs-btn-secondary" id="crate-connect-manual">Enter bucket details…</button>
-        <button class="nw-fs-btn-secondary" id="crate-connect-handoff">Open Crate setup…</button>
+        <button class="nw-fs-btn-primary" id="crate-connect-handoff">Set up Crate…</button>
+        <button class="nw-fs-btn-secondary" id="crate-connect-file">I have a <code>.crate-creds</code> file…</button>
       </div>
+      <button class="nw-fs-link-btn" id="crate-connect-manual" style="margin-top:6px;">Advanced: enter bucket details manually…</button>
     `}
     <div class="nw-fs-blurb">${crateUnlocked || crateLocked
       ? `Encrypted multi-device folder. Apps see the same <code>apps/&lt;id&gt;/</code> layout — pick which backend (folder or crate) per app on first use. <a class="nw-foot-link" href="https://crate.naklios.dev/guide/" target="_blank">Guide →</a>`
-      : `BYOK encrypted cloud folder via Cloudflare R2. Apps that opt in get end-to-end-encrypted multi-device sync. Connect with a <code>.crate-creds</code> file from <a class="nw-foot-link" href="https://crate.naklios.dev/" target="_blank">crate.naklios.dev</a>, or enter the same bucket details manually.`}</div>
+      : `BYOK encrypted cloud folder on your own Cloudflare R2 — apps that opt in get end-to-end-encrypted multi-device sync. <strong>Set up Crate</strong> walks you through Cloudflare on <a class="nw-foot-link" href="https://crate.naklios.dev/" target="_blank">crate.naklios.dev</a> and hands the encrypted setup back; only an encrypted envelope ever returns to NakliOS.`}</div>
     <label class="nw-fs-blurb" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
       <input type="checkbox" id="crate-stay" ${stayChecked} />
       <span>Stay unlocked in this tab (cleared on tab close)</span>
