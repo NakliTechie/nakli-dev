@@ -15,6 +15,7 @@
 const CSI = '\x1b[';
 
 export function createLineEditor({ prompt = '$ ', complete = () => [] } = {}) {
+  let promptStr = prompt;
   let buffer = '';
   let cursor = 0;            // index into buffer
   const history = [];
@@ -24,7 +25,7 @@ export function createLineEditor({ prompt = '$ ', complete = () => [] } = {}) {
   // Full-line repaint: return to col 0, clear to EOL, redraw prompt+buffer,
   // then park the cursor. Simple and correct for a single line.
   function render() {
-    let out = `\r${CSI}K${prompt}${buffer}`;
+    let out = `\r${CSI}K${promptStr}${buffer}`;
     const back = buffer.length - cursor;
     if (back > 0) out += `${CSI}${back}D`;
     return out;
@@ -124,7 +125,8 @@ export function createLineEditor({ prompt = '$ ', complete = () => [] } = {}) {
 
   return {
     feed,
-    prompt() { return prompt; },
+    setPrompt(p) { promptStr = String(p == null ? "" : p); },
+    prompt() { return promptStr; },
     get line() { return buffer; },
     get cursor() { return cursor; },
     get history() { return history.slice(); },
