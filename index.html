@@ -2614,9 +2614,10 @@ async function crateInteractiveSetupHandoff(){
         sandbox="allow-scripts allow-forms allow-downloads allow-same-origin"
         referrerpolicy="no-referrer"></iframe>
       <footer class="nw-crate-handoff-foot">
-        Direct handoff requires Crate’s “Send to NakliOS” action. Until that
-        sender ships, download the <code>.crate-creds</code> file and use the
-        existing file option in Settings.
+        Finish setup in Crate, then click “Send to NakliOS” — only the
+        encrypted envelope returns here; you enter the passphrase in NakliOS.
+        Prefer a file? Download the <code>.crate-creds</code> and use
+        “I have a <code>.crate-creds</code> file” in Settings.
       </footer>
     </div>`;
   const iframe = dialog.querySelector('iframe');
