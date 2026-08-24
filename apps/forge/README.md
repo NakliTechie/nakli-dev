@@ -10,10 +10,13 @@ no model.
 the Rig command registry. **Mobile is not a squeezed desktop:** a distinct single-column
 shape with a surface switcher. No AI is load-bearing; every surface works with no model.
 
-**Status:** planning. No code yet. Chunk **C5**, built strictly against the reference +
-mockup below. Rig C4b and Kiln K2 are available, so the build is unblocked. Tokens as CSS custom properties from day
-one; in-app prompt/confirm, never native dialogs; designed empty/error states; a11y and
-i18n from the first commit.
+**Status:** shipping (Chunk **C5**, in layers). The **terminal** ships in `index.html` —
+a bash-style shell over Rig (fs + git) with xterm, a line editor, and Tab completion;
+`python` is wired but degrades until the host grants cross-origin isolation. Still to
+come: the tree / transcript / goal-board panels, real Folder/Crate backends, and the
+coding-agent loop. Built against the reference + mockup below: tokens as CSS custom
+properties, in-app prompt/confirm never native dialogs, designed empty/error states,
+a11y and i18n from the first commit.
 
 **Planning docs** (this folder):
 - `FORGE-UX-UI-REFERENCE.md` — the drawn target the build follows.

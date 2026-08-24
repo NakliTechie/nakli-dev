@@ -8,6 +8,7 @@
 // xterm is not involved — this is the headless system under test.
 
 import { createFileops, MemoryBackend } from '../../fileops/index.mjs';
+import { createGitCore } from '../../git/git-core.mjs';
 import { buildRigRegistry } from '../../registry/index.mjs';
 import { createGrant, createOpLog, createAgentFace } from '../../agent/index.mjs';
 import { createShell } from '../shell.mjs';
@@ -23,12 +24,17 @@ function eq(a, b, msg) {
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 
-function freshShell() {
+function freshShell({ git: withGit = false } = {}) {
   const backend = new MemoryBackend();
   const fs = createFileops({ backend });
-  const registry = buildRigRegistry({ fs });
-  const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove'] });
-  const opLog = createOpLog({ fs });
+  const git = withGit ? createGitCore({ fs, dir: '/' }) : undefined;
+  const registry = buildRigRegistry({ fs, git });
+  const grant = createGrant({
+    prefixes: [''],
+    scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'],
+  });
+  // Op-log on its own backend so its jsonl never pollutes a git working tree.
+  const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
   const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
   return { face, shell: createShell({ registry, face }) };
 }
@@ -133,6 +139,70 @@ await test('mv and cp move/copy through the registry', async () => {
   eq(await run(shell, 'cat c.txt'), 'data', 'mv target');
   const afterMv = await run(shell, 'cat b.txt');
   assert(/error|not|ENOENT/i.test(afterMv), 'mv removed source');
+});
+
+await test('git: init, add, commit (staged), status, log', async () => {
+  const { shell } = freshShell({ git: true });
+  eq(await run(shell, 'git init'), 'ok', 'git init');
+  await run(shell, 'echo hello > a.txt');
+  const untracked = await run(shell, 'git status');
+  assert(/\?\?\s+a\.txt/.test(untracked), `untracked shown: ${untracked}`);
+  eq(await run(shell, 'git add a.txt'), 'ok', 'git add');
+  const staged = await run(shell, 'git status');
+  assert(/A\s+a\.txt/.test(staged), `staged shown: ${staged}`);
+  const commitPrompt = await run(shell, 'git commit -m "first"');
+  assert(/destructive/.test(commitPrompt), `commit stages: ${commitPrompt}`);
+  await run(shell, 'y');
+  eq(await run(shell, 'git status'), '(clean)', 'clean after commit');
+  const log = await run(shell, 'git log');
+  assert(/first/.test(log), `log shows message: ${log}`);
+});
+
+await test('variables: assignment, $VAR, ${VAR}, export/env/unset', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'NAME=world');
+  eq(await run(shell, 'echo hello $NAME'), 'hello world', '$VAR expands');
+  eq(await run(shell, 'echo ${NAME}!'), 'world!', '${VAR} braces');
+  await run(shell, 'export FOO=bar');
+  const env = await run(shell, 'env');
+  assert(/FOO=bar/.test(env) && /HOME=\//.test(env) && /PWD=\//.test(env), `env lists vars: ${env}`);
+  await run(shell, 'unset NAME');
+  eq(await run(shell, 'echo [$NAME]'), '[]', 'unset clears');
+});
+
+await test('$? reflects the last exit code; $PWD tracks cwd', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, 'echo $?'), '0', 'zero after success');
+  await run(shell, 'cat nope.txt');           // fails
+  eq(await run(shell, 'echo $?'), '1', 'one after failure');
+  await run(shell, 'mkdir -p src');
+  await run(shell, 'cd src');
+  eq(await run(shell, 'echo $PWD'), '/src', '$PWD tracks cwd');
+});
+
+await test('variables expand in redirects and cd targets', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'F=out.txt');
+  await run(shell, 'echo hi > $F');
+  eq(await run(shell, 'cat out.txt'), 'hi', 'redirect target expanded');
+  await run(shell, 'mkdir -p work');
+  await run(shell, 'D=work');
+  await run(shell, 'cd $D');
+  eq(await run(shell, 'pwd'), '/work', 'cd target expanded');
+});
+
+await test('glob expansion: *.txt expands, no-match stays literal', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo A > a.txt');
+  await run(shell, 'echo B > b.txt');
+  await run(shell, 'echo C > c.md');
+  eq(await run(shell, 'echo *.txt'), 'a.txt b.txt', '*.txt expands to sorted matches');
+  eq(await run(shell, 'cat *.txt'), 'A\nB', 'cat over a glob reads each match');
+  eq(await run(shell, 'echo *.xyz'), '*.xyz', 'no match keeps the literal (nullglob off)');
+  await run(shell, 'mkdir -p src');
+  await run(shell, 'echo X > src/x.txt');
+  await run(shell, 'cd src');
+  eq(await run(shell, 'echo *.txt'), 'x.txt', 'glob is cwd-relative after cd');
 });
 
 if (failures.length) {

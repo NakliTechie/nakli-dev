@@ -125,9 +125,49 @@ function renderResult(name, res, { long } = {}) {
   return '';
 }
 
+// Map an isomorphic-git statusMatrix row [filepath, head, workdir, stage] to a
+// short porcelain code. null = unmodified (omit from `git status`).
+function statusCode(row) {
+  const [f, head, work, stage] = row;
+  if (head === 1 && work === 1 && stage === 1) return null; // clean
+  if (head === 0 && stage === 0) return `?? ${f}`;           // untracked
+  if (head === 0) return `A  ${f}`;                          // staged new
+  if (work === 0) return `${stage === 0 ? 'D ' : ' D'} ${f}`; // deleted
+  const staged = stage !== 1;                                // differs from HEAD in index
+  const dirty = work === 2 && stage === 1;                   // differs from index in tree
+  return `${staged ? 'M' : ' '}${dirty ? 'M' : ' '} ${f}`;
+}
+
+function renderGit(sub, res) {
+  if (sub === 'status') {
+    if (res.matrix) return res.matrix.map(statusCode).filter(Boolean).join('\n') || '(clean)';
+    if (typeof res.status === 'string') return res.status;
+  }
+  if (res.commits) return res.commits.map((c) => `${c.oid.slice(0, 7)} ${c.commit.message.split('\n')[0]}`).join('\n');
+  if (res.branches) return res.branches.join('\n');
+  if (typeof res.diff === 'string') return res.diff;
+  if (res.oid) return `[${res.oid.slice(0, 7)}]`;
+  return 'ok';
+}
+
 export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   if (!registry || !face) throw new Error('createShell requires { registry, face }');
-  const state = { cwd, history: [] };
+  const state = { cwd, history: [], vars: new Map([['HOME', '/']]) };
+
+  // $VAR / ${VAR} / $? / $PWD expansion. NOTE: the tokenizer already stripped
+  // quotes, so (unlike POSIX) single-quotes don't suppress expansion here — a
+  // known simplification tracked under the POSIX-later agenda.
+  function expand(token) {
+    return String(token).replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$\?/g,
+      (m, braced, bare) => {
+        if (m === '$?') return String(lastCode);
+        const name = braced || bare;
+        if (name === 'PWD') return '/' + state.cwd;
+        return state.vars.has(name) ? state.vars.get(name) : '';
+      },
+    );
+  }
   let pending = null; // { proposalId, verb }
   let lastCode = 0;
 
@@ -250,10 +290,24 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       const res = await face.invoke('fs.write', { path, data: '', createParents: true });
       return { text: res.ok ? '' : `touch: ${res.message || 'failed'}`, code: res.ok ? 0 : 1 };
     },
+    env() {
+      const lines = [...state.vars.entries()].sort().map(([k, v]) => `${k}=${v}`);
+      lines.push(`PWD=/${state.cwd}`);
+      return { text: lines.join('\n'), code: 0 };
+    },
+    export(args) {
+      for (const a of args) {
+        const eq = a.indexOf('=');
+        if (eq > 0) state.vars.set(a.slice(0, eq), a.slice(eq + 1));
+      }
+      return { text: '', code: 0 };
+    },
+    unset(args) { for (const a of args) state.vars.delete(a); return { text: '', code: 0 }; },
     help() {
       const cmds = ['cd', 'pwd', 'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail', 'wc',
-        'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python', 'clear', 'history', 'which'];
-      return { text: 'commands: ' + cmds.join(' '), code: 0 };
+        'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python',
+        'env', 'export', 'unset', 'clear', 'history', 'which'];
+      return { text: 'commands: ' + cmds.join(' ') + '\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD', code: 0 };
     },
   };
 
@@ -264,7 +318,43 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     return m ? Number(m.slice(1)) : dflt;
   }
 
-  async function runStage(argv, stdin) {
+  const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+  // Bash-style filename globbing: a token with * or ? expands to matching paths
+  // (cwd-relative; the glob command returns root-relative, so strip the cwd
+  // prefix). No match → the literal token is kept (nullglob off). Flags (-x) and
+  // env-looking tokens are left alone.
+  async function expandGlobs(tokens) {
+    const out = [];
+    const prefix = state.cwd ? state.cwd + '/' : '';
+    for (const t of tokens) {
+      if (/[*?]/.test(t) && !t.startsWith('-')) {
+        const res = await face.invoke('fs.glob', { pattern: t, cwd: state.cwd });
+        if (res.ok && res.matches.length) {
+          out.push(...res.matches.map((m) => (m.startsWith(prefix) ? m.slice(prefix.length) : m)).sort());
+          continue;
+        }
+      }
+      out.push(t);
+    }
+    return out;
+  }
+
+  async function runStage(rawArgv, stdin) {
+    // Leading NAME=value tokens set shell variables; if nothing follows, the
+    // stage is a pure assignment.
+    let argv = rawArgv;
+    let ai = 0;
+    while (ai < argv.length && ASSIGN.test(argv[ai])) {
+      const eq = argv[ai].indexOf('=');
+      state.vars.set(argv[ai].slice(0, eq), expand(argv[ai].slice(eq + 1)));
+      ai++;
+    }
+    if (ai > 0) argv = argv.slice(ai);
+    if (argv.length === 0) return { text: '', code: 0 };
+    // Expand $VARs, then globs (`*.txt`) in the argument tokens.
+    argv = argv.map(expand);
+    argv = [argv[0], ...(await expandGlobs(argv.slice(1)))];
     const verb = argv[0];
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);
@@ -278,15 +368,49 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       const res = await face.invoke('fs.glob', { pattern: (base ? base + '/' : '') + '**', cwd: '' });
       return res.ok ? { text: res.matches.join('\n'), code: 0 } : { text: `find: ${res.message}`, code: 1 };
     }
+    if (verb === 'git') return runGit(args);
     const cmdName = REGISTRY_ALIAS[verb] || (registry.describeCommand(verb) ? verb : null);
-    if (verb === 'git') {
-      const sub = args[0];
-      const gitName = `git.${sub}`;
-      if (!registry.describeCommand(gitName)) return { text: `git: '${sub}' is not a rig git command`, code: 1 };
-      return runRegistry(gitName, args.slice(1), stdin);
-    }
     if (cmdName) return runRegistry(cmdName, args, stdin);
     return { text: `${verb}: command not found`, code: 127 };
+  }
+
+  // git <sub> [args]: map porcelain to the Rig git.* registry commands. Paths
+  // resolve against cwd (git core dir is the root). Commits go through the face
+  // as agent@rig.local and stage like any destructive op.
+  async function runGit(args) {
+    const sub = args[0];
+    const rest = args.slice(1);
+    const positional = rest.filter((a) => !a.startsWith('-'));
+    const rel = (p) => normalizePath(state.cwd, p);
+    if (!sub) return { text: 'usage: git <init|add|rm|commit|status|log|diff|branch|checkout>', code: 1 };
+
+    let name; let input = {};
+    switch (sub) {
+      case 'init': input = {}; name = 'git.init'; break;
+      case 'add': name = 'git.add'; input = { filepath: rel(positional[0] || '') }; break;
+      case 'rm': name = 'git.remove'; input = { filepath: rel(positional[0] || '') }; break;
+      case 'commit': {
+        const mi = rest.findIndex((a) => a === '-m' || a === '--message');
+        const message = mi >= 0 ? rest[mi + 1] : positional[0];
+        if (!message) return { text: 'git commit: need -m "<message>"', code: 1 };
+        name = 'git.commit'; input = { message, actor: 'agent' };
+        break;
+      }
+      case 'status':
+        if (positional[0]) { name = 'git.status'; input = { filepath: rel(positional[0]) }; }
+        else { name = 'git.statusMatrix'; input = {}; }
+        break;
+      case 'log': name = 'git.log'; input = flagNum(rest, 0) ? { depth: flagNum(rest, 0) } : {}; break;
+      case 'diff': name = 'git.diff'; input = positional[0] ? { ref: positional[0] } : {}; break;
+      case 'branch': name = 'git.branch'; input = positional[0] ? { name: positional[0] } : {}; break;
+      case 'checkout': name = 'git.checkout'; input = { ref: positional[0] || '' }; break;
+      default: return { text: `git: '${sub}' is not a rig git command`, code: 1 };
+    }
+    if (!registry.describeCommand(name)) return { text: `git: '${sub}' is unavailable (no git core wired)`, code: 1 };
+    const res = await face.invoke(name, input);
+    if (res.staged) return { staged: res.proposalId, verb: `git ${sub}` };
+    if (!res.ok) return { text: `git ${sub}: ${res.code || 'error'}: ${res.message || 'failed'}`, code: 1 };
+    return { text: renderGit(sub, res), code: 0 };
   }
 
   async function runPipeline(pipeline) {
@@ -331,7 +455,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
         return { output: out.join('\n'), awaitingConfirm: res.staged };
       }
       if (stmt.redirect) {
-        const path = normalizePath(state.cwd, stmt.redirect.path);
+        const path = normalizePath(state.cwd, expand(stmt.redirect.path));
         const chunk = withTrailingNewline(res.text);
         let data = chunk;
         if (stmt.redirect.append) {

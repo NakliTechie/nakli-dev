@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,11 +26,18 @@ try {
   const catalogErrors = await auditAppInventory(rootDir, brokenHtml, manifest, lock);
   assert.ok(catalogErrors.some(error => error.includes('catalog embedUrl')), 'catalog/mirror path drift is rejected');
 
-  await writeFile(path.join(fixture, 'apps', 'forge', 'index.html'), '<!doctype html><title>Forge</title>');
-  const shippedPlanningErrors = await auditAppInventory(fixture, html, manifest, lock);
+  // Forge shipped 2026-08-24: with a catalog entry (system app) and an on-disk
+  // index, it audits clean — the planning-only exception is gone.
+  const forgeAudit = await auditAppInventory(fixture, html, manifest, lock);
+  assert.ok(!forgeAudit.some(error => error.startsWith('forge:')), 'shipped Forge audits clean');
+
+  // An on-disk app with no catalog entry is still flagged.
+  await mkdir(path.join(fixture, 'apps', 'ghostapp'), { recursive: true });
+  await writeFile(path.join(fixture, 'apps', 'ghostapp', 'index.html'), '<!doctype html><title>Ghost</title>');
+  const ghostErrors = await auditAppInventory(fixture, html, manifest, lock);
   assert.ok(
-    shippedPlanningErrors.some(error => error.includes('forge: on-disk app has no catalog entry')),
-    'a Forge index terminates the planning-only inventory exception',
+    ghostErrors.some(error => error.includes('ghostapp: on-disk app has no catalog entry')),
+    'an uncatalogued on-disk app is flagged',
   );
 } finally {
   await rm(fixture, { recursive: true, force: true });

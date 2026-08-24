@@ -112,8 +112,8 @@ assert.match(
 );
 assert.match(
   html,
-  /id:'fld-work'[\s\S]*?apps:\['editor','kanzen','nakliposter','bofh','mod','naklidata','nemawashi'\]/,
-  'Editor has one predictable home in Work & Build',
+  /id:'fld-work'[\s\S]*?apps:\['editor','forge','kanzen','nakliposter','bofh','mod','naklidata','nemawashi'\]/,
+  'Editor and Forge have predictable homes in Work & Build',
 );
 assert.match(
   html,

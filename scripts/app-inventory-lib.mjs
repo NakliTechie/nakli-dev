@@ -1,7 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-const PLANNING_ONLY_DIRECTORIES = new Set(['forge']);
+// Forge shipped 2026-08-24 (terminal); no directories are planning-only now.
+const PLANNING_ONLY_DIRECTORIES = new Set([]);
 
 function appObjectsFromHtml(html) {
   const start = html.indexOf('const APPS = [');
