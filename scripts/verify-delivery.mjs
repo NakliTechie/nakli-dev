@@ -3,10 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const [configSource, assetsIgnore, forgeReadme] = await Promise.all([
+const [configSource, assetsIgnore] = await Promise.all([
   readFile(path.join(root, 'wrangler.jsonc'), 'utf8'),
   readFile(path.join(root, '.assetsignore'), 'utf8'),
-  readFile(path.join(root, 'apps', 'forge', 'README.md'), 'utf8'),
 ]);
 
 function assert(condition, message) {
@@ -28,12 +27,14 @@ const expectedRules = [
   'test/',
   '**/test/',
   '**/*.test.mjs',
-  'apps/forge/',
+  'apps/forge/*.md',
+  'apps/forge/forge-mockup.html',
   'wrangler.jsonc',
 ];
 const rules = assetsIgnore.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 assert(JSON.stringify(rules) === JSON.stringify(expectedRules), `Unexpected asset exclusions: ${rules.join(', ')}`);
-assert(/\*\*Status:\*\* planning\./.test(forgeReadme), 'The Forge deployment exclusion lacks planning status evidence.');
+// Forge now ships its terminal (apps/forge/index.html); only its planning
+// docs (*.md) and the mockup stay excluded from delivery.
 
 const requiredAssets = [
   'index.html',

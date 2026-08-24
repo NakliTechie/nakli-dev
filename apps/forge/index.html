@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forge</title>
+<link rel="stylesheet" href="../../vendor/xterm/5.5.0/xterm.css">
+<style>
+  /* Forge token palette (FORGE-UX-UI-REFERENCE §6) — dark first, one amber accent. */
+  :root{
+    --bg-0:#0E1012; --bg-1:#15181B; --bg-2:#1C2024; --bg-3:#242A2F;
+    --fg-0:#E6E9EB; --fg-1:#A8B0B6; --fg-2:#6E777D; --rule:#262C31;
+    --accent:#D98A28; --accent-dim:#8A5A1C;
+    --ok:#5C9E6B; --warn:#C9A227; --err:#C2564B;
+    --font-ui:"IBM Plex Sans",system-ui,sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --radius:3px; --rule-w:1px; --dur:120ms; --ease:cubic-bezier(.2,0,0,1);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg-0); color:var(--fg-0); font-family:var(--font-ui);
+    font-size:12px; display:flex; flex-direction:column; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* Header — wordmark + cwd status. Grouping is space + a hairline rule, no card. */
+  header{
+    display:flex; align-items:center; gap:10px; padding:8px 12px;
+    border-bottom:var(--rule-w) solid var(--rule); background:var(--bg-1);
+    flex:0 0 auto;
+  }
+  .brand{font-weight:600; letter-spacing:.02em}
+  .brand b{color:var(--accent)}
+  .status{color:var(--fg-2); font-family:var(--font-mono); font-size:11px}
+  .spacer{flex:1}
+  .hint{color:var(--fg-2); font-size:11px}
+  .hint kbd{
+    font-family:var(--font-mono); color:var(--fg-1);
+    border:var(--rule-w) solid var(--rule); border-radius:var(--radius);
+    padding:1px 5px; background:var(--bg-2);
+  }
+  /* Terminal surface fills the rest. */
+  #term{flex:1; min-height:0; padding:8px 10px; background:var(--bg-0)}
+  .xterm .xterm-viewport{background:transparent!important}
+  /* Mobile key bar (§4) — the keys a soft keyboard hides. */
+  .keybar{
+    display:none; gap:6px; padding:6px 8px; border-top:var(--rule-w) solid var(--rule);
+    background:var(--bg-1); flex:0 0 auto;
+  }
+  .keybar button{
+    font-family:var(--font-mono); font-size:12px; color:var(--fg-1);
+    background:var(--bg-2); border:var(--rule-w) solid var(--rule);
+    border-radius:var(--radius); padding:6px 10px; min-width:40px;
+  }
+  .keybar button:active{border-color:var(--accent); color:var(--accent)}
+  @media (max-width:700px){ .keybar{display:flex} .hint{display:none} }
+</style>
+</head>
+<body>
+  <header>
+    <span class="brand"><b>◆</b> Forge</span>
+    <span class="status" id="cwd">/</span>
+    <span class="spacer"></span>
+    <span class="hint">a terminal over your files · <kbd>help</kbd></span>
+  </header>
+  <div id="term"></div>
+  <nav class="keybar" id="keybar" aria-label="Terminal keys">
+    <button data-seq="\t">Tab</button>
+    <button data-seq="\x03">^C</button>
+    <button data-seq="\x1b[A">↑</button>
+    <button data-seq="\x1b[B">↓</button>
+    <button data-seq="/">/</button>
+    <button data-seq="-">-</button>
+    <button data-seq="|">|</button>
+  </nav>
+
+  <script src="../../sdk/naklios.js"></script>
+  <script type="module">
+    import { Terminal } from '../../vendor/xterm/5.5.0/xterm.mjs';
+    import { FitAddon } from '../../vendor/xterm/5.5.0/addon-fit.mjs';
+    import { createFileops, MemoryBackend } from '../../sys/rig/fileops/index.mjs';
+    import { createGitCore } from '../../sys/rig/git/git-core.mjs';
+    import { buildRigRegistry } from '../../sys/rig/registry/index.mjs';
+    import { createGrant, createOpLog, createAgentFace } from '../../sys/rig/agent/index.mjs';
+    import { createShell } from '../../sys/rig/cli/shell.mjs';
+    import { createLineEditor } from '../../sys/rig/cli/lineeditor.mjs';
+    import { createCompleter } from '../../sys/rig/cli/completer.mjs';
+
+    const nak = window.naklios || null;
+    const ACCENT = '\x1b[38;2;217;138;40m';
+    const DIM = '\x1b[38;2;110;119;125m';
+    const RESET = '\x1b[0m';
+
+    // ── Rig substrate: an in-memory workspace (persistence is a later layer). ──
+    const backend = new MemoryBackend();
+    const fs = createFileops({ backend });
+    await fs.write('README.md', '# Forge workspace\n\nA bash-style terminal over your files, in the browser.\nTry: ls, cat README.md, echo hi > note.txt, git init, help\n');
+    await fs.write('src/main.py', 'print("hello from Forge")\n');
+    const git = createGitCore({ fs, dir: '/' });
+    const registry = buildRigRegistry({ fs, git });
+    const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'] });
+    // Op-log on a separate backend so it never appears in the workspace tree.
+    const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
+    const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
+
+    // Python (Kiln) needs SharedArrayBuffer → cross-origin isolation, which the
+    // host doesn't grant yet. Degrade honestly rather than fail obscurely.
+    const kiln = null;
+    const pyReady = self.crossOriginIsolated === true;
+
+    const shell = createShell({ registry, face, kiln });
+
+    // ── completion cache: refreshed after every command (the editor's Tab is sync). ──
+    const KNOWN = ['cd', 'pwd', 'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail', 'wc',
+      'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python', 'clear', 'history', 'help', 'which'];
+    let dirCache = {};
+    async function refreshCache() {
+      const here = await face.invoke('fs.list', { path: shell.cwd });
+      dirCache = { '': here.ok ? here.entries.map((e) => e.name) : [] };
+    }
+    const complete = createCompleter({ commands: KNOWN, listPath: (d) => dirCache[d] || [] });
+    const editor = createLineEditor({ complete });
+
+    // ── xterm chrome ──
+    const term = new Terminal({
+      fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+      fontSize: 13, lineHeight: 1.35, cursorBlink: true, convertEol: false,
+      theme: {
+        background: '#0E1012', foreground: '#E6E9EB', cursor: '#D98A28',
+        cursorAccent: '#0E1012', selectionBackground: '#242A2F',
+        black: '#15181B', red: '#C2564B', green: '#5C9E6B', yellow: '#C9A227',
+        blue: '#6E9ECF', magenta: '#B07FC9', cyan: '#5FA8A8', white: '#A8B0B6',
+        brightBlack: '#6E777D', brightWhite: '#E6E9EB',
+      },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    const host = document.getElementById('term');
+    term.open(host);
+    // Fit to the container once it has real dimensions; fall back to 80x24 so a
+    // momentarily-collapsed layout never leaves an unusable 2-column terminal.
+    function doFit() {
+      try {
+        if (host.clientWidth > 40 && host.clientHeight > 20) fit.fit();
+        else if (term.cols < 20) term.resize(80, 24);
+      } catch (_) { try { term.resize(80, 24); } catch (__) {} }
+    }
+    new ResizeObserver(doFit).observe(host);
+    requestAnimationFrame(doFit);
+    setTimeout(doFit, 150);
+    addEventListener('resize', doFit);
+
+    const cwdEl = document.getElementById('cwd');
+    function promptFor() { return `${ACCENT}/${shell.cwd}${RESET} $ `; }
+    function syncPrompt() { editor.setPrompt(promptFor()); cwdEl.textContent = '/' + shell.cwd; }
+    function writePrompt() { term.write(editor.prompt()); }
+
+    async function runCommand(line) {
+      if (line.trim() === '') { writePrompt(); return; }
+      let res;
+      try { res = await shell.feed(line); }
+      catch (e) { term.write(`\x1b[38;2;194;86;75m${String(e && e.message || e)}${RESET}\r\n`); res = { output: '' }; }
+      if (res.cleared) term.clear();
+      if (res.output) term.write(res.output.replace(/\n/g, '\r\n') + '\r\n');
+      await refreshCache();
+      syncPrompt();
+      writePrompt();
+      if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
+    }
+
+    term.onData(async (d) => {
+      const r = editor.feed(d);
+      if (r.output) term.write(r.output);
+      if (r.clear) { term.clear(); writePrompt(); return; }
+      if (r.interrupt) { writePrompt(); return; }
+      if (r.submit != null) await runCommand(r.submit);
+    });
+
+    // Mobile key bar → feed the raw sequence as if typed.
+    document.getElementById('keybar').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const seq = JSON.parse('"' + b.dataset.seq + '"');
+      term.focus();
+      const r = editor.feed(seq);
+      if (r.output) term.write(r.output);
+      if (r.submit != null) runCommand(r.submit);
+    });
+
+    // ── banner + first prompt ──
+    term.writeln(`${ACCENT}◆ Forge${RESET} — a bash-style terminal over your files.`);
+    term.writeln(`${DIM}Rig fs + git are live${pyReady ? '' : '; python needs cross-origin isolation (not enabled here yet)'}. Type ${RESET}help${DIM}.${RESET}`);
+    await refreshCache();
+    syncPrompt();
+    writePrompt();
+    term.focus();
+
+    if (nak && nak.ready) nak.ready();
+    if (nak && nak.title) nak.title('Forge');
+    if (nak && nak.theme && nak.theme.onChange) {
+      // Forge owns its own dark palette; ignore host theme swaps for now.
+    }
+  </script>
+</body>
+</html>

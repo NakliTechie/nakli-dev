@@ -7,5 +7,6 @@ redirects/
 test/
 **/test/
 **/*.test.mjs
-apps/forge/
+apps/forge/*.md
+apps/forge/forge-mockup.html
 wrangler.jsonc
