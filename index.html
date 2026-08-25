@@ -5096,6 +5096,15 @@ const AI_ENDPOINT_PRESETS = Object.freeze({
     baseUrl:'https://api.groq.com/openai/v1',
     keyRequired:true,
   }),
+  agentrouter: Object.freeze({
+    // Aggregator (OpenAI-compatible). Model e.g. `gpt-5.6-sol`. CORS is open and
+    // browser requests pass its client-UA gate (the gate blocks curl/python, not
+    // browsers), so BYOK works directly from here — no proxy. Key entered in
+    // Settings → AI, never stored in this file.
+    label:'AgentRouter',
+    baseUrl:'https://agentrouter.org/v1',
+    keyRequired:true,
+  }),
   custom: Object.freeze({
     label:'OpenAI-compatible',
     baseUrl:'',
