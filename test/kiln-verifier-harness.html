@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kiln K3 — real Pyodide verifier (adversarial)</title>
+  <style>
+    body { font: 14px ui-monospace, monospace; padding: 1rem; background:#0b0d10; color:#d7dbe0; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Kiln K3 — real Pyodide verifier (adversarial)</h1>
+  <pre id="out">loading Pyodide (~12 MiB from CDN)…</pre>
+  <script type="module">
+    // PARKED — attended run only. Serve with COOP/COEP so this is a top-level
+    // isolated document, then open in Chrome:
+    //   node test/serve-kiln.mjs   →   http://127.0.0.1:8765/test/kiln-verifier-harness.html
+    //
+    // Proves the K3 security property against REAL Pyodide — the property the
+    // headless MockVerifierRuntime can only model: a working interpreter in which
+    // the agent has monkey-patched the failure machinery (sys.exit, the test
+    // runner) STILL cannot bend the verdict, because the verifier runs the
+    // operator's command in a FRESH interpreter that never saw the patch.
+    //
+    // It reuses the shipped, headless-proven createVerifier from sys/kiln; only
+    // the real-Pyodide runtime adapter is inline here (unproven until this runs).
+    const PY = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+    const out = document.getElementById('out');
+    const results = [];
+    const eq = (a, b, m) => { if (a !== b) throw new Error(`${m||'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); };
+    const assert = (c, m) => { if (!c) throw new Error(m || 'assert'); };
+    async function check(name, fn) {
+      try { await fn(); results.push({ name, ok: true }); }
+      catch (e) { results.push({ name, ok: false, detail: String(e && e.message || e) }); }
+    }
+
+    // A real-Pyodide verifier runtime: runCommand runs Python and reports an exit
+    // code the way a shell command would — SystemExit(code) → that code, any other
+    // exception → 1, clean return → 0. A fresh interpreter per instance is the wall.
+    async function loadPyodideModule() {
+      const { loadPyodide } = await import(PY + 'pyodide.mjs');
+      return loadPyodide;
+    }
+    function makePyodideVerifierRuntime(loadPyodide) {
+      return async () => {
+        const py = await loadPyodide({ indexURL: PY });   // FRESH interpreter
+        return {
+          mountReadOnly(mount) {
+            // Expose the run tree as an in-memory dict the command can read.
+            py.globals.set('RUN_TREE', py.toPy(mount || {}));
+          },
+          async runCommand(command) {
+            const wrapped =
+              'import sys, io, traceback\n' +
+              '_o, _e = io.StringIO(), io.StringIO()\n' +
+              '_so, _se = sys.stdout, sys.stderr\n' +
+              'sys.stdout, sys.stderr = _o, _e\n' +
+              '_exit = 0\n' +
+              'try:\n' +
+              '    exec(compile(_CMD, "<verify>", "exec"), {"RUN_TREE": RUN_TREE.to_py() if hasattr(RUN_TREE,"to_py") else dict(RUN_TREE)})\n' +
+              'except SystemExit as _x:\n' +
+              '    _exit = int(_x.code) if isinstance(_x.code, int) else (0 if _x.code is None else 1)\n' +
+              'except BaseException:\n' +
+              '    traceback.print_exc(file=_e); _exit = 1\n' +
+              'finally:\n' +
+              '    sys.stdout, sys.stderr = _so, _se\n';
+            py.globals.set('_CMD', command);
+            await py.runPythonAsync(wrapped);
+            return {
+              exit: py.globals.get('_exit'),
+              stdout: py.globals.get('_o').getvalue(),
+              stderr: py.globals.get('_e').getvalue(),
+            };
+          },
+          dispose() { try { py.destroy && py.destroy(); } catch (_) {} },
+        };
+      };
+    }
+
+    try {
+      assert(self.crossOriginIsolated, 'crossOriginIsolated must be true — serve with COOP/COEP');
+      const { createVerifier } = await import('/sys/kiln/verifier.mjs');
+      const loadPyodide = await loadPyodideModule();
+      out.textContent = 'Pyodide loading…';
+      const freshRuntime = makePyodideVerifierRuntime(loadPyodide);
+
+      // The operator's verification: a real test-runner-style check that exits
+      // non-zero when the suite failed — via sys.exit, the EXACT machinery the
+      // adversarial poison below patches. One command; the mount drives red/green.
+      const VERIFY_CMD = 'import sys\nsys.exit(0 if "PASS" in RUN_TREE.get("result.txt", "") else 1)';
+
+      await check('golden: failing run → exit 1, passing run → exit 0', async () => {
+        const red = createVerifier({ loadRuntime: freshRuntime, verificationCommand: VERIFY_CMD, mount: { 'result.txt': 'FAIL' } });
+        eq((await red.verify()).exit, 1, 'red');
+        const green = createVerifier({ loadRuntime: freshRuntime, verificationCommand: VERIFY_CMD, mount: { 'result.txt': 'PASS' } });
+        eq((await green.verify()).exit, 0, 'green');
+      });
+
+      await check('adversarial: a poisoned agent interpreter cannot launder the verdict', async () => {
+        // The agent poisons its OWN interpreter, patching the SAME machinery the
+        // verification uses: sys.exit becomes a no-op. In that interpreter the
+        // failing suite's sys.exit(1) is swallowed → it "passes".
+        const agent = await freshRuntime();
+        agent.mountReadOnly({ 'result.txt': 'FAIL' });
+        await agent.runCommand('import sys\nsys.exit = lambda *a, **k: None');   // monkey-patch the check's machinery
+        const laundered = await agent.runCommand(VERIFY_CMD);                    // the real failing check, swallowed
+        eq(laundered.exit, 0, 'the poisoned interpreter reports the failing suite as a pass (attack is real)');
+        agent.dispose();
+
+        // The verifier runs the SAME command in a FRESH interpreter where sys.exit
+        // is pristine → the failure is reported truthfully.
+        const verifier = createVerifier({ loadRuntime: freshRuntime, verificationCommand: VERIFY_CMD, mount: { 'result.txt': 'FAIL' } });
+        const verdict = await verifier.verify({ runId: 'adv' });
+        eq(verdict.exit, 1, 'verifier is NOT fooled — truthful non-zero');
+      });
+
+      const passed = results.filter(r => r.ok).length;
+      const failed = results.length - passed;
+      out.textContent = `Kiln K3 real-Pyodide verifier: ${passed}/${results.length} passed` + (failed ? ` — ${failed} FAILED` : '');
+      for (const r of results) out.textContent += '\n' + (r.ok ? '  PASS ' : '  FAIL ') + r.name + (r.detail ? '\n      ' + r.detail : '');
+      window.__k3results = { passed, failed, total: results.length, results };
+      document.title = failed ? `FAIL ${failed}/${results.length}` : `PASS ${passed}/${results.length}`;
+    } catch (e) {
+      out.textContent = 'HARNESS ERROR: ' + (e && e.stack || e);
+      window.__k3results = { error: String(e && e.message || e) };
+      document.title = 'HARNESS ERROR';
+    }
+  </script>
+</body>
+</html>
