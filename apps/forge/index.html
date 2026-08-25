@@ -96,7 +96,8 @@
     import { createShell } from '../../sys/rig/cli/shell.mjs';
     import { createLineEditor } from '../../sys/rig/cli/lineeditor.mjs';
     import { createCompleter } from '../../sys/rig/cli/completer.mjs';
-    import { runAgentLoop, shellTool, makeShellExecutor } from '../../sys/ai/agent-loop.mjs';
+    import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
+    import { codingToolset, makeToolExecutor } from '../../sys/ai/agent-tools.mjs';
 
     const nak = window.naklios || null;
     const ACCENT = '\x1b[38;2;217;138;40m';
@@ -177,16 +178,30 @@
     async function inferViaHost({ messages, tools }) {
       const nakAI = window.naklios && window.naklios.ai;
       if (!nakAI) throw new Error('Agent needs the NakliOS host — open Forge inside NakliOS.');
-      const completion = await nakAI.chat.completions.create({
-        agent: true, messages, tools, tool_choice: 'auto', stream: false,
-      });
-      const choice = completion && completion.choices && completion.choices[0];
-      const msg = (choice && choice.message) || {};
-      return {
-        content: typeof msg.content === 'string' ? msg.content : '',
-        toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
-        finishReason: (choice && choice.finish_reason) || 'stop',
-      };
+      // Retry transient upstream hiccups (a real run hit a one-off 405 from the
+      // provider mid-loop). Config/auth errors (400/401/403) are not retried.
+      let lastErr;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const completion = await nakAI.chat.completions.create({
+            agent: true, messages, tools, tool_choice: 'auto', stream: false,
+          });
+          const choice = completion && completion.choices && completion.choices[0];
+          const msg = (choice && choice.message) || {};
+          return {
+            content: typeof msg.content === 'string' ? msg.content : '',
+            toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+            finishReason: (choice && choice.finish_reason) || 'stop',
+          };
+        } catch (e) {
+          lastErr = e;
+          const m = String((e && e.message) || e);
+          const transient = /\b(405|408|409|425|429|5\d\d)\b/.test(m) || /timeout|network|temporarily|fetch/i.test(m);
+          if (transient && attempt < 2) { await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); continue; }
+          throw e;
+        }
+      }
+      throw lastErr;
     }
 
     // `agent "<task>"` — a tool-using coding agent over this workspace. The model
@@ -200,17 +215,23 @@
       const result = await runAgentLoop({
         messages: [
           { role: 'system', content:
-            'You are a coding agent working in a bash-style shell over the user\'s files. ' +
-            'Use the shell tool to inspect and change files, run git, and verify your work. ' +
+            'You are a coding agent working over the user\'s files. You have tools: ' +
+            'read (line-numbered), write (whole file), edit (surgical old_string→new_string), ' +
+            'apply_patch (add/update/delete files), and shell (bash-style: ls, cat, grep, sed, git, pipes). ' +
+            'Prefer edit/apply_patch for changing existing files and write for new ones; use shell to explore, run git, and verify. ' +
             'Work in small, verifiable steps; when the task is complete, give a one-line summary.' },
           { role: 'user', content: task },
         ],
-        tools: [shellTool()],
+        tools: codingToolset(),
         infer: inferViaHost,
-        executeTool: makeShellExecutor(shell),
+        executeTool: makeToolExecutor({ shell, face }),
         maxSteps: 24,
         onEvent: (e) => {
-          if (e.type === 'tool-call') term.write(`${DIM}→ ${(e.args && e.args.command) || e.name}${RESET}\r\n`);
+          if (e.type === 'tool-call') {
+            const a = e.args || {};
+            const detail = a.command || a.path || a.old_string || (a.patch ? 'patch' : '') || e.name;
+            term.write(`${DIM}→ ${e.name === 'shell' ? '' : e.name + ' '}${String(detail).split('\n')[0].slice(0, 100)}${RESET}\r\n`);
+          }
           else if (e.type === 'tool-result') { const s = toCRLF(e.result); if (s) term.write(`${s}\r\n`); }
           else if (e.type === 'tool-error') term.write(`${RED}${e.error}${RESET}\r\n`);
           else if (e.type === 'assistant' && e.content) term.write(`${toCRLF(e.content)}\r\n`);
