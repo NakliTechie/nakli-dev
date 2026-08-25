@@ -368,6 +368,116 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       if (rp) { const re = new RegExp(rp[1]); return { text: lines.filter((l) => re.test(l)).join('\n'), code: 0 }; }
       return { text: `sed: unsupported script: ${script}`, code: 1 };
     },
+    // rg — recursive content search (ripgrep-flavoured), the tool coding agents
+    // reach for by default. `rg PATTERN [dir]`; -i ignore-case, -l files-only,
+    // -n line numbers (on by default when printing matches).
+    async rg(argv) {
+      const flags = argv.filter((a) => a.startsWith('-'));
+      const rest = argv.filter((a) => !a.startsWith('-'));
+      const pattern = rest[0] || '';
+      const base = rest[1] ? normalizePath(state.cwd, rest[1]) : state.cwd;
+      const filesOnly = flags.some((f) => f.includes('l'));
+      const re = new RegExp(pattern, flags.some((f) => f.includes('i')) ? 'i' : '');
+      const g = await face.invoke('fs.glob', { pattern: (base ? base + '/' : '') + '**', cwd: '' });
+      if (!g.ok) return { text: `rg: ${g.message || 'search failed'}`, code: 1 };
+      const prefix = state.cwd ? state.cwd + '/' : '';
+      const rel = (p) => (p.startsWith(prefix) ? p.slice(prefix.length) : p);
+      const out = [];
+      for (const path of g.matches) {
+        const r = await face.invoke('fs.read', { path, encoding: 'utf-8' });
+        if (!r.ok) continue;
+        const text = decodeData(r.data);
+        if (typeof text !== 'string' || text.startsWith('<')) continue;
+        const hits = linesOf(text).map((l, i) => ({ l, i })).filter(({ l }) => re.test(l));
+        if (!hits.length) continue;
+        if (filesOnly) { out.push(rel(path)); continue; }
+        for (const { l, i } of hits) out.push(`${rel(path)}:${i + 1}:${l}`);
+      }
+      return { text: out.join('\n'), code: out.length ? 0 : 1 };
+    },
+    // awk — the common one-liner subset: `awk [-F sep] '{print $N}'` / `'{print}'`.
+    awk(argv, stdin) {
+      let sep = null; const parts = [];
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '-F') { sep = argv[++i]; }
+        else if (argv[i].startsWith('-F')) { sep = argv[i].slice(2); }
+        else parts.push(argv[i]);
+      }
+      const prog = parts.join(' ');
+      const m = /\{\s*print\s*(.*?)\s*\}/.exec(prog);
+      const fields = (line) => (sep ? line.split(sep) : line.split(/\s+/).filter(Boolean));
+      const spec = m ? m[1].trim() : '$0';
+      const render = (line) => {
+        if (spec === '' || spec === '$0') return line;
+        return spec.split(/\s*,\s*/).map((tok) => {
+          const fm = /^\$(\d+)$/.exec(tok);
+          if (fm) { const n = Number(fm[1]); return n === 0 ? line : (fields(line)[n - 1] ?? ''); }
+          return tok.replace(/^["']|["']$/g, '');
+        }).join(' ');
+      };
+      return { text: linesOf(stdin || '').map(render).join('\n'), code: 0 };
+    },
+    // diff — line-level unified-ish diff of two files (enough for the agent to see
+    // what changed / confirm an edit).
+    async diff(argv) {
+      const files = argv.filter((a) => !a.startsWith('-'));
+      if (files.length < 2) return { text: 'usage: diff <a> <b>', code: 2 };
+      const a = await face.invoke('fs.read', { path: normalizePath(state.cwd, files[0]), encoding: 'utf-8' });
+      const b = await face.invoke('fs.read', { path: normalizePath(state.cwd, files[1]), encoding: 'utf-8' });
+      if (!a.ok) return { text: `diff: ${files[0]}: not found`, code: 2 };
+      if (!b.ok) return { text: `diff: ${files[1]}: not found`, code: 2 };
+      const la = linesOf(decodeData(a.data)); const lb = linesOf(decodeData(b.data));
+      const out = []; const n = Math.max(la.length, lb.length);
+      for (let i = 0; i < n; i++) {
+        if (la[i] === lb[i]) continue;
+        if (la[i] !== undefined) out.push(`- ${la[i]}`);
+        if (lb[i] !== undefined) out.push(`+ ${lb[i]}`);
+      }
+      return { text: out.join('\n'), code: out.length ? 1 : 0 };
+    },
+    // xargs — take stdin tokens and append them to a command, then run it.
+    async xargs(argv, stdin) {
+      const tokens = String(stdin || '').split(/\s+/).filter(Boolean);
+      if (!argv.length) return { text: tokens.join(' '), code: 0 };
+      return runStage([...argv, ...tokens], '');
+    },
+    // tee — write stdin to a file and also pass it through.
+    async tee(argv, stdin) {
+      const path = normalizePath(state.cwd, argv.find((a) => !a.startsWith('-')) || '');
+      if (path) await face.invoke('fs.write', { path, data: withTrailingNewline(stdin || ''), createParents: true });
+      return { text: stdin || '', code: 0 };
+    },
+    cut(argv, stdin) {
+      let delim = '\t'; let fieldSpec = '1';
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i].startsWith('-d')) delim = argv[i].length > 2 ? argv[i].slice(2) : argv[++i];
+        else if (argv[i].startsWith('-f')) fieldSpec = argv[i].length > 2 ? argv[i].slice(2) : argv[++i];
+      }
+      const idxs = fieldSpec.split(',').map((n) => Number(n) - 1);
+      const out = linesOf(stdin || '').map((l) => { const f = l.split(delim); return idxs.map((i) => f[i] ?? '').join(delim); });
+      return { text: out.join('\n'), code: 0 };
+    },
+    tr(argv, stdin) {
+      const opts = argv.filter((a) => a.startsWith('-'));
+      const sets = argv.filter((a) => !a.startsWith('-'));
+      let text = String(stdin || '');
+      if (opts.some((o) => o.includes('d'))) { const del = new Set(sets[0] || ''); text = [...text].filter((c) => !del.has(c)).join(''); }
+      else if (sets.length >= 2) { const from = sets[0]; const to = sets[1]; text = [...text].map((c) => { const i = from.indexOf(c); return i >= 0 ? (to[i] ?? to[to.length - 1]) : c; }).join(''); }
+      return { text, code: 0 };
+    },
+    basename(argv) {
+      let b = String(argv[0] || '').replace(/\/+$/, '').split('/').pop() || '/';
+      if (argv[1] && b.endsWith(argv[1])) b = b.slice(0, -argv[1].length);
+      return { text: b, code: 0 };
+    },
+    dirname(argv) {
+      const p = String(argv[0] || '').replace(/\/+$/, '');
+      const i = p.lastIndexOf('/');
+      return { text: i > 0 ? p.slice(0, i) : (i === 0 ? '/' : '.'), code: 0 };
+    },
+    // chmod — accepted for script compatibility; the virtual fs has no POSIX
+    // permission bits, so it is a successful no-op (documented).
+    chmod() { return { text: '', code: 0 }; },
     env() {
       const lines = [...state.vars.entries()].sort().map(([k, v]) => `${k}=${v}`);
       lines.push(`PWD=/${state.cwd}`);
@@ -382,8 +492,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     },
     unset(args) { for (const a of args) state.vars.delete(a); return { text: '', code: 0 }; },
     help() {
-      const cmds = ['cd', 'pwd', 'ls', 'cat', 'echo', 'printf', 'grep', 'sed', 'find', 'head', 'tail',
-        'wc', 'sort', 'uniq', 'test', '[', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python',
+      const cmds = ['cd', 'pwd', 'ls', 'cat', 'echo', 'printf', 'grep', 'rg', 'sed', 'awk', 'diff',
+        'find', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'xargs', 'basename', 'dirname',
+        'test', '[', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'chmod', 'stat', 'git', 'python',
         'env', 'export', 'unset', 'clear', 'history', 'which'];
       return { text: 'commands: ' + cmds.join(' ') + '\noperators: | && || ; > >>\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD', code: 0 };
     },

@@ -257,6 +257,36 @@ await test('sed: s/// substitution and -n print', async () => {
   eq(await run(shell, 'cat multi.txt | sed -n /two/p'), 'two', '-n /re/p prints matches');
 });
 
+await test('rg: recursive content search with -l and line output', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'mkdir -p src');
+  await run(shell, "printf 'import os\\nprint(os)\\n' > src/a.py");
+  await run(shell, "printf 'x=1\\nimport sys\\n' > src/b.py");
+  eq(await run(shell, 'rg import src'), 'src/a.py:1:import os\nsrc/b.py:2:import sys', 'path:line:text');
+  eq(await run(shell, 'rg -l import src'), 'src/a.py\nsrc/b.py', 'files-with-matches');
+});
+
+await test('awk: field print with default and -F separators', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, "echo 'a b c' | awk '{print $2}'"), 'b', 'whitespace field');
+  eq(await run(shell, "printf 'root:0\\ndaemon:1\\n' | awk -F: '{print $1}'"), 'root\ndaemon', '-F: attached');
+});
+
+await test('cut, tr, tee, xargs, basename, dirname, diff', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, "echo 'a:b:c' | cut -d: -f2"), 'b', 'cut -d -f');
+  eq(await run(shell, 'echo hello | tr l L'), 'heLLo', 'tr translate');
+  eq(await run(shell, "echo 'a b' | tr -d ' '"), 'ab', 'tr -d delete');
+  eq(await run(shell, 'basename /a/b/c.txt .txt'), 'c', 'basename with suffix');
+  eq(await run(shell, 'dirname /a/b/c.txt'), '/a/b', 'dirname');
+  eq(await run(shell, 'echo hi | tee out.txt'), 'hi', 'tee passthrough');
+  eq(await run(shell, 'cat out.txt'), 'hi', 'tee wrote the file');
+  eq(await run(shell, "echo 'x y' | xargs echo args:"), 'args: x y', 'xargs appends stdin');
+  await run(shell, "printf 'l1\\nl2\\n' > a.txt");
+  await run(shell, "printf 'l1\\nX\\n' > b.txt");
+  eq(await run(shell, 'diff a.txt b.txt'), '- l2\n+ X', 'diff line change');
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
