@@ -70,79 +70,210 @@ export function codingToolset() {
   return [readTool(), editTool(), writeTool(), applyPatchTool(), shellTool()];
 }
 
-// ── the edit replacer chain (pure) ──────────────────────────────────────
+// ── the edit replacer chain (pure) — OpenCode's 9 strategies ─────────────
+// Each strategy is a generator that yields candidate SUBSTRINGS of `content`.
+// The driver locates a candidate with indexOf, enforces GLOBAL uniqueness
+// (indexOf === lastIndexOf) so a fuzzy strategy can never silently pick the
+// wrong one of two matches, guards against a disproportionately large match, and
+// applies the first unique candidate. Order matters: exact first, fuzziest last.
 // Returns { ok, content, count, strategy } or { ok:false, error }.
 export function applyEdit(content, oldStr, newStr, replaceAll = false) {
   if (typeof oldStr !== 'string' || oldStr === '') return { ok: false, error: 'old_string must be a non-empty string' };
   if (oldStr === newStr) return { ok: false, error: 'old_string and new_string are identical' };
 
-  // 1. exact match (+ uniqueness gate)
-  if (content.includes(oldStr)) {
-    const count = content.split(oldStr).length - 1;
-    if (count > 1 && !replaceAll) {
-      return { ok: false, error: `old_string is not unique (${count} matches); add surrounding context or set replace_all` };
+  const strategies = [
+    ['exact', repSimple], ['line-trimmed', repLineTrimmed], ['block-anchor', repBlockAnchor],
+    ['whitespace-normalized', repWhitespaceNormalized], ['indentation-flexible', repIndentationFlexible],
+    ['escape-normalized', repEscapeNormalized], ['trimmed-boundary', repTrimmedBoundary],
+    ['context-aware', repContextAware], ['multi-occurrence', repMultiOccurrence],
+  ];
+  let anyFound = false;
+  for (const [name, strat] of strategies) {
+    for (const cand of strat(content, oldStr)) {
+      if (typeof cand !== 'string' || cand === '') continue;
+      const index = content.indexOf(cand);
+      if (index === -1) continue;
+      anyFound = true;
+      if (disproportionate(cand, oldStr)) {
+        return { ok: false, error: 'The matched region is disproportionately larger than old_string — re-read the file and provide the exact text to replace.' };
+      }
+      if (replaceAll) {
+        const count = content.split(cand).length - 1;
+        return { ok: true, content: content.split(cand).join(newStr), count, strategy: name };
+      }
+      if (index !== content.lastIndexOf(cand)) continue; // ambiguous → try the next candidate
+      return { ok: true, content: content.slice(0, index) + newStr + content.slice(index + cand.length), count: 1, strategy: name };
     }
-    const out = replaceAll ? content.split(oldStr).join(newStr) : content.replace(oldStr, newStr);
-    return { ok: true, content: out, count: replaceAll ? count : 1, strategy: 'exact' };
   }
-  if (replaceAll) return { ok: false, error: 'old_string not found' };
-
-  // 2. line-trimmed: match a run of lines whose trimmed text equals oldStr's.
-  const lt = matchLineTrimmed(content, oldStr);
-  if (lt) return { ok: true, content: content.slice(0, lt.start) + newStr + content.slice(lt.end), count: 1, strategy: 'line-trimmed' };
-
-  // 3. block-anchor: first and last non-blank lines of oldStr anchor the region.
-  const ba = matchBlockAnchor(content, oldStr);
-  if (ba) return { ok: true, content: content.slice(0, ba.start) + newStr + content.slice(ba.end), count: 1, strategy: 'block-anchor' };
-
-  return { ok: false, error: 'old_string not found (tried exact, line-trimmed, and block-anchor matching)' };
+  // Instructive errors — the model self-corrects off these exact strings.
+  if (anyFound) return { ok: false, error: 'Found multiple matches for old_string. Provide more surrounding context to make the match unique.' };
+  return { ok: false, error: 'Could not find old_string in the file. It must match exactly, including whitespace, indentation, and line endings.' };
 }
 
-// Character offsets in `content` for the first window of lines matching oldStr's
-// lines after trimming each. Returns { start, end } or null.
-function matchLineTrimmed(content, oldStr) {
-  const cLines = content.split('\n');
-  const oLines = oldStr.split('\n');
-  // Drop a trailing empty oLine (oldStr often ends with \n).
-  if (oLines.length && oLines[oLines.length - 1] === '') oLines.pop();
-  if (!oLines.length) return null;
-  const oTrim = oLines.map((l) => l.trim());
-  for (let i = 0; i + oTrim.length <= cLines.length; i++) {
+// Refuse a match that ballooned relative to old_string (a fuzzy strategy latching
+// onto far too much) — tell the model to re-read and supply the exact text.
+function disproportionate(search, old) {
+  const sl = search.split('\n').length, ol = old.split('\n').length;
+  if (sl >= Math.max(ol + 3, ol * 2)) return true;
+  if (ol > 1 && search.trim().length > Math.max(old.trim().length + 500, old.trim().length * 4)) return true;
+  return false;
+}
+
+// find's lines with a trailing blank line dropped (old_string often ends with \n).
+function findLines(find) {
+  const fl = find.split('\n');
+  if (fl.length && fl[fl.length - 1] === '') fl.pop();
+  return fl;
+}
+// The exact substring of `content` spanning content-lines [i, i+n).
+function lineSpan(content, cl, i, n) {
+  let start = 0; for (let k = 0; k < i; k++) start += cl[k].length + 1;
+  let end = start; for (let k = 0; k < n; k++) end += cl[i + k].length + (k < n - 1 ? 1 : 0);
+  return content.slice(start, end);
+}
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+const similarity = (a, b) => { const m = Math.max(a.length, b.length); return m === 0 ? 1 : 1 - levenshtein(a, b) / m; };
+
+// 1. exact
+function* repSimple(content, find) { yield find; }
+
+// 2. line-trimmed — each line equal after trimming both sides.
+function* repLineTrimmed(content, find) {
+  const cl = content.split('\n');
+  const fl = findLines(find);
+  if (!fl.length) return;
+  const ft = fl.map((l) => l.trim());
+  for (let i = 0; i + ft.length <= cl.length; i++) {
     let hit = true;
-    for (let j = 0; j < oTrim.length; j++) {
-      if (cLines[i + j].trim() !== oTrim[j]) { hit = false; break; }
-    }
-    if (!hit) continue;
-    const start = offsetOfLine(cLines, i);
-    const end = offsetOfLine(cLines, i + oTrim.length) - (i + oTrim.length <= cLines.length ? 1 : 0);
-    // end points just past the last matched line's newline; trim the extra \n.
-    return { start, end: Math.min(end + 1, content.length) };
+    for (let j = 0; j < ft.length; j++) if (cl[i + j].trim() !== ft[j]) { hit = false; break; }
+    if (hit) yield lineSpan(content, cl, i, ft.length);
   }
-  return null;
 }
 
-function matchBlockAnchor(content, oldStr) {
-  const oLines = oldStr.split('\n').filter((l) => l.trim() !== '');
-  if (oLines.length < 2) return null; // need distinct first/last anchors
-  const first = oLines[0].trim();
-  const last = oLines[oLines.length - 1].trim();
-  const cLines = content.split('\n');
-  let startLine = -1;
-  for (let i = 0; i < cLines.length; i++) { if (cLines[i].trim() === first) { startLine = i; break; } }
-  if (startLine < 0) return null;
-  let endLine = -1;
-  for (let i = startLine + 1; i < cLines.length; i++) { if (cLines[i].trim() === last) { endLine = i; break; } }
-  if (endLine < 0) return null;
-  const start = offsetOfLine(cLines, startLine);
-  const end = Math.min(offsetOfLine(cLines, endLine + 1), content.length);
-  return { start, end };
+// 3. block-anchor — first + last trimmed lines anchor; middle validated by
+// averaged per-line Levenshtein similarity ≥ 0.65; size within 25%.
+function* repBlockAnchor(content, find) {
+  const cl = content.split('\n');
+  const fl = findLines(find);
+  if (fl.length < 3) return;
+  const first = fl[0].trim(), last = fl[fl.length - 1].trim();
+  const searchSize = fl.length;
+  for (let i = 0; i < cl.length; i++) {
+    if (cl[i].trim() !== first) continue;
+    for (let j = i + 2; j < cl.length; j++) {
+      if (cl[j].trim() !== last) continue;
+      const actualSize = j - i + 1;
+      if (Math.abs(actualSize - searchSize) > Math.max(1, Math.floor(searchSize * 0.25))) continue;
+      let total = 0, cnt = 0;
+      const mid = Math.min(searchSize, actualSize) - 2;
+      for (let k = 1; k <= mid; k++) {
+        const a = (fl[k] || '').trim(), b = (cl[i + k] || '').trim();
+        if (a === '' && b === '') continue;
+        total += similarity(a, b); cnt++;
+      }
+      const avg = cnt === 0 ? 1 : total / cnt;
+      if (avg >= 0.65) { yield lineSpan(content, cl, i, actualSize); break; }
+    }
+  }
 }
 
-// Char offset where line index `i` begins (i === lines.length → content length + 1).
-function offsetOfLine(lines, i) {
-  let off = 0;
-  for (let k = 0; k < i && k < lines.length; k++) off += lines[k].length + 1; // +1 for \n
-  return off;
+// 4. whitespace-normalized — collapse runs of whitespace.
+function* repWhitespaceNormalized(content, find) {
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const nf = norm(find);
+  const cl = content.split('\n');
+  for (const line of cl) if (line.trim() !== '' && norm(line) === nf) yield line;
+  if (find.trim()) {
+    try {
+      const re = new RegExp(find.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'));
+      const m = re.exec(content); if (m) yield m[0];
+    } catch (_) {}
+  }
+  const fl = findLines(find);
+  if (fl.length > 1) {
+    for (let i = 0; i + fl.length <= cl.length; i++) {
+      if (norm(cl.slice(i, i + fl.length).join('\n')) === nf) yield lineSpan(content, cl, i, fl.length);
+    }
+  }
+}
+
+// 5. indentation-flexible — strip the common minimum indent from both sides.
+function* repIndentationFlexible(content, find) {
+  const strip = (text) => {
+    const lines = text.split('\n');
+    const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)[0].length);
+    const min = indents.length ? Math.min(...indents) : 0;
+    return lines.map((l) => l.slice(min)).join('\n');
+  };
+  const fl = findLines(find);
+  if (!fl.length) return;
+  const sf = strip(fl.join('\n'));
+  const cl = content.split('\n');
+  for (let i = 0; i + fl.length <= cl.length; i++) {
+    if (strip(cl.slice(i, i + fl.length).join('\n')) === sf) yield lineSpan(content, cl, i, fl.length);
+  }
+}
+
+// 6. escape-normalized — unescape \n \t \r \' \" \` \\ \$ on both sides.
+function* repEscapeNormalized(content, find) {
+  const map = { n: '\n', t: '\t', r: '\r', "'": "'", '"': '"', '`': '`', '\\': '\\', '$': '$' };
+  const unesc = (s) => s.replace(/\\(n|t|r|'|"|`|\\|\$)/g, (_, c) => map[c]).replace(/\\\n/g, '\n');
+  const uf = unesc(find);
+  if (content.includes(uf)) { yield uf; return; }
+  const cl = content.split('\n');
+  const fl = findLines(find);
+  for (let i = 0; i + fl.length <= cl.length; i++) {
+    if (unesc(cl.slice(i, i + fl.length).join('\n')) === unesc(fl.join('\n'))) yield lineSpan(content, cl, i, fl.length);
+  }
+}
+
+// 7. trimmed-boundary — only when find has boundary whitespace.
+function* repTrimmedBoundary(content, find) {
+  if (find.trim() === find) return;
+  const tf = find.trim();
+  if (content.includes(tf)) yield tf;
+  const cl = content.split('\n');
+  const fl = findLines(find);
+  for (let i = 0; i + fl.length <= cl.length; i++) {
+    if (cl.slice(i, i + fl.length).join('\n').trim() === tf) yield lineSpan(content, cl, i, fl.length);
+  }
+}
+
+// 8. context-aware — exact first/last, ≥50% of middle lines equal (trimmed).
+function* repContextAware(content, find) {
+  const cl = content.split('\n');
+  const fl = findLines(find);
+  if (fl.length < 3) return;
+  const first = fl[0].trim(), last = fl[fl.length - 1].trim();
+  for (let i = 0; i + fl.length <= cl.length; i++) {
+    if (cl[i].trim() !== first || cl[i + fl.length - 1].trim() !== last) continue;
+    let match = 0, total = 0;
+    for (let k = 1; k < fl.length - 1; k++) {
+      const a = fl[k].trim(), b = cl[i + k].trim();
+      if (a === '' && b === '') continue;
+      total++; if (a === b) match++;
+    }
+    if (total === 0 || match / total >= 0.5) { yield lineSpan(content, cl, i, fl.length); return; }
+  }
+}
+
+// 9. multi-occurrence — yield find per exact occurrence (powers replace_all).
+function* repMultiOccurrence(content, find) {
+  let idx = content.indexOf(find);
+  while (idx !== -1) { yield find; idx = content.indexOf(find, idx + find.length); }
 }
 
 // ── apply_patch parser (Add / Update / Delete) ──────────────────────────
@@ -193,6 +324,11 @@ export function makeToolExecutor({ shell, face }) {
   if (!face) throw new Error('makeToolExecutor requires a Rig agent face');
   const runShell = makeShellExecutor(shell);
   const cwd = () => (shell && typeof shell.cwd === 'string' ? shell.cwd : '');
+  // Read-before-edit ledger (Claude Code): a file must be read (read tool, a
+  // single-file cat, or just written) before `edit` will touch it — this stops
+  // the model editing content it never saw. Paths are store-relative (resolved).
+  const readLedger = new Set();
+  const noteRead = (p) => { if (p) readLedger.add(p); };
 
   function resolve(path) {
     const raw = String(path == null ? '' : path);
@@ -219,20 +355,26 @@ export function makeToolExecutor({ shell, face }) {
   return async function executeTool(name, args) {
     try {
       if (name === 'shell') {
+        const command = String(args?.command || '');
         const out = await runShell(name, args);
         // YOLO: the agent auto-confirms a staged destructive op (rm, git commit)
         // rather than stalling on a [y/N] it can't answer. Git history + the
         // verifier are the safety net.
+        let result = out;
         if (shell && shell.awaitingConfirm) {
           const confirmed = await runShell('shell', { command: 'y' });
-          return (out ? out + '\n' : '') + confirmed;
+          result = (out ? out + '\n' : '') + confirmed;
         }
-        return out;
+        // A plain single-file display satisfies the read-before-edit ledger.
+        const m = /^\s*(?:cat|less|more|head|tail)\s+(\S+)\s*$/.exec(command);
+        if (m && !/[|>]/.test(command)) noteRead(resolve(m[1]));
+        return result;
       }
 
       if (name === 'read') {
         const r = await readFile(args?.path);
         if (!r.ok) return `Error reading ${args?.path}: ${r.error}`;
+        noteRead(resolve(args?.path));
         let lines = r.data.split('\n');
         const offset = Number.isInteger(args?.offset) ? Math.max(1, args.offset) : 1;
         const limit = Number.isInteger(args?.limit) ? args.limit : READ_MAX_LINES;
@@ -245,15 +387,21 @@ export function makeToolExecutor({ shell, face }) {
 
       if (name === 'write') {
         const r = await writeFile(args?.path, args?.content);
+        if (r.ok) noteRead(resolve(args?.path)); // writing establishes known state
         return r.ok ? `Wrote ${resolve(args?.path)} (${String(args?.content ?? '').length} bytes)` : `Error writing ${args?.path}: ${r.error}`;
       }
 
       if (name === 'edit') {
+        const p = resolve(args?.path);
         const r = await readFile(args?.path);
         if (!r.ok) return `Error: cannot edit ${args?.path}: ${r.error}`;
+        if (!readLedger.has(p)) {
+          return `${args?.path} has not been read yet. Use the read tool on it first, then edit — this prevents editing content you have not seen.`;
+        }
         const ed = applyEdit(r.data, args?.old_string, args?.new_string, args?.replace_all === true);
         if (!ed.ok) return `Error editing ${args?.path}: ${ed.error}`;
         const w = await writeFile(args?.path, ed.content);
+        if (w.ok) noteRead(p); // the new state is now known
         return w.ok ? `Edited ${resolve(args?.path)} (${ed.count} replacement${ed.count === 1 ? '' : 's'}, ${ed.strategy} match)` : `Error writing ${args?.path}: ${w.error}`;
       }
 

@@ -33,7 +33,7 @@ await test('applyEdit: exact match', () => {
 await test('applyEdit: uniqueness gate (non-unique needs replace_all)', () => {
   const c = 'a\na\n';
   const r = applyEdit(c, 'a', 'b');
-  assert(!r.ok && /not unique/.test(r.error), 'blocked non-unique');
+  assert(!r.ok && /multiple matches/i.test(r.error), 'blocked non-unique (instructive error)');
   const r2 = applyEdit(c, 'a', 'b', true);
   assert(r2.ok && r2.count === 2 && r2.content === 'b\nb\n', 'replace_all');
 });
@@ -43,14 +43,36 @@ await test('applyEdit: line-trimmed tolerates indentation drift', () => {
   assert(r.ok && r.strategy === 'line-trimmed', `strategy: ${r.strategy} ${r.error || ''}`);
   assert(r.content.includes('return 2;'), 'applied via line-trim');
 });
-await test('applyEdit: block-anchor matches on first/last line', () => {
-  const c = 'start\n  junk the model did not reproduce exactly\nend\n';
-  const r = applyEdit(c, 'start\n  DIFFERENT MIDDLE\nend', 'start\n  new middle\nend');
+await test('applyEdit: block-anchor matches a slightly-off middle (≥0.65)', () => {
+  // Middle differs only slightly (a typo) → similarity above the 0.65 threshold.
+  const c = 'function greet(name) {\n  return "Hello, " + naem;\n}\n';
+  const r = applyEdit(c, 'function greet(name) {\n  return "Hello, " + name;\n}', 'function greet(name) {\n  return `Hi, ${name}`;\n}');
   assert(r.ok && r.strategy === 'block-anchor', `strategy: ${r.strategy} ${r.error || ''}`);
-  assert(r.content.includes('new middle'), 'applied via anchor');
+  assert(r.content.includes('Hi, '), 'applied via anchor');
+});
+await test('applyEdit: block-anchor REFUSES a too-different middle', () => {
+  const c = 'start\n  junk the model did not reproduce at all here\nend\n';
+  const r = applyEdit(c, 'start\n  COMPLETELY DIFFERENT\nend', 'start\n  x\nend');
+  assert(!r.ok, 'a dissimilar middle is not a safe anchor match');
+});
+await test('applyEdit: whitespace-normalized and indentation-flexible', () => {
+  const ws = applyEdit('const   x    =  1;\n', 'const x = 1;', 'const x = 2;');
+  assert(ws.ok && ws.strategy === 'whitespace-normalized', `ws: ${ws.strategy} ${ws.error || ''}`);
+  const ind = applyEdit('    if (a) {\n        go();\n    }\n', 'if (a) {\n  go();\n}', 'if (a) {\n  stop();\n}');
+  assert(ind.ok && /indentation-flexible|line-trimmed/.test(ind.strategy), `ind: ${ind.strategy} ${ind.error || ''}`);
+  assert(ind.content.includes('stop();'), 'indentation-flexible applied');
+});
+await test('applyEdit: escape-normalized and trimmed-boundary', () => {
+  // File has real newlines; old_string came through double-escaped.
+  const esc = applyEdit('line one\nline two\n', 'line one\\nline two', 'line one\nEDITED');
+  assert(esc.ok && esc.strategy === 'escape-normalized', `esc: ${esc.strategy} ${esc.error || ''}`);
+  // old_string carries stray boundary whitespace the file doesn't have.
+  const tb = applyEdit('const y = 2;\n', '  const y = 2;  ', 'const y = 3;');
+  assert(tb.ok, `trimmed-boundary applied: ${tb.strategy} ${tb.error || ''}`);
 });
 await test('applyEdit: not found and identical', () => {
   assert(!applyEdit('abc', 'xyz', 'q').ok, 'not found');
+  assert(/Could not find/i.test(applyEdit('abc', 'xyz', 'q').error), 'instructive not-found');
   assert(!applyEdit('abc', 'abc', 'abc').ok, 'identical rejected');
   assert(!applyEdit('abc', '', 'q').ok, 'empty old rejected');
 });
@@ -107,7 +129,7 @@ await test('edit reports a non-unique match instead of guessing', async () => {
   const { exec } = fresh();
   await exec('write', { path: 'd.txt', content: 'x\nx\n' });
   const r = await exec('edit', { path: 'd.txt', old_string: 'x', new_string: 'y' });
-  assert(/not unique/.test(r), `blocked: ${r}`);
+  assert(/multiple matches/i.test(r), `blocked: ${r}`);
 });
 await test('apply_patch adds, updates, and deletes files', async () => {
   const { exec, shell } = fresh();
@@ -132,6 +154,18 @@ await test('apply_patch adds, updates, and deletes files', async () => {
   const gone = (await shell.feed('cat old.txt')).output;
   assert(/error|not|ENOENT/i.test(gone), `deleted: ${gone}`);
 });
+await test('read-before-edit ledger: edit refuses an unread file; read or cat unlocks it', async () => {
+  const { exec, shell } = fresh();
+  await shell.feed('printf "const v = 1;\\n" > cfg.js'); // written via the shell, NOT the tools
+  const blocked = await exec('edit', { path: 'cfg.js', old_string: 'const v = 1;', new_string: 'const v = 2;' });
+  assert(/has not been read/.test(blocked), `blocked: ${blocked}`);
+  await exec('read', { path: 'cfg.js' });
+  assert(/Edited/.test(await exec('edit', { path: 'cfg.js', old_string: 'const v = 1;', new_string: 'const v = 2;' })), 'read unlocks edit');
+  await shell.feed('printf "x = 1\\n" > other.txt');
+  await exec('shell', { command: 'cat other.txt' });
+  assert(/Edited/.test(await exec('edit', { path: 'other.txt', old_string: 'x = 1', new_string: 'x = 2' })), 'cat unlocks edit');
+});
+
 await test('YOLO: the shell tool auto-confirms a staged destructive op', async () => {
   const { exec, shell } = fresh();
   await shell.feed('echo x > gone.txt');
