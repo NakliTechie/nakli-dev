@@ -588,8 +588,18 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);
     if (verb === 'python' || verb === 'py') {
-      if (!kiln) return { text: 'python: the Kiln kernel is not available in this build', code: 1 };
-      const r = await kiln.exec('shell', args.join(' '));
+      if (!kiln) return { text: 'python: the Kiln kernel is not available (needs cross-origin isolation — open Forge as a tab)', code: 1 };
+      // Resolve the code to run: `-c "<code>"`, a `<file.py>`, or bare text.
+      let code;
+      const ci = args.indexOf('-c');
+      if (ci >= 0 && args[ci + 1] != null) code = args[ci + 1];
+      else if (args[0] && !args[0].startsWith('-')) {
+        const rd = await face.invoke('fs.read', { path: normalizePath(state.cwd, args[0]), encoding: 'utf-8' });
+        if (!rd.ok) return { text: `python: can't open file '${args[0]}': ${rd.code || 'error'}`, code: 2 };
+        code = decodeData(rd.data);
+      } else code = args.join(' ');
+      const r = await kiln.exec('shell', code);
+      if (r.status === 'unavailable') return { text: 'python: ' + (r.message || 'kernel unavailable'), code: 1 };
       return { text: (r.stdout || '') + (r.stderr || ''), code: r.status === 'ok' ? 0 : 1 };
     }
     if (verb === 'find') { // find <dir> -> glob dir/** ; keep it simple
