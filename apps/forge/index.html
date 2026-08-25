@@ -263,25 +263,35 @@
 
     // `agent "<task>"` — a tool-using coding agent over this workspace. The model
     // drives the same shell you type into; every tool call is echoed live.
-    async function runAgent(task) {
+    async function runAgent(raw) {
+      // Optional leading mode flag: `agent --plan "…"` (read-only planning),
+      // `agent --ask "…"` (read-only Q&A); default is full `code` mode.
+      let mode = 'code';
+      let task = raw.trim();
+      const fm = task.match(/^--(plan|ask|code)\b\s*/);
+      if (fm) { mode = fm[1]; task = task.slice(fm[0].length).trim(); }
+      task = task.replace(/^\s*["']|["']\s*$/g, '');
       if (!task.trim()) {
-        term.write(`${DIM}usage: agent "<task>"  — a tool-using agent over your files (needs a model in Settings → AI)${RESET}\r\n`);
+        term.write(`${DIM}usage: agent [--plan|--ask] "<task>"  — a tool-using agent over your files (needs a model in Settings → AI)${RESET}\r\n`);
         return;
       }
-      term.write(`${ACCENT}◆ agent${RESET} ${DIM}${task}${RESET}\r\n`);
+      term.write(`${ACCENT}◆ agent${mode !== 'code' ? ' (' + mode + ')' : ''}${RESET} ${DIM}${task}${RESET}\r\n`);
+      const modeNote = mode === 'plan' ? ' You are in PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.'
+        : mode === 'ask' ? ' You are in ASK mode: read-only; answer the question, do not modify anything.' : '';
       const result = await runAgentLoop({
         messages: [
           { role: 'system', content:
             'You are a coding agent working over the user\'s files. You have tools: ' +
             'read (line-numbered), write (whole file), edit (surgical old_string→new_string), ' +
-            'apply_patch (add/update/delete files), and shell (bash-style: ls, cat, grep, sed, git, pipes). ' +
-            'Prefer edit/apply_patch for changing existing files and write for new ones; use shell to explore, run git, and verify. ' +
-            'Work in small, verifiable steps; when the task is complete, give a one-line summary.' },
+            'apply_patch (add/update/delete files), todowrite (task checklist), task (delegate to a subagent), ' +
+            'and shell (bash-style: ls, cat, grep, sed, git, pipes). ' +
+            'Read a file before editing it. Prefer edit/apply_patch for changes and write for new files; use shell to explore, run git, and verify. ' +
+            'Work in small, verifiable steps; when the task is complete, give a one-line summary.' + modeNote },
           { role: 'user', content: task },
         ],
-        tools: codingToolset(),
+        tools: codingToolset(mode, { subagents: true }),
         infer: inferViaHost,
-        executeTool: makeToolExecutor({ shell, face }),
+        executeTool: makeToolExecutor({ shell, face, mode, infer: inferViaHost }),
         maxSteps: 24,
         onEvent: (e) => {
           if (e.type === 'tool-call') {
@@ -306,8 +316,9 @@
       // before the shell — the shell core stays free of any AI dependency.
       const agentMatch = line.trim().match(/^agent(?:\s+([\s\S]+))?$/);
       if (agentMatch) {
-        const task = (agentMatch[1] || '').replace(/^\s*["']|["']\s*$/g, '');
-        try { await runAgent(task); }
+        // Pass the raw arg; runAgent parses an optional --plan/--ask flag and
+        // strips surrounding quotes itself.
+        try { await runAgent(agentMatch[1] || ''); }
         catch (e) { term.write(`${RED}agent: ${String(e && e.message || e)}${RESET}\r\n`); }
         syncPrompt(); writePrompt();
         if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
