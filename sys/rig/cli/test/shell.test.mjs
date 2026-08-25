@@ -287,6 +287,28 @@ await test('cut, tr, tee, xargs, basename, dirname, diff', async () => {
   eq(await run(shell, 'diff a.txt b.txt'), '- l2\n+ X', 'diff line change');
 });
 
+await test('python dispatch: -c code, <file>, and the unavailable message', async () => {
+  const backend = new MemoryBackend();
+  const fs = createFileops({ backend });
+  const registry = buildRigRegistry({ fs });
+  const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove'] });
+  const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
+  const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
+  const kiln = {
+    exec: async (_id, code) => (code.includes('BROKEN')
+      ? { status: 'unavailable', message: 'no kernel' }
+      : { status: 'ok', stdout: 'RAN:' + code }),
+  };
+  const shell = createShell({ registry, face, kiln });
+  eq((await run(shell, 'python -c "print(1)"')), 'RAN:print(1)', '-c passes the code string');
+  await run(shell, 'echo import sys > s.py');
+  eq((await run(shell, 'python s.py')), 'RAN:import sys', '<file> reads the file as code');
+  eq((await run(shell, 'python -c "BROKEN"')), 'python: no kernel', 'unavailable surfaces the message');
+  // No kiln → honest degrade.
+  const { shell: bare } = freshShell();
+  assert(/cross-origin isolation/.test(await run(bare, 'python -c "print(1)"')), 'no kiln → COI notice');
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);

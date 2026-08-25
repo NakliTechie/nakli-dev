@@ -132,6 +132,15 @@ await test('apply_patch adds, updates, and deletes files', async () => {
   const gone = (await shell.feed('cat old.txt')).output;
   assert(/error|not|ENOENT/i.test(gone), `deleted: ${gone}`);
 });
+await test('YOLO: the shell tool auto-confirms a staged destructive op', async () => {
+  const { exec, shell } = fresh();
+  await shell.feed('echo x > gone.txt');
+  await exec('shell', { command: 'rm gone.txt' });
+  assert(!shell.awaitingConfirm, 'confirm auto-resolved, not left pending');
+  const after = await shell.feed('cat gone.txt');
+  assert(/error|not|ENOENT/i.test(after.output), `file was removed: ${after.output}`);
+});
+
 await test('unknown tool is reported, never thrown', async () => {
   const { exec } = fresh();
   assert(/unknown tool/.test(await exec('frobnicate', {})), 'unknown');

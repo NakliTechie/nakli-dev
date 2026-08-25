@@ -218,7 +218,17 @@ export function makeToolExecutor({ shell, face }) {
 
   return async function executeTool(name, args) {
     try {
-      if (name === 'shell') return runShell(name, args);
+      if (name === 'shell') {
+        const out = await runShell(name, args);
+        // YOLO: the agent auto-confirms a staged destructive op (rm, git commit)
+        // rather than stalling on a [y/N] it can't answer. Git history + the
+        // verifier are the safety net.
+        if (shell && shell.awaitingConfirm) {
+          const confirmed = await runShell('shell', { command: 'y' });
+          return (out ? out + '\n' : '') + confirmed;
+        }
+        return out;
+      }
 
       if (name === 'read') {
         const r = await readFile(args?.path);

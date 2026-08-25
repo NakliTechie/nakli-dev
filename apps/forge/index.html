@@ -90,6 +90,7 @@
     import { Terminal } from '../../vendor/xterm/5.5.0/xterm.mjs';
     import { FitAddon } from '../../vendor/xterm/5.5.0/addon-fit.mjs';
     import { createFileops, MemoryBackend } from '../../sys/rig/fileops/index.mjs';
+    import { FsaBackend } from '../../sys/rig/fileops/fsa-backend.mjs';
     import { createGitCore } from '../../sys/rig/git/git-core.mjs';
     import { buildRigRegistry } from '../../sys/rig/registry/index.mjs';
     import { createGrant, createOpLog, createAgentFace } from '../../sys/rig/agent/index.mjs';
@@ -98,17 +99,51 @@
     import { createCompleter } from '../../sys/rig/cli/completer.mjs';
     import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
     import { codingToolset, makeToolExecutor } from '../../sys/ai/agent-tools.mjs';
+    import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
+    import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
+    import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
 
     const nak = window.naklios || null;
     const ACCENT = '\x1b[38;2;217;138;40m';
     const DIM = '\x1b[38;2;110;119;125m';
     const RESET = '\x1b[0m';
 
-    // ── Rig substrate: an in-memory workspace (persistence is a later layer). ──
-    const backend = new MemoryBackend();
+    // ── Workspace backend: a real local folder (File System Access) if the user
+    // picked one, remembered across reloads in IndexedDB; else an in-memory
+    // scratch. Every folder path is wrapped so a failure falls back to memory —
+    // the terminal must always come up. ──
+    const DIR_DB = 'forge-fs', DIR_STORE = 'h', DIR_KEY = 'workspace-dir';
+    function idbOpen() {
+      return new Promise((res, rej) => {
+        const r = indexedDB.open(DIR_DB, 1);
+        r.onupgradeneeded = () => r.result.createObjectStore(DIR_STORE);
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+    }
+    async function idbGet(k) { try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction(DIR_STORE).objectStore(DIR_STORE).get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(null); }); } catch (_) { return null; } }
+    async function idbSet(k, v) { try { const db = await idbOpen(); await new Promise((res) => { const t = db.transaction(DIR_STORE, 'readwrite').objectStore(DIR_STORE).put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (_) {} }
+    async function idbDel(k) { try { const db = await idbOpen(); await new Promise((res) => { const t = db.transaction(DIR_STORE, 'readwrite').objectStore(DIR_STORE).delete(k); t.oncomplete = res; t.onerror = res; }); } catch (_) {} }
+
+    let backend = null;
+    let workspaceLabel = 'memory · scratch';
+    try {
+      const savedDir = await idbGet(DIR_KEY);
+      if (savedDir && typeof savedDir.queryPermission === 'function') {
+        let perm = await savedDir.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') { try { perm = await savedDir.requestPermission({ mode: 'readwrite' }); } catch (_) {} }
+        if (perm === 'granted') { backend = new FsaBackend(savedDir); workspaceLabel = 'folder · ' + savedDir.name; }
+      }
+    } catch (_) { backend = null; }
+    if (!backend) backend = new MemoryBackend();
+    const usingFolder = workspaceLabel.startsWith('folder');
+
     const fs = createFileops({ backend });
-    await fs.write('README.md', '# Forge workspace\n\nA bash-style terminal over your files, in the browser.\nTry: ls, cat README.md, echo hi > note.txt, git init, help\n');
-    await fs.write('src/main.py', 'print("hello from Forge")\n');
+    // Seed a starter workspace ONLY for the in-memory scratch — never scribble
+    // into a user's real folder.
+    if (!usingFolder) {
+      await fs.write('README.md', '# Forge workspace\n\nA bash-style terminal over your files, in the browser.\nTry: ls, cat README.md, echo hi > note.txt, git init, help\nPersist to a real folder: use-folder\n');
+      await fs.write('src/main.py', 'print("hello from Forge")\n');
+    }
     const git = createGitCore({ fs, dir: '/' });
     const registry = buildRigRegistry({ fs, git });
     const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'] });
@@ -116,17 +151,32 @@
     const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
     const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
 
-    // Python (Kiln) needs SharedArrayBuffer → cross-origin isolation, which the
-    // host doesn't grant yet. Degrade honestly rather than fail obscurely.
-    const kiln = null;
+    // ── Kiln: real Python via Pyodide, but ONLY when the tab is cross-origin
+    // isolated (SharedArrayBuffer). Everything is wrapped so a Kiln failure never
+    // takes the terminal down — python just reports unavailable. ──
     const pyReady = self.crossOriginIsolated === true;
+    let kiln = null;
+    let pyAnnounced = false;
+    if (pyReady) {
+      try {
+        const rigModuleSource = generateRigModule(registry).source;
+        const fsBridge = createFsBridge({ backend, mount: '' });
+        kiln = createKiln({
+          sizeBytes: 12 * 1024 * 1024,
+          consent: () => true, // typing `python` is consent; a one-time notice prints on first load
+          loadRuntime: () => createWorkerRuntime({ face, fsBridge, rigModuleSource }),
+        });
+      } catch (_) { kiln = null; }
+    }
 
     const shell = createShell({ registry, face, kiln });
 
     // ── completion cache: refreshed after every command (the editor's Tab is sync). ──
-    const KNOWN = ['cd', 'pwd', 'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail', 'wc',
-      'sort', 'uniq', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'stat', 'git', 'python',
-      'env', 'export', 'unset', 'clear', 'history', 'help', 'which'];
+    const KNOWN = ['cd', 'pwd', 'ls', 'cat', 'echo', 'printf', 'grep', 'rg', 'sed', 'awk', 'diff',
+      'find', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'xargs', 'basename', 'dirname',
+      'test', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'chmod', 'stat', 'git', 'python',
+      'env', 'export', 'unset', 'clear', 'history', 'help', 'which',
+      'agent', 'use-folder', 'use-memory'];
     let dirCache = {};
     async function refreshCache() {
       const here = await face.invoke('fs.list', { path: shell.cwd });
@@ -256,6 +306,32 @@
         if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
         return;
       }
+      // Workspace backend commands (Forge-level: they reload the app).
+      const cmd0 = line.trim().split(/\s+/)[0];
+      if (cmd0 === 'use-folder' || cmd0 === 'open-folder') {
+        try {
+          if (!window.showDirectoryPicker) { term.write(`${RED}use-folder: this browser has no File System Access${RESET}\r\n`); }
+          else {
+            const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+            await idbSet(DIR_KEY, h);
+            term.write(`${DIM}workspace → folder "${h.name}". Reloading…${RESET}\r\n`);
+            setTimeout(() => location.reload(), 400);
+            return;
+          }
+        } catch (e) { term.write(`${RED}use-folder: ${String(e && e.message || e)}${RESET}\r\n`); }
+        writePrompt(); return;
+      }
+      if (cmd0 === 'use-memory') {
+        await idbDel(DIR_KEY);
+        term.write(`${DIM}workspace → memory scratch. Reloading…${RESET}\r\n`);
+        setTimeout(() => location.reload(), 400);
+        return;
+      }
+      // First `python`: announce the one-time Pyodide download so the wait is explained.
+      if (/^(python|py)\b/.test(line.trim()) && kiln && !pyAnnounced && kiln.status && kiln.status() !== 'ready') {
+        pyAnnounced = true;
+        term.write(`${DIM}◆ Kiln: loading Pyodide (~12 MB, first run only)…${RESET}\r\n`);
+      }
       let res;
       try { res = await shell.feed(line); }
       catch (e) { term.write(`\x1b[38;2;194;86;75m${String(e && e.message || e)}${RESET}\r\n`); res = { output: '' }; }
@@ -302,7 +378,8 @@
 
     // ── banner + first prompt ──
     term.writeln(`${ACCENT}◆ Forge${RESET} — a bash-style terminal over your files.`);
-    term.writeln(`${DIM}Rig fs + git are live${pyReady ? '' : '; python needs cross-origin isolation (not enabled here yet)'}. Type ${RESET}help${DIM}, or ${RESET}agent "<task>"${DIM} for a tool-using agent.${RESET}`);
+    term.writeln(`${DIM}workspace: ${RESET}${workspaceLabel}${DIM}  ·  python: ${RESET}${kiln ? 'ready (run ' + ACCENT + 'python' + RESET + ')' : DIM + 'off (needs an isolated tab)'}${RESET}`);
+    term.writeln(`${DIM}Type ${RESET}help${DIM}, ${RESET}use-folder${DIM} to persist to a real folder, or ${RESET}agent "<task>"${DIM} for a coding agent.${RESET}`);
     await refreshCache();
     syncPrompt();
     writePrompt();
