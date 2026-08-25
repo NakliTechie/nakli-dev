@@ -10,6 +10,10 @@
 export { createKiln } from './kiln.mjs';
 export { createKernelCore, DEFAULT_TIMEOUT_MS, DEFAULT_OUTPUT_CAP } from './kernel-core.mjs';
 export { MockRuntime } from './mock-runtime.mjs';
+// K3 — the verifier kernel: a fresh-namespace, read-only run of the operator's
+// immutable verificationCommand, producing the verdict C7 goals.markDone consumes.
+export { createVerifier } from './verifier.mjs';
+export { MockVerifierRuntime } from './verifier-mock.mjs';
 export {
   createWorkerRuntime,
   snapshotBridge,
