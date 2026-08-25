@@ -17,7 +17,7 @@
 //   const exec  = makeToolExecutor({ shell, face });
 //   await runAgentLoop({ messages, tools, infer, executeTool: exec });
 
-import { shellTool, makeShellExecutor } from './agent-loop.mjs';
+import { shellTool, makeShellExecutor, runAgentLoop } from './agent-loop.mjs';
 
 const READ_MAX_LINES = 2000;
 const READ_MAX_BYTES = 50_000;
@@ -79,9 +79,32 @@ export function todoTool() {
   } };
 }
 
-// The coding tool set. `shell` stays the escape hatch for git/pipes/run.
-export function codingToolset() {
-  return [readTool(), editTool(), writeTool(), applyPatchTool(), todoTool(), shellTool()];
+export function taskTool() {
+  return { type: 'function', function: {
+    name: 'task',
+    description: 'Delegate a self-contained sub-task to a subagent with a fresh context over the SAME workspace. It runs to completion and returns a short text result. Use it to isolate a large search or a bounded change without cluttering your own context.',
+    parameters: { type: 'object', properties: {
+      description: { type: 'string', description: 'A 3–5 word label.' },
+      prompt: { type: 'string', description: 'The full, self-contained task for the subagent.' },
+    }, required: ['prompt'] },
+  } };
+}
+
+// Which tools each mode exposes (Kilo/Claude-Code-style gating). `code` = all;
+// `plan` = read + think, no mutation; `ask` = read-only Q&A.
+export const MODE_TOOLS = {
+  code: null, // all
+  plan: new Set(['read', 'todowrite']),
+  ask: new Set(['read']),
+};
+
+// The coding tool set for a mode. `shell` stays the escape hatch (code mode only).
+// `task` is included only when subagents are wired (an infer is available).
+export function codingToolset(mode = 'code', { subagents = false } = {}) {
+  const all = [readTool(), editTool(), writeTool(), applyPatchTool(), todoTool(), shellTool()];
+  if (subagents) all.push(taskTool());
+  const allow = MODE_TOOLS[mode];
+  return allow ? all.filter((t) => allow.has(t.function.name)) : all;
 }
 
 // ── the edit replacer chain (pure) — OpenCode's 9 strategies ─────────────
@@ -334,8 +357,10 @@ export function parseApplyPatch(patch) {
 }
 
 // ── the executor ────────────────────────────────────────────────────────
-export function makeToolExecutor({ shell, face }) {
+export function makeToolExecutor({ shell, face, mode = 'code', infer = null, subagentDepth = 0 }) {
   if (!face) throw new Error('makeToolExecutor requires a Rig agent face');
+  const modeAllow = MODE_TOOLS[mode] || null; // null = all tools
+  const subagentsOn = typeof infer === 'function' && subagentDepth < 1; // depth cap 1 (no recursion)
   const runShell = makeShellExecutor(shell);
   const cwd = () => (shell && typeof shell.cwd === 'string' ? shell.cwd : '');
   // Read-before-edit ledger (Claude Code): a file must be read (read tool, a
@@ -383,6 +408,10 @@ export function makeToolExecutor({ shell, face }) {
 
   return async function executeTool(name, args) {
     try {
+      // Mode gate (defense-in-depth even if the model calls a hidden tool).
+      if (modeAllow && !modeAllow.has(name)) {
+        return `Error: the "${name}" tool is not available in ${mode} mode (read-only). Switch to code mode to modify files.`;
+      }
       if (name === 'shell') {
         const command = String(args?.command || '');
         const out = await runShell(name, args);
@@ -471,6 +500,22 @@ export function makeToolExecutor({ shell, face }) {
           }
         }
         return `Applied patch: ${done.join(', ')}`;
+      }
+
+      if (name === 'task') {
+        if (!subagentsOn) return 'Error: subagents are not available here.';
+        const child = makeToolExecutor({ shell, face, mode: 'code', infer, subagentDepth: subagentDepth + 1 });
+        const res = await runAgentLoop({
+          messages: [
+            { role: 'system', content: 'You are a subagent with tools: read, write, edit, apply_patch, todowrite, shell. Do the task over the shared workspace, then return a concise result (what you found or changed).' },
+            { role: 'user', content: String(args?.prompt ?? '') },
+          ],
+          tools: codingToolset('code'), // subagents don't nest (depth cap)
+          infer,
+          executeTool: child,
+          maxSteps: 16,
+        });
+        return res.text || `(subagent finished: ${res.stop})`;
       }
 
       if (name === 'todowrite') {

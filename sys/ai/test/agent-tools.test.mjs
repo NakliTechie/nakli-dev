@@ -154,6 +154,36 @@ await test('apply_patch adds, updates, and deletes files', async () => {
   const gone = (await shell.feed('cat old.txt')).output;
   assert(/error|not|ENOENT/i.test(gone), `deleted: ${gone}`);
 });
+await test('modes: plan/ask gate the tool set and refuse mutation', async () => {
+  eq(codingToolset('plan').map((t) => t.function.name).sort().join(','), 'read,todowrite', 'plan exposes read+todo');
+  eq(codingToolset('ask').map((t) => t.function.name).join(','), 'read', 'ask exposes read only');
+  assert(codingToolset('code').length === 6, 'code = all tools');
+  const { face, shell } = fresh();
+  const planExec = makeToolExecutor({ shell, face, mode: 'plan' });
+  assert(/not available in plan/.test(await planExec('write', { path: 'x', content: 'y' })), 'plan refuses write');
+  assert(/not available in plan/.test(await planExec('shell', { command: 'ls' })), 'plan refuses shell');
+  assert(!/not available/.test(await planExec('read', { path: 'nope' })), 'plan allows read');
+});
+
+await test('subagents: task spawns a depth-capped child loop over the same workspace', async () => {
+  assert(codingToolset('code', { subagents: true }).some((t) => t.function.name === 'task'), 'task added with subagents flag');
+  assert(!codingToolset('code').some((t) => t.function.name === 'task'), 'task off by default');
+  const { face, shell } = fresh();
+  let calls = 0;
+  const infer = async () => {
+    calls++;
+    if (calls === 1) return { content: '', toolCalls: [{ id: 'c', type: 'function', function: { name: 'shell', arguments: JSON.stringify({ command: 'echo hi > sub.txt' }) } }] };
+    return { content: 'Created sub.txt with hi.', toolCalls: [] };
+  };
+  const exec = makeToolExecutor({ shell, face, infer });
+  const out = await exec('task', { description: 'make file', prompt: 'Create sub.txt containing hi.' });
+  assert(/Created sub\.txt/.test(out), `subagent returned a summary: ${out}`);
+  eq((await shell.feed('cat sub.txt')).output, 'hi', 'subagent worked in the shared workspace');
+  const childExec = makeToolExecutor({ shell, face, infer, subagentDepth: 1 });
+  assert(/not available/.test(await childExec('task', { prompt: 'x' })), 'depth cap blocks nesting');
+  assert(/not available/.test(await makeToolExecutor({ shell, face })('task', { prompt: 'x' })), 'no infer → no subagents');
+});
+
 await test('read-before-edit ledger: edit refuses an unread file; read or cat unlocks it', async () => {
   const { exec, shell } = fresh();
   await shell.feed('printf "const v = 1;\\n" > cfg.js'); // written via the shell, NOT the tools
