@@ -205,6 +205,88 @@ await test('glob expansion: *.txt expands, no-match stays literal', async () => 
   eq(await run(shell, 'echo *.txt'), 'x.txt', 'glob is cwd-relative after cd');
 });
 
+await test('ls on a FILE prints the name (not ENOTDIR)', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'mkdir -p notes');
+  await run(shell, 'echo hi > notes/todo.txt');
+  eq(await run(shell, 'ls notes/todo.txt'), 'notes/todo.txt', 'ls of a file → the file, not an error');
+  const dir = await run(shell, 'ls notes');
+  assert(dir.includes('todo.txt'), `ls of a dir still lists: ${dir}`);
+});
+
+await test('printf: %s/%d, backslash escapes, verbatim redirect (no forced newline)', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, 'printf %s hello'), 'hello', '%s');
+  eq(await run(shell, 'printf "a\\nb\\n"'), 'a\nb', 'backslash-n makes real newlines');
+  eq(await run(shell, 'printf "%s=%d" x 7'), 'x=7', '%s and %d');
+  await run(shell, "printf 'buy milk\\ncall mom\\n' > t.txt");
+  eq(await run(shell, 'cat t.txt'), 'buy milk\ncall mom', 'printf redirect writes exact bytes');
+});
+
+await test('test / [ ] condition primitive composes with && and ||', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'mkdir -p d');
+  await run(shell, 'echo x > d/f.txt');
+  eq(await run(shell, '[ -d d ] && echo yes'), 'yes', '-d on a dir');
+  eq(await run(shell, '[ -f d ] && echo a || echo b'), 'b', '-f on a dir is false → || branch');
+  eq(await run(shell, '[ -f d/f.txt ] && echo file'), 'file', '-f on a file');
+  eq(await run(shell, "test -z '' && echo empty"), 'empty', '-z empty string');
+  eq(await run(shell, "test -n x && echo nonempty"), 'nonempty', '-n non-empty');
+  eq(await run(shell, '[ 3 -gt 2 ] && echo big'), 'big', 'integer -gt');
+  eq(await run(shell, '[ foo = foo ] && echo same'), 'same', 'string equality');
+  eq(await run(shell, '[ foo = bar ] || echo diff'), 'diff', 'string inequality → ||');
+});
+
+await test('|| runs the next only on failure; && only on success', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, 'echo ok && echo reached'), 'ok\nreached', '&& after success');
+  const out = await run(shell, 'cat nope.txt || echo recovered');
+  assert(/recovered/.test(out), `|| runs after failure: ${out}`);
+  const out2 = await run(shell, 'echo done || echo skipped');
+  assert(out2.includes('done') && !out2.includes('skipped'), `|| skipped after success: ${out2}`);
+});
+
+await test('sed: s/// substitution and -n print', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo hello > f.txt');
+  eq(await run(shell, 'echo hi | sed s/hi/bye/'), 'bye', 's/// on stdin');
+  await run(shell, 'echo aaa > g.txt');
+  eq(await run(shell, 'cat g.txt | sed s/a/b/g'), 'bbb', 's///g global');
+  await run(shell, 'echo one > multi.txt');
+  await run(shell, 'echo two >> multi.txt');
+  eq(await run(shell, 'cat multi.txt | sed -n /two/p'), 'two', '-n /re/p prints matches');
+});
+
+await test('rg: recursive content search with -l and line output', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'mkdir -p src');
+  await run(shell, "printf 'import os\\nprint(os)\\n' > src/a.py");
+  await run(shell, "printf 'x=1\\nimport sys\\n' > src/b.py");
+  eq(await run(shell, 'rg import src'), 'src/a.py:1:import os\nsrc/b.py:2:import sys', 'path:line:text');
+  eq(await run(shell, 'rg -l import src'), 'src/a.py\nsrc/b.py', 'files-with-matches');
+});
+
+await test('awk: field print with default and -F separators', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, "echo 'a b c' | awk '{print $2}'"), 'b', 'whitespace field');
+  eq(await run(shell, "printf 'root:0\\ndaemon:1\\n' | awk -F: '{print $1}'"), 'root\ndaemon', '-F: attached');
+});
+
+await test('cut, tr, tee, xargs, basename, dirname, diff', async () => {
+  const { shell } = freshShell();
+  eq(await run(shell, "echo 'a:b:c' | cut -d: -f2"), 'b', 'cut -d -f');
+  eq(await run(shell, 'echo hello | tr l L'), 'heLLo', 'tr translate');
+  eq(await run(shell, "echo 'a b' | tr -d ' '"), 'ab', 'tr -d delete');
+  eq(await run(shell, 'basename /a/b/c.txt .txt'), 'c', 'basename with suffix');
+  eq(await run(shell, 'dirname /a/b/c.txt'), '/a/b', 'dirname');
+  eq(await run(shell, 'echo hi | tee out.txt'), 'hi', 'tee passthrough');
+  eq(await run(shell, 'cat out.txt'), 'hi', 'tee wrote the file');
+  eq(await run(shell, "echo 'x y' | xargs echo args:"), 'args: x y', 'xargs appends stdin');
+  await run(shell, "printf 'l1\\nl2\\n' > a.txt");
+  await run(shell, "printf 'l1\\nX\\n' > b.txt");
+  eq(await run(shell, 'diff a.txt b.txt'), '- l2\n+ X', 'diff line change');
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
