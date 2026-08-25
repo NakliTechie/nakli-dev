@@ -1,0 +1,16 @@
+# Cloudflare headers (honored by both Pages and Workers static assets).
+#
+# Cross-origin isolation for the apps that run the Kiln Python kernel. Kiln's
+# Worker hard-requires SharedArrayBuffer (sys/kiln/worker-runtime.mjs), which the
+# browser only exposes when the document is crossOriginIsolated — i.e. served
+# with COOP: same-origin + COEP. We use `credentialless` so cross-origin
+# subresources (Pyodide wasm/wheels from the CDN) load without a CORP header.
+#
+# Scope: /apps/forge/* only. As a TOP-LEVEL tab, Forge then isolates itself and
+# `python` works; as an EMBEDDED iframe (Immersive) it is not isolated (the
+# parent shell has no COOP/COEP) and degrades gracefully to the "needs
+# cross-origin isolation" notice — no change to how the shell or any other
+# embedded app loads. Isolating the shell itself is a separate, larger step.
+/apps/forge/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless

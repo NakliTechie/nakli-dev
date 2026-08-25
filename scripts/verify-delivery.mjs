@@ -12,6 +12,14 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+// Cross-origin isolation headers ship and stay scoped to the Kiln-using app.
+const headers = await readFile(path.join(root, '_headers'), 'utf8');
+assert(/^\/apps\/forge\/\*$/m.test(headers), '_headers must scope COOP/COEP to /apps/forge/*');
+assert(/Cross-Origin-Opener-Policy:\s*same-origin/i.test(headers), '_headers must set COOP: same-origin');
+assert(/Cross-Origin-Embedder-Policy:\s*credentialless/i.test(headers), '_headers must set COEP: credentialless');
+assert(!/^\/\*$/m.test(headers) && !/^\/\s*$/m.test(headers),
+  '_headers must not isolate the whole site (would break embedded cross-origin apps) — Phase 2 is a separate decision');
+
 const config = JSON.parse(configSource);
 assert(config.name === 'nakli-dev', `Unexpected Worker name: ${config.name}`);
 assert(config.assets?.directory === './', 'The static asset directory must be the repository root.');
@@ -38,6 +46,7 @@ assert(JSON.stringify(rules) === JSON.stringify(expectedRules), `Unexpected asse
 
 const requiredAssets = [
   'index.html',
+  '_headers',
   'LICENSE',
   'sdk/naklios.js',
   'apps/manifest.json',

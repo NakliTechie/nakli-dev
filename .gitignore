@@ -6,6 +6,7 @@ plan/
 !.gitignore
 !.assetsignore
 !wrangler.jsonc
+!_headers
 !sdk/
 !sdk/*
 !apps/
