@@ -71,6 +71,8 @@ export async function runAgentLoop({
   executeTool,
   maxSteps = 24,
   onEvent = () => {},
+  verify = null,           // optional async () => { ok, exit, stdout, stderr } (a K3 verifier)
+  maxVerifyRounds = 3,     // how many times a failing verdict is fed back before giving up
 }) {
   if (typeof infer !== 'function') throw new Error('runAgentLoop needs an infer function');
   if (typeof executeTool !== 'function') throw new Error('runAgentLoop needs an executeTool function');
@@ -78,6 +80,7 @@ export async function runAgentLoop({
   let lastText = '';
   let repeats = 0;
   let prevSignature = null;
+  let verifyRounds = 0;
 
   for (let step = 0; step < maxSteps; step++) {
     let reply;
@@ -92,9 +95,32 @@ export async function runAgentLoop({
     const toolCalls = Array.isArray(reply?.toolCalls) ? reply.toolCalls : [];
     if (content) { lastText = content; onEvent({ type: 'assistant', content, step }); }
 
-    // No tool calls → the model is done talking.
+    // No tool calls → the model believes it is done. If a verifier is wired, the
+    // model does NOT get to declare done — the verifier does. A failing verdict is
+    // fed back so the model fixes it; only a passing verdict (exit 0) completes.
     if (!toolCalls.length) {
       convo.push(assistantTurn(content, null));
+      if (verify) {
+        let verdict;
+        try { verdict = await verify(); }
+        catch (e) { verdict = { ok: false, exit: 1, stderr: String(e?.message || e) }; }
+        if (verdict && verdict.ok) {
+          onEvent({ type: 'verify-pass', verdict, step });
+          onEvent({ type: 'done', reason: 'verified', step });
+          return { messages: convo, steps: step + 1, stop: 'done', verified: true, text: lastText };
+        }
+        verifyRounds++;
+        onEvent({ type: 'verify-fail', verdict, round: verifyRounds, step });
+        if (verifyRounds >= maxVerifyRounds) {
+          onEvent({ type: 'done', reason: 'unverified', step });
+          return { messages: convo, steps: step + 1, stop: 'unverified', verified: false, text: lastText, verdict };
+        }
+        const detail = String(verdict?.stderr || verdict?.stdout || '').slice(0, 1000);
+        convo.push({ role: 'user', content:
+          `Verification failed (exit ${verdict?.exit ?? 1}). The task is NOT complete. ` +
+          `Fix the problem and continue.${detail ? '\n\n' + detail : ''}` });
+        continue;
+      }
       onEvent({ type: 'done', reason: reply?.finishReason || 'stop', step });
       return { messages: convo, steps: step + 1, stop: 'done', text: lastText };
     }

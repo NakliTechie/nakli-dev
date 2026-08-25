@@ -171,6 +171,58 @@ await test('infer errors surface as stop:error, not a throw', async () => {
   assert(/endpoint down/.test(result.error), 'error text preserved');
 });
 
+await test('verifier gate: a failing verdict is fed back; only a passing one completes', async () => {
+  const shell = freshShell();
+  const verify = async () => {
+    const out = (await shell.feed('cat status.txt')).output;
+    const ok = /PASS/.test(out);
+    return { ok, exit: ok ? 0 : 1, stdout: out };
+  };
+  const events = [];
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'do the task' }],
+    tools: [shellTool()],
+    infer: scriptedInfer([
+      { content: '', toolCalls: [call('shell', { command: 'echo FAIL > status.txt' }, 'c0')] },
+      { content: 'done (prematurely)', toolCalls: [] },              // claims done → verify FAILS
+      { content: '', toolCalls: [call('shell', { command: 'echo PASS > status.txt' }, 'c1')] }, // fix
+      { content: 'now really done', toolCalls: [] },                 // claims done → verify PASSES
+    ]),
+    executeTool: makeShellExecutor(shell),
+    verify,
+    onEvent: (e) => events.push(e),
+  });
+  eq(result.stop, 'done', 'completed'); eq(result.verified, true, 'verified true');
+  assert(events.some((e) => e.type === 'verify-fail'), 'a verify-fail was surfaced');
+  assert(events.some((e) => e.type === 'verify-pass'), 'a verify-pass ended it');
+});
+
+await test('verifier gate: stop:unverified when the model never satisfies the verifier', async () => {
+  const shell = freshShell();
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'do the task' }],
+    tools: [shellTool()],
+    infer: async () => ({ content: 'I think it is done', toolCalls: [] }), // always claims done, never acts
+    executeTool: makeShellExecutor(shell),
+    verify: async () => ({ ok: false, exit: 1, stderr: 'still failing' }),
+    maxVerifyRounds: 2,
+  });
+  eq(result.stop, 'unverified', 'never verified'); eq(result.verified, false, 'verified false');
+  eq(result.steps, 2, 'stopped after maxVerifyRounds');
+});
+
+await test('no verifier → the model still completes on its own (back-compat)', async () => {
+  const shell = freshShell();
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: scriptedInfer([{ content: 'all set', toolCalls: [] }]),
+    executeTool: makeShellExecutor(shell),
+  });
+  eq(result.stop, 'done', 'done without a verifier');
+  assert(result.verified === undefined, 'no verified flag when no verifier');
+});
+
 if (failures.length) {
   console.error(`agent-loop: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);

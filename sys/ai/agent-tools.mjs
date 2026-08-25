@@ -289,3 +289,22 @@ export function makeToolExecutor({ shell, face }) {
     }
   };
 }
+
+// A verifier for runAgentLoop's `verify` slot: runs an operator-fixed command in
+// a FRESH shell over the same workspace and reports its exit code — the shell
+// analogue of the K3 Python verifier. The command is captured at construction
+// (immutable) and the fresh shell means the agent's session state (cwd, vars)
+// can't bend the verdict. `createShell` is injected to avoid a hard dependency.
+export function makeShellVerifier({ createShell, registry, face, command }) {
+  if (typeof createShell !== 'function') throw new Error('makeShellVerifier requires createShell');
+  if (!registry || !face) throw new Error('makeShellVerifier requires { registry, face }');
+  if (typeof command !== 'string' || !command.trim()) throw new Error('makeShellVerifier requires a non-empty command');
+  const cmd = command;
+  return async function verify() {
+    const shell = createShell({ registry, face }); // fresh session, same workspace
+    const res = await shell.feed(cmd);
+    const exit = shell.lastCode | 0;
+    const output = (res && res.output) || '';
+    return { ok: exit === 0, exit, stdout: output, stderr: exit === 0 ? '' : output };
+  };
+}

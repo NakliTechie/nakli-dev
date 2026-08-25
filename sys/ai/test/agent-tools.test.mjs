@@ -3,7 +3,7 @@
 //
 //   node sys/ai/test/agent-tools.test.mjs
 
-import { applyEdit, parseApplyPatch, makeToolExecutor, codingToolset } from '../agent-tools.mjs';
+import { applyEdit, parseApplyPatch, makeToolExecutor, codingToolset, makeShellVerifier } from '../agent-tools.mjs';
 import { createFileops, MemoryBackend } from '../../rig/fileops/index.mjs';
 import { buildRigRegistry } from '../../rig/registry/index.mjs';
 import { createGrant, createOpLog, createAgentFace } from '../../rig/agent/index.mjs';
@@ -22,7 +22,7 @@ function fresh() {
   const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove'] });
   const face = createAgentFace({ registry, grant, opLog: createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) }), actor: 'agent' });
   const shell = createShell({ registry, face });
-  return { face, shell, exec: makeToolExecutor({ shell, face }) };
+  return { face, registry, shell, exec: makeToolExecutor({ shell, face }) };
 }
 
 // ── replacer chain ──────────────────────────────────────────────────────
@@ -136,6 +136,17 @@ await test('unknown tool is reported, never thrown', async () => {
   const { exec } = fresh();
   assert(/unknown tool/.test(await exec('frobnicate', {})), 'unknown');
 });
+await test('makeShellVerifier runs a fixed command in a fresh shell → exit-coded verdict', async () => {
+  const { face, registry, shell } = fresh();
+  await shell.feed('echo PASS > status.txt');
+  const pass = makeShellVerifier({ createShell, registry, face, command: '[ -f status.txt ] && grep PASS status.txt' });
+  const r1 = await pass();
+  eq(r1.ok, true, 'passes when the check holds'); eq(r1.exit, 0, 'exit 0');
+  const fail = makeShellVerifier({ createShell, registry, face, command: 'grep NOPE status.txt' });
+  const r2 = await fail();
+  eq(r2.ok, false, 'fails when the check does not hold'); assert(r2.exit !== 0, 'non-zero exit');
+});
+
 await test('codingToolset advertises read/edit/write/apply_patch/shell', () => {
   const names = codingToolset().map((t) => t.function.name);
   for (const n of ['read', 'edit', 'write', 'apply_patch', 'shell']) assert(names.includes(n), `has ${n}`);

@@ -708,6 +708,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   return {
     feed,
     get cwd() { return state.cwd; },
+    get lastCode() { return lastCode; },
     get awaitingConfirm() { return pending ? pending.proposalId : null; },
   };
 }
