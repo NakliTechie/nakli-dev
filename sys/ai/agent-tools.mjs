@@ -21,6 +21,7 @@ import { shellTool, makeShellExecutor } from './agent-loop.mjs';
 
 const READ_MAX_LINES = 2000;
 const READ_MAX_BYTES = 50_000;
+const READ_MAX_LINE_CHARS = 2000;
 
 // ── tool schemas (OpenAI function shape) ────────────────────────────────
 export function readTool() {
@@ -65,9 +66,22 @@ export function applyPatchTool() {
   } };
 }
 
+export function todoTool() {
+  return { type: 'function', function: {
+    name: 'todowrite',
+    description: 'Replace your task checklist for a multi-step job. Exactly one item may be in_progress at a time. Update it as you finish steps — it keeps you on track.',
+    parameters: { type: 'object', properties: {
+      todos: { type: 'array', items: { type: 'object', properties: {
+        content: { type: 'string' },
+        status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+      }, required: ['content', 'status'] } },
+    }, required: ['todos'] },
+  } };
+}
+
 // The coding tool set. `shell` stays the escape hatch for git/pipes/run.
 export function codingToolset() {
-  return [readTool(), editTool(), writeTool(), applyPatchTool(), shellTool()];
+  return [readTool(), editTool(), writeTool(), applyPatchTool(), todoTool(), shellTool()];
 }
 
 // ── the edit replacer chain (pure) — OpenCode's 9 strategies ─────────────
@@ -329,6 +343,7 @@ export function makeToolExecutor({ shell, face }) {
   // the model editing content it never saw. Paths are store-relative (resolved).
   const readLedger = new Set();
   const noteRead = (p) => { if (p) readLedger.add(p); };
+  let todos = []; // the agent's task checklist (todowrite)
 
   function resolve(path) {
     const raw = String(path == null ? '' : path);
@@ -351,6 +366,20 @@ export function makeToolExecutor({ shell, face }) {
     if (res.staged) { const a = await face.accept(res.proposalId); return a.ok ? { ok: true } : { ok: false, error: a.message || 'write rejected' }; }
     return res.ok ? { ok: true } : { ok: false, error: res.message || 'write failed' };
   }
+  // Cap bulky output and spill the full text to a workspace artifact the model
+  // can re-read with offset/limit — protects the context window (all 3 agents do
+  // this). Returns the head + a pointer when it overflows.
+  let spillCounter = 0;
+  async function capOutput(text, label) {
+    const s = String(text == null ? '' : text);
+    const lines = s.split('\n');
+    if (lines.length <= READ_MAX_LINES && s.length <= READ_MAX_BYTES) return s;
+    const path = `.forge/out-${++spillCounter}.txt`;
+    await writeFile(path, s);
+    noteRead(resolve(path));
+    const head = lines.slice(0, READ_MAX_LINES).join('\n').slice(0, READ_MAX_BYTES);
+    return head + `\n… (${label} truncated: ${lines.length} lines / ${s.length} bytes. Full output saved to ${path} — read it with offset/limit.)`;
+  }
 
   return async function executeTool(name, args) {
     try {
@@ -368,21 +397,24 @@ export function makeToolExecutor({ shell, face }) {
         // A plain single-file display satisfies the read-before-edit ledger.
         const m = /^\s*(?:cat|less|more|head|tail)\s+(\S+)\s*$/.exec(command);
         if (m && !/[|>]/.test(command)) noteRead(resolve(m[1]));
-        return result;
+        return await capOutput(result, 'shell output');
       }
 
       if (name === 'read') {
         const r = await readFile(args?.path);
         if (!r.ok) return `Error reading ${args?.path}: ${r.error}`;
         noteRead(resolve(args?.path));
-        let lines = r.data.split('\n');
+        const allLines = r.data.split('\n');
+        const total = allLines.length;
         const offset = Number.isInteger(args?.offset) ? Math.max(1, args.offset) : 1;
         const limit = Number.isInteger(args?.limit) ? args.limit : READ_MAX_LINES;
-        const slice = lines.slice(offset - 1, offset - 1 + limit);
-        let truncated = slice.length < lines.length - (offset - 1);
+        const slice = allLines.slice(offset - 1, offset - 1 + limit)
+          .map((l) => (l.length > READ_MAX_LINE_CHARS ? l.slice(0, READ_MAX_LINE_CHARS) + '… (line truncated)' : l));
+        const end = offset - 1 + slice.length;
         let body = slice.map((l, k) => `${String(offset + k).padStart(5)}  ${l}`).join('\n');
-        if (body.length > READ_MAX_BYTES) { body = body.slice(0, READ_MAX_BYTES); truncated = true; }
-        return body + (truncated ? '\n… (truncated)' : '') || '(empty file)';
+        if (body.length > READ_MAX_BYTES) { body = body.slice(0, READ_MAX_BYTES) + '… (truncated)'; }
+        const footer = end < total ? `\n(Showing lines ${offset}–${end} of ${total}. Use offset=${end + 1} to continue.)` : '';
+        return (body || '(empty file)') + footer;
       }
 
       if (name === 'write') {
@@ -439,6 +471,16 @@ export function makeToolExecutor({ shell, face }) {
           }
         }
         return `Applied patch: ${done.join(', ')}`;
+      }
+
+      if (name === 'todowrite') {
+        const items = Array.isArray(args?.todos) ? args.todos : [];
+        const inProgress = items.filter((t) => t?.status === 'in_progress').length;
+        if (inProgress > 1) return 'Error: only one todo may be in_progress at a time.';
+        todos = items.map((t) => ({ content: String(t?.content ?? ''), status: ['pending', 'in_progress', 'completed'].includes(t?.status) ? t.status : 'pending' }));
+        const mark = { pending: '[ ]', in_progress: '[~]', completed: '[x]' };
+        const done = todos.filter((t) => t.status === 'completed').length;
+        return `Todo (${done}/${todos.length}):\n` + todos.map((t) => `${mark[t.status]} ${t.content}`).join('\n');
       }
 
       return `Error: unknown tool "${name}"`;

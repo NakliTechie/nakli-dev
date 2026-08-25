@@ -166,6 +166,31 @@ await test('read-before-edit ledger: edit refuses an unread file; read or cat un
   assert(/Edited/.test(await exec('edit', { path: 'other.txt', old_string: 'x = 1', new_string: 'x = 2' })), 'cat unlocks edit');
 });
 
+await test('read: line-numbered slice with an offset + "showing lines" footer', async () => {
+  const { exec, shell } = fresh();
+  await shell.feed('printf "a\\nb\\nc\\nd\\ne\\n" > f.txt');
+  const out = await exec('read', { path: 'f.txt', offset: 2, limit: 2 });
+  assert(/2  b/.test(out) && /3  c/.test(out), `numbered: ${out}`);
+  assert(/Showing lines 2.3 of [0-9]/.test(out), `footer: ${out}`);
+});
+await test('bulky shell output spills to a .forge artifact the model can read', async () => {
+  const { exec } = fresh();
+  const big = Array.from({ length: 2100 }, (_, i) => 'line' + i).join('\n');
+  await exec('write', { path: 'big.txt', content: big });
+  const out = await exec('shell', { command: 'cat big.txt' });
+  assert(/Full output saved to \.forge\/out-\d+\.txt/.test(out), `spilled: ${out.slice(-160)}`);
+  // the spill file is readable back
+  const back = await exec('read', { path: '.forge/out-1.txt', offset: 2099, limit: 2 });
+  assert(/line2099/.test(back), `re-read tail: ${back}`);
+});
+await test('todowrite renders the checklist and enforces one in_progress', async () => {
+  const { exec } = fresh();
+  const out = await exec('todowrite', { todos: [{ content: 'a', status: 'completed' }, { content: 'b', status: 'in_progress' }, { content: 'c', status: 'pending' }] });
+  assert(/\[x\] a/.test(out) && /\[~\] b/.test(out) && /\[ \] c/.test(out), `rendered: ${out}`);
+  assert(/1\/3/.test(out), 'progress count');
+  assert(/only one/.test(await exec('todowrite', { todos: [{ content: 'a', status: 'in_progress' }, { content: 'b', status: 'in_progress' }] })), 'two in_progress rejected');
+});
+
 await test('YOLO: the shell tool auto-confirms a staged destructive op', async () => {
   const { exec, shell } = fresh();
   await shell.feed('echo x > gone.txt');
@@ -192,7 +217,7 @@ await test('makeShellVerifier runs a fixed command in a fresh shell → exit-cod
 
 await test('codingToolset advertises read/edit/write/apply_patch/shell', () => {
   const names = codingToolset().map((t) => t.function.name);
-  for (const n of ['read', 'edit', 'write', 'apply_patch', 'shell']) assert(names.includes(n), `has ${n}`);
+  for (const n of ['read', 'edit', 'write', 'apply_patch', 'todowrite', 'shell']) assert(names.includes(n), `has ${n}`);
 });
 
 if (failures.length) {
