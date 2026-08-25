@@ -124,52 +124,59 @@
     async function idbSet(k, v) { try { const db = await idbOpen(); await new Promise((res) => { const t = db.transaction(DIR_STORE, 'readwrite').objectStore(DIR_STORE).put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (_) {} }
     async function idbDel(k) { try { const db = await idbOpen(); await new Promise((res) => { const t = db.transaction(DIR_STORE, 'readwrite').objectStore(DIR_STORE).delete(k); t.oncomplete = res; t.onerror = res; }); } catch (_) {} }
 
-    let backend = null;
+    // The whole Rig stack is remountable so `use-folder` can swap the backend
+    // live, IN THE PICKER'S USER GESTURE — reloading would drop the gesture and
+    // FSA permission can't be re-granted without one. All the closures below read
+    // these module-scoped bindings, so a remount is transparent to them.
+    const pyReady = self.crossOriginIsolated === true;
+    let backend, fs, git, registry, grant, opLog, face, kiln, shell;
     let workspaceLabel = 'memory · scratch';
-    try {
-      const savedDir = await idbGet(DIR_KEY);
-      if (savedDir && typeof savedDir.queryPermission === 'function') {
-        let perm = await savedDir.queryPermission({ mode: 'readwrite' });
-        if (perm !== 'granted') { try { perm = await savedDir.requestPermission({ mode: 'readwrite' }); } catch (_) {} }
-        if (perm === 'granted') { backend = new FsaBackend(savedDir); workspaceLabel = 'folder · ' + savedDir.name; }
-      }
-    } catch (_) { backend = null; }
-    if (!backend) backend = new MemoryBackend();
-    const usingFolder = workspaceLabel.startsWith('folder');
+    let pyAnnounced = false;
 
-    const fs = createFileops({ backend });
-    // Seed a starter workspace ONLY for the in-memory scratch — never scribble
-    // into a user's real folder.
-    if (!usingFolder) {
+    function mountWorkspace(newBackend, label) {
+      backend = newBackend;
+      workspaceLabel = label;
+      fs = createFileops({ backend });
+      git = createGitCore({ fs, dir: '/' });
+      registry = buildRigRegistry({ fs, git });
+      grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'] });
+      // Op-log on a separate backend so it never appears in the workspace tree.
+      opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
+      face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
+      kiln = null;
+      if (pyReady) {
+        try {
+          const rigModuleSource = generateRigModule(registry).source;
+          const fsBridge = createFsBridge({ backend, mount: '' });
+          kiln = createKiln({
+            sizeBytes: 12 * 1024 * 1024,
+            consent: () => true, // typing `python` is consent; a one-time notice prints on first load
+            loadRuntime: () => createWorkerRuntime({ face, fsBridge, rigModuleSource }),
+          });
+        } catch (_) { kiln = null; }
+      }
+      pyAnnounced = false;
+      shell = createShell({ registry, face, kiln });
+    }
+    async function seedScratch() {
       await fs.write('README.md', '# Forge workspace\n\nA bash-style terminal over your files, in the browser.\nTry: ls, cat README.md, echo hi > note.txt, git init, help\nPersist to a real folder: use-folder\n');
       await fs.write('src/main.py', 'print("hello from Forge")\n');
     }
-    const git = createGitCore({ fs, dir: '/' });
-    const registry = buildRigRegistry({ fs, git });
-    const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write'] });
-    // Op-log on a separate backend so it never appears in the workspace tree.
-    const opLog = createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) });
-    const face = createAgentFace({ registry, grant, opLog, actor: 'agent' });
 
-    // ── Kiln: real Python via Pyodide, but ONLY when the tab is cross-origin
-    // isolated (SharedArrayBuffer). Everything is wrapped so a Kiln failure never
-    // takes the terminal down — python just reports unavailable. ──
-    const pyReady = self.crossOriginIsolated === true;
-    let kiln = null;
-    let pyAnnounced = false;
-    if (pyReady) {
-      try {
-        const rigModuleSource = generateRigModule(registry).source;
-        const fsBridge = createFsBridge({ backend, mount: '' });
-        kiln = createKiln({
-          sizeBytes: 12 * 1024 * 1024,
-          consent: () => true, // typing `python` is consent; a one-time notice prints on first load
-          loadRuntime: () => createWorkerRuntime({ face, fsBridge, rigModuleSource }),
-        });
-      } catch (_) { kiln = null; }
-    }
-
-    const shell = createShell({ registry, face, kiln });
+    // Startup: reconnect a remembered folder ONLY if permission is still granted
+    // (no gesture at load, so we can't prompt); otherwise scratch, and tell the
+    // user how to reconnect. reconnectNotice is printed with the banner below.
+    let reconnectNotice = '';
+    let startedOnFolder = false;
+    try {
+      const savedDir = await idbGet(DIR_KEY);
+      if (savedDir && typeof savedDir.queryPermission === 'function') {
+        const perm = await savedDir.queryPermission({ mode: 'readwrite' });
+        if (perm === 'granted') { mountWorkspace(new FsaBackend(savedDir), 'folder · ' + savedDir.name); startedOnFolder = true; }
+        else reconnectNotice = `Folder "${savedDir.name}" is remembered — run use-folder to reconnect it.`;
+      }
+    } catch (_) { /* fall through to scratch */ }
+    if (!startedOnFolder) { mountWorkspace(new MemoryBackend(), 'memory · scratch'); await seedScratch(); }
 
     // ── completion cache: refreshed after every command (the editor's Tab is sync). ──
     const KNOWN = ['cd', 'pwd', 'ls', 'cat', 'echo', 'printf', 'grep', 'rg', 'sed', 'awk', 'diff',
@@ -312,19 +319,34 @@
         try {
           if (!window.showDirectoryPicker) { term.write(`${RED}use-folder: this browser has no File System Access${RESET}\r\n`); }
           else {
+            // Pick + request permission inside this click gesture, then remount
+            // the workspace LIVE (no reload — a reload would lose the gesture and
+            // FSA can't re-grant permission without one).
             const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+            let perm = await h.queryPermission({ mode: 'readwrite' });
+            if (perm !== 'granted') perm = await h.requestPermission({ mode: 'readwrite' });
+            if (perm !== 'granted') { term.write(`${RED}use-folder: permission not granted${RESET}\r\n`); writePrompt(); return; }
             await idbSet(DIR_KEY, h);
-            term.write(`${DIM}workspace → folder "${h.name}". Reloading…${RESET}\r\n`);
-            setTimeout(() => location.reload(), 400);
-            return;
+            mountWorkspace(new FsaBackend(h), 'folder · ' + h.name);
+            await refreshCache();
+            term.write(`${ACCENT}◆${RESET} ${DIM}workspace → folder "${RESET}${h.name}${DIM}" (persists across reload while permission holds).${RESET}\r\n`);
+            syncPrompt();
           }
-        } catch (e) { term.write(`${RED}use-folder: ${String(e && e.message || e)}${RESET}\r\n`); }
-        writePrompt(); return;
+        } catch (e) {
+          const m = String(e && e.name === 'AbortError' ? 'cancelled' : (e && e.message || e));
+          term.write(`${RED}use-folder: ${m}${RESET}\r\n`);
+        }
+        writePrompt();
+        if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
+        return;
       }
       if (cmd0 === 'use-memory') {
         await idbDel(DIR_KEY);
-        term.write(`${DIM}workspace → memory scratch. Reloading…${RESET}\r\n`);
-        setTimeout(() => location.reload(), 400);
+        mountWorkspace(new MemoryBackend(), 'memory · scratch');
+        await seedScratch();
+        await refreshCache();
+        term.write(`${ACCENT}◆${RESET} ${DIM}workspace → memory scratch (not persisted).${RESET}\r\n`);
+        syncPrompt(); writePrompt();
         return;
       }
       // First `python`: announce the one-time Pyodide download so the wait is explained.
@@ -380,6 +402,7 @@
     term.writeln(`${ACCENT}◆ Forge${RESET} — a bash-style terminal over your files.`);
     term.writeln(`${DIM}workspace: ${RESET}${workspaceLabel}${DIM}  ·  python: ${RESET}${kiln ? 'ready (run ' + ACCENT + 'python' + RESET + ')' : DIM + 'off (needs an isolated tab)'}${RESET}`);
     term.writeln(`${DIM}Type ${RESET}help${DIM}, ${RESET}use-folder${DIM} to persist to a real folder, or ${RESET}agent "<task>"${DIM} for a coding agent.${RESET}`);
+    if (reconnectNotice) term.writeln(`${ACCENT}◆${RESET} ${DIM}${reconnectNotice}${RESET}`);
     await refreshCache();
     syncPrompt();
     writePrompt();
