@@ -313,31 +313,38 @@
         if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
         return;
       }
-      // Workspace backend commands (Forge-level: they reload the app).
+      // Workspace backend commands (Forge-level: they remount the stack live).
       const cmd0 = line.trim().split(/\s+/)[0];
       if (cmd0 === 'use-folder' || cmd0 === 'open-folder') {
+        let msg = null;
         try {
-          if (!window.showDirectoryPicker) { term.write(`${RED}use-folder: this browser has no File System Access${RESET}\r\n`); }
+          if (!window.showDirectoryPicker) { msg = `${RED}use-folder: this browser has no File System Access${RESET}`; }
           else {
-            // Pick + request permission inside this click gesture, then remount
-            // the workspace LIVE (no reload — a reload would lose the gesture and
-            // FSA can't re-grant permission without one).
+            // Pick + grant permission inside this click gesture, then remount the
+            // workspace LIVE (no reload — a reload would lose the gesture and FSA
+            // can't re-grant permission without one).
             const h = await window.showDirectoryPicker({ mode: 'readwrite' });
             let perm = await h.queryPermission({ mode: 'readwrite' });
             if (perm !== 'granted') perm = await h.requestPermission({ mode: 'readwrite' });
-            if (perm !== 'granted') { term.write(`${RED}use-folder: permission not granted${RESET}\r\n`); writePrompt(); return; }
-            await idbSet(DIR_KEY, h);
-            mountWorkspace(new FsaBackend(h), 'folder · ' + h.name);
-            await refreshCache();
-            term.write(`${ACCENT}◆${RESET} ${DIM}workspace → folder "${RESET}${h.name}${DIM}" (persists across reload while permission holds).${RESET}\r\n`);
-            syncPrompt();
+            if (perm !== 'granted') { msg = `${RED}use-folder: permission not granted${RESET}`; }
+            else {
+              await idbSet(DIR_KEY, h);
+              mountWorkspace(new FsaBackend(h), 'folder · ' + h.name);
+              await refreshCache();
+              msg = `${ACCENT}◆${RESET} ${DIM}workspace → folder "${RESET}${h.name}${DIM}" (persists across reload while permission holds).${RESET}`;
+            }
           }
         } catch (e) {
-          const m = String(e && e.name === 'AbortError' ? 'cancelled' : (e && e.message || e));
-          term.write(`${RED}use-folder: ${m}${RESET}\r\n`);
+          msg = `${RED}use-folder: ${String(e && e.name === 'AbortError' ? 'cancelled' : (e && e.message || e))}${RESET}`;
         }
-        writePrompt();
-        if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
+        // The native picker pauses xterm's renderer; defer the redraw to the next
+        // frame so the message + fresh prompt actually paint (otherwise they wait
+        // for the next keystroke — the "hit Enter to get the prompt back" glitch).
+        requestAnimationFrame(() => {
+          if (msg) term.write(msg + '\r\n');
+          syncPrompt(); writePrompt(); term.focus();
+          if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
+        });
         return;
       }
       if (cmd0 === 'use-memory') {
