@@ -248,4 +248,64 @@ assert.equal(imageResult.data[0].width, 512);
 assert.equal(imageResult.data[0].seed, 42);
 assert.deepEqual(imageStatuses, [['generating', { step:2, total:4 }]]);
 
+// ── Agent tier: raised caps + tool-calling (system apps only) ──────────
+// Broker + SDK source contracts for the additive agent path.
+assert.match(html, /function aiAppIsSystem\(appId\)/, 'agent tier gates on system apps');
+assert.match(html, /Agent-tier inference is restricted to system apps/,
+  'third-party apps are refused the agent tier');
+assert.match(html, /const wantsAgent = msg\.agent === true/, 'agent tier is opt-in per request');
+assert.match(html, /Tool-calling requires an OpenAI-compatible endpoint model/,
+  'on-device model + tools is refused, not silently dropped');
+assert.match(html, /toolAcc\.absorbDelta\(choice\?\.delta\)/, 'streamed tool-calls are accumulated');
+assert.match(html, /request\.toolCalls\?\.length \? \{ toolCalls:request\.toolCalls \}/,
+  'tool-calls ride back on the done event');
+assert.match(sdkSource, /if \(options\.agent === true\) chatMsg\.agent = true/,
+  'SDK forwards the agent flag');
+assert.match(sdkSource, /chatMsg\.tools = options\.tools/, 'SDK forwards tools');
+assert.match(sdkSource, /message\.tool_calls = toolCalls/,
+  'SDK surfaces tool_calls on the completion');
+
+// Pure protocol core — behavioral smoke (full coverage in sys/ai/test/agent-protocol.test.mjs).
+const proto = await import(new URL('../sys/ai/agent-protocol.mjs', import.meta.url));
+assert.ok(
+  proto.AGENT_LIMITS.maxMessages > 32 &&
+    proto.AGENT_LIMITS.maxInputChars > 24000 &&
+    proto.AGENT_LIMITS.maxOutputTokens > 768,
+  'agent caps strictly exceed the narrow-chat caps (32 / 24k / 768)',
+);
+const acc = proto.createToolCallAccumulator();
+acc.absorbDelta({ tool_calls:[{ index:0, id:'c1', function:{ name:'ls', arguments:'' } }] });
+acc.absorbDelta({ tool_calls:[{ index:0, function:{ arguments:'{}' } }] });
+assert.deepEqual(
+  acc.finalize(),
+  [{ type:'function', function:{ name:'ls', arguments:'{}' }, id:'c1' }],
+  'accumulator reassembles a streamed tool-call from deltas',
+);
+
+// SDK end-to-end: an agent request carries tools; the completion surfaces tool_calls.
+const agentPromise = windowObject.naklios.ai.chat.completions.create({
+  agent:true,
+  messages:[{ role:'user', content:'list the files' }],
+  tools:[{ type:'function', function:{ name:'ls', description:'list', parameters:{ type:'object' } } }],
+  tool_choice:'auto',
+});
+const agentChat = posted.filter(message => message.type === 'naklios:ai:chat').at(-1);
+assert.equal(agentChat.agent, true, 'SDK posts agent:true');
+assert.equal(agentChat.tools[0].function.name, 'ls', 'SDK posts the tools array');
+assert.equal(agentChat.tool_choice, 'auto', 'SDK posts tool_choice');
+dispatch({
+  type:'naklios:ai:event',
+  requestId:agentChat.requestId,
+  event:'done',
+  finishReason:'tool_calls',
+  toolCalls:[{ id:'c1', type:'function', function:{ name:'ls', arguments:'{}' } }],
+});
+const agentResult = await agentPromise;
+assert.equal(agentResult.choices[0].finish_reason, 'tool_calls', 'finish_reason surfaced');
+assert.deepEqual(
+  agentResult.choices[0].message.tool_calls,
+  [{ id:'c1', type:'function', function:{ name:'ls', arguments:'{}' } }],
+  'completion surfaces tool_calls',
+);
+
 console.log('NakliOS AI broker, providers, model catalog, and SDK contract: PASS');

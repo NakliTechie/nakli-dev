@@ -57,6 +57,12 @@ jobs:
       - name: Verify shared local AI broker and SDK contracts
         run: node scripts/test-local-ai.mjs
 
+      - name: Verify agent-tier inference protocol core
+        run: node sys/ai/test/agent-protocol.test.mjs
+
+      - name: Verify agent loop over the Rig shell
+        run: node sys/ai/test/agent-loop.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 

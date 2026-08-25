@@ -169,11 +169,17 @@
       fail: fail,
       onStatus: typeof options.onStatus === 'function' ? options.onStatus : null,
     });
-    send('naklios:ai:chat', {
+    var chatMsg = {
       requestId: requestId,
       messages: Array.isArray(options.messages) ? options.messages : [],
       maxTokens: options.max_tokens || options.maxTokens,
-    });
+    };
+    // Agent tier (system apps only): raised caps + tool-calling. The host
+    // refuses agent:true from a third-party app, so passing it is harmless.
+    if (options.agent === true) chatMsg.agent = true;
+    if (options.tools != null) chatMsg.tools = options.tools;
+    if (options.tool_choice != null) chatMsg.tool_choice = options.tool_choice;
+    send('naklios:ai:chat', chatMsg);
     if (options.signal) {
       if (options.signal.aborted) stream.cancel();
       else options.signal.addEventListener('abort', function () { stream.cancel(); }, { once: true });
@@ -187,18 +193,22 @@
     if (options.stream === true) return stream;
     var content = '';
     var finishReason = 'stop';
+    var toolCalls = null;
     for await (var chunk of stream) {
       var choice = chunk.choices && chunk.choices[0];
       if (choice && choice.delta && choice.delta.content) content += choice.delta.content;
+      if (choice && choice.delta && choice.delta.tool_calls) toolCalls = choice.delta.tool_calls;
       if (choice && choice.finish_reason) finishReason = choice.finish_reason;
     }
+    var message = { role: 'assistant', content: content };
+    if (toolCalls) message.tool_calls = toolCalls;
     return {
       id: 'naklios-local',
       object: 'chat.completion',
       model: capabilities.aiModel || 'localmind',
       choices: [{
         index: 0,
-        message: { role: 'assistant', content: content },
+        message: message,
         finish_reason: finishReason,
       }],
     };
@@ -327,7 +337,7 @@
           model: msg.model || capabilities.aiModel || 'localmind',
           choices: [{
             index: 0,
-            delta: {},
+            delta: msg.toolCalls && msg.toolCalls.length ? { tool_calls: msg.toolCalls } : {},
             finish_reason: msg.finishReason || 'stop',
           }],
         });

@@ -17,6 +17,17 @@
     --radius:3px; --rule-w:1px; --dur:120ms; --ease:cubic-bezier(.2,0,0,1);
   }
   *{box-sizing:border-box}
+  /* Scrollbars — themed to the amber palette, not the browser default white/grey.
+     Applies to any overflow, incl. the xterm scrollback viewport. */
+  *{ scrollbar-width:thin; scrollbar-color:var(--accent-dim) transparent; }
+  *::-webkit-scrollbar{ width:10px; height:10px; }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner{ background:transparent; }
+  *::-webkit-scrollbar-thumb{
+    background:var(--accent-dim); border:2px solid transparent;
+    border-radius:999px; background-clip:padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover{ background:var(--accent); }
   html,body{height:100%;margin:0}
   body{
     background:var(--bg-0); color:var(--fg-0); font-family:var(--font-ui);
@@ -85,6 +96,7 @@
     import { createShell } from '../../sys/rig/cli/shell.mjs';
     import { createLineEditor } from '../../sys/rig/cli/lineeditor.mjs';
     import { createCompleter } from '../../sys/rig/cli/completer.mjs';
+    import { runAgentLoop, shellTool, makeShellExecutor } from '../../sys/ai/agent-loop.mjs';
 
     const nak = window.naklios || null;
     const ACCENT = '\x1b[38;2;217;138;40m';
@@ -156,8 +168,73 @@
     function syncPrompt() { editor.setPrompt(promptFor()); cwdEl.textContent = '/' + shell.cwd; }
     function writePrompt() { term.write(editor.prompt()); }
 
+    const RED = '\x1b[38;2;194;86;75m';
+    const toCRLF = (s) => String(s == null ? '' : s).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').replace(/\n/g, '\r\n');
+
+    // The model side of the agent loop: the host inference tier (agent scope),
+    // reached through the SDK. Forge is a system app, so the broker grants it the
+    // raised caps + tool-calling. Degrades honestly when no host / model is set.
+    async function inferViaHost({ messages, tools }) {
+      const nakAI = window.naklios && window.naklios.ai;
+      if (!nakAI) throw new Error('Agent needs the NakliOS host — open Forge inside NakliOS.');
+      const completion = await nakAI.chat.completions.create({
+        agent: true, messages, tools, tool_choice: 'auto', stream: false,
+      });
+      const choice = completion && completion.choices && completion.choices[0];
+      const msg = (choice && choice.message) || {};
+      return {
+        content: typeof msg.content === 'string' ? msg.content : '',
+        toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+        finishReason: (choice && choice.finish_reason) || 'stop',
+      };
+    }
+
+    // `agent "<task>"` — a tool-using coding agent over this workspace. The model
+    // drives the same shell you type into; every tool call is echoed live.
+    async function runAgent(task) {
+      if (!task.trim()) {
+        term.write(`${DIM}usage: agent "<task>"  — a tool-using agent over your files (needs a model in Settings → AI)${RESET}\r\n`);
+        return;
+      }
+      term.write(`${ACCENT}◆ agent${RESET} ${DIM}${task}${RESET}\r\n`);
+      const result = await runAgentLoop({
+        messages: [
+          { role: 'system', content:
+            'You are a coding agent working in a bash-style shell over the user\'s files. ' +
+            'Use the shell tool to inspect and change files, run git, and verify your work. ' +
+            'Work in small, verifiable steps; when the task is complete, give a one-line summary.' },
+          { role: 'user', content: task },
+        ],
+        tools: [shellTool()],
+        infer: inferViaHost,
+        executeTool: makeShellExecutor(shell),
+        maxSteps: 24,
+        onEvent: (e) => {
+          if (e.type === 'tool-call') term.write(`${DIM}→ ${(e.args && e.args.command) || e.name}${RESET}\r\n`);
+          else if (e.type === 'tool-result') { const s = toCRLF(e.result); if (s) term.write(`${s}\r\n`); }
+          else if (e.type === 'tool-error') term.write(`${RED}${e.error}${RESET}\r\n`);
+          else if (e.type === 'assistant' && e.content) term.write(`${toCRLF(e.content)}\r\n`);
+          else if (e.type === 'error') term.write(`${RED}agent: ${e.error}${RESET}\r\n`);
+        },
+      });
+      const tag = result.stop === 'done' ? `${ACCENT}done${RESET}` : `${DIM}${result.stop}${RESET}`;
+      term.write(`${DIM}agent ${RESET}${tag}${DIM} · ${result.steps} steps${RESET}\r\n`);
+      await refreshCache();
+    }
+
     async function runCommand(line) {
       if (line.trim() === '') { writePrompt(); return; }
+      // `agent …` is a Forge-level command (it needs host inference), handled
+      // before the shell — the shell core stays free of any AI dependency.
+      const agentMatch = line.trim().match(/^agent(?:\s+([\s\S]+))?$/);
+      if (agentMatch) {
+        const task = (agentMatch[1] || '').replace(/^\s*["']|["']\s*$/g, '');
+        try { await runAgent(task); }
+        catch (e) { term.write(`${RED}agent: ${String(e && e.message || e)}${RESET}\r\n`); }
+        syncPrompt(); writePrompt();
+        if (nak && nak.title) nak.title(`Forge — /${shell.cwd}`);
+        return;
+      }
       let res;
       try { res = await shell.feed(line); }
       catch (e) { term.write(`\x1b[38;2;194;86;75m${String(e && e.message || e)}${RESET}\r\n`); res = { output: '' }; }
@@ -204,7 +281,7 @@
 
     // ── banner + first prompt ──
     term.writeln(`${ACCENT}◆ Forge${RESET} — a bash-style terminal over your files.`);
-    term.writeln(`${DIM}Rig fs + git are live${pyReady ? '' : '; python needs cross-origin isolation (not enabled here yet)'}. Type ${RESET}help${DIM}.${RESET}`);
+    term.writeln(`${DIM}Rig fs + git are live${pyReady ? '' : '; python needs cross-origin isolation (not enabled here yet)'}. Type ${RESET}help${DIM}, or ${RESET}agent "<task>"${DIM} for a tool-using agent.${RESET}`);
     await refreshCache();
     syncPrompt();
     writePrompt();

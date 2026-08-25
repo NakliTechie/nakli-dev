@@ -5774,6 +5774,19 @@ async function aiEnsureImageLoaded(model, onProgress){
   }
 }
 
+// Agent-tier protocol core (raised caps + tool-calling). Lazy-loaded like the
+// Rig fileops module; only touched when a system app asks for the agent tier —
+// the narrow-chat path never imports it.
+let _aiAgentProtoMod = null;
+async function aiAgentProto(){
+  if (!_aiAgentProtoMod) _aiAgentProtoMod = await import('./sys/ai/agent-protocol.mjs');
+  return _aiAgentProtoMod;
+}
+function aiAppIsSystem(appId){
+  const app = APPS.find(item => item.id === appId);
+  return !!app && !app.thirdParty;
+}
+
 function aiNormaliseMessages(messages){
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > AI_MAX_MESSAGES) {
     throw new Error(`Local AI requires 1–${AI_MAX_MESSAGES} messages`);
@@ -5994,26 +6007,46 @@ async function aiDiscoverEndpointModels(config, apiKey = ''){
 async function aiGenerateEndpoint(request){
   const controller = new AbortController();
   aiHost.endpointAbort = controller;
+  // Agent tier: build the body with `tools` and reassemble streamed tool-calls.
+  // Narrow chat (request.agent falsy) sends the exact same body it always did.
+  const proto = request.agent ? await aiAgentProto() : null;
+  const toolAcc = proto ? proto.createToolCallAccumulator() : null;
+  const body = proto
+    ? proto.buildEndpointChatBody({
+        model:request.model.model,
+        messages:request.messages,
+        maxTokens:request.maxTokens,
+        tools:request.tools,
+        toolChoice:request.toolChoice,
+        stream:true,
+      })
+    : {
+        model:request.model.model,
+        messages:request.messages,
+        max_tokens:request.maxTokens,
+        stream:true,
+      };
   const response = await fetch(aiEndpointChatUrl(request.model.baseUrl), {
     method:'POST',
     headers:aiEndpointHeaders(request.model),
     signal:controller.signal,
-    body:JSON.stringify({
-      model:request.model.model,
-      messages:request.messages,
-      max_tokens:request.maxTokens,
-      stream:true,
-    }),
+    body:JSON.stringify(body),
   });
   if (!response.ok) throw new Error(await aiReadEndpointError(response));
 
   const contentType = response.headers.get('content-type') || '';
   if (!response.body || !contentType.includes('text/event-stream')){
     const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content;
-    if (typeof text !== 'string') throw new Error('AI endpoint returned no assistant message');
-    if (text) aiEmit(request, { event:'token', token:text });
-    return data?.choices?.[0]?.finish_reason || 'stop';
+    const message = data?.choices?.[0]?.message;
+    const text = message?.content;
+    if (toolAcc) toolAcc.absorbMessage(message);
+    if (typeof text !== 'string' && !(toolAcc && message?.tool_calls)) {
+      throw new Error('AI endpoint returned no assistant message');
+    }
+    if (typeof text === 'string' && text) aiEmit(request, { event:'token', token:text });
+    if (toolAcc) request.toolCalls = toolAcc.finalize();
+    return data?.choices?.[0]?.finish_reason ||
+      (request.toolCalls?.length ? 'tool_calls' : 'stop');
   }
 
   const reader = response.body.getReader();
@@ -6038,9 +6071,11 @@ async function aiGenerateEndpoint(request){
       if (typeof token === 'string' && token) {
         aiEmit(request, { event:'token', token });
       }
+      if (toolAcc) toolAcc.absorbDelta(choice?.delta);
       if (choice?.finish_reason) finishReason = choice.finish_reason;
     }
   }
+  if (toolAcc) request.toolCalls = toolAcc.finalize();
   return request.cancelled ? 'cancelled' : finishReason;
 }
 
@@ -6091,6 +6126,7 @@ async function aiProcessQueue(){
       aiEmit(request, {
         event:'done',
         finishReason:request.cancelled ? 'cancelled' : finishReason,
+        ...(request.toolCalls?.length ? { toolCalls:request.toolCalls } : {}),
       });
     }
   } catch (error){
@@ -6132,7 +6168,27 @@ async function aiHostSubmit(source, msg, appId){
     const appQueued = aiHost.queue.filter(request => request.appId === appId).length +
       (aiHost.active?.appId === appId ? 1 : 0);
     if (appQueued >= AI_MAX_QUEUE_PER_APP) throw new Error('This app already has too many Local AI requests');
-    const messages = aiNormaliseMessages(msg.messages);
+    // Agent tier — raised caps + tool-calling, restricted to system apps. A
+    // third-party app can never reach it (its manifest cannot express it), so a
+    // request with agent:true from one is refused rather than silently downgraded.
+    const wantsAgent = msg.agent === true;
+    if (wantsAgent && !aiAppIsSystem(appId)) {
+      throw new Error('Agent-tier inference is restricted to system apps');
+    }
+    let messages, tools, toolChoice, maxTokens;
+    if (wantsAgent){
+      const proto = await aiAgentProto();
+      messages = proto.normaliseAgentMessages(msg.messages);
+      tools = proto.normaliseTools(msg.tools);
+      toolChoice = proto.normaliseToolChoice(msg.toolChoice ?? msg.tool_choice);
+      maxTokens = proto.clampAgentMaxTokens(msg.maxTokens);
+      if (tools && tools.length && model.runtime !== 'endpoint'){
+        throw new Error('Tool-calling requires an OpenAI-compatible endpoint model (Settings → AI)');
+      }
+    } else {
+      messages = aiNormaliseMessages(msg.messages);
+      maxTokens = Math.max(16, Math.min(AI_MAX_OUTPUT_TOKENS, Number(msg.maxTokens) || 384));
+    }
     if (source._aiCancelled === true) throw new Error('Local AI request was cancelled');
     const granted = await aiEnsurePermission(appId);
     if (!granted) throw new Error('Local AI permission was not granted');
@@ -6149,8 +6205,11 @@ async function aiHostSubmit(source, msg, appId){
       kind:'chat',
       workerRequestId:`naklios-ai-${++aiHost.requestCounter}`,
       messages,
-      maxTokens:Math.max(16, Math.min(AI_MAX_OUTPUT_TOKENS, Number(msg.maxTokens) || 384)),
+      maxTokens,
       model,
+      agent:wantsAgent,
+      tools,
+      toolChoice,
       cancelled:false,
     };
     aiHost.queue.push(request);
