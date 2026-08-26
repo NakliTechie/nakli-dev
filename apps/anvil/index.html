@@ -333,7 +333,23 @@
   }
   function id(){ return 'x'+Math.random().toString(36).slice(2,9); }
   function load(){ try{ return JSON.parse(localStorage.getItem(LS)); }catch(_){ return null; } }
-  function save(){ try{ const c=JSON.parse(JSON.stringify(state)); localStorage.setItem(LS, JSON.stringify(c)); }catch(_){} }
+  // Session state persists to localStorage (fast, per-device) AND — when a host
+  // backend is connected — to apps/anvil/state.json via naklios.fs, so projects,
+  // tasks, and transcripts ROAM with the files (a new machine on the same Crate
+  // restores them). The host write is debounced; localStorage is the fast cache.
+  const hostFsReady = () => !!(nak && nak.capabilities && nak.capabilities.fs && nak.fs);
+  let remoteSaveTimer=null;
+  function scheduleRemoteSave(){
+    if(!hostFsReady()) return;
+    clearTimeout(remoteSaveTimer);
+    remoteSaveTimer=setTimeout(()=>{ try{ nak.fs.write('state.json', JSON.stringify(state)); }catch(_){} }, 800);
+  }
+  function save(){ try{ const c=JSON.parse(JSON.stringify(state)); localStorage.setItem(LS, JSON.stringify(c)); }catch(_){} scheduleRemoteSave(); }
+  async function loadRemoteState(){
+    if(!hostFsReady()) return null;
+    try{ const data = await nak.fs.read('state.json'); const s = JSON.parse(typeof data==='string'?data:new TextDecoder().decode(data)); return (s && Array.isArray(s.projects)) ? s : null; }
+    catch(_){ return null; }
+  }
 
   const proj = (pid)=> state.projects.find(p=>p.id===pid);
   const activeProject = ()=> proj(state.activeProject) || state.projects[0];
@@ -649,6 +665,9 @@
   // a remembered disk folder if still granted, else the host Folder/Crate, else OPFS.
   if(nak && nak.ready) nak.ready();
   await waitForFsCaps();
+  // Roam: prefer the host-stored session (Crate/Folder) — brings projects, tasks,
+  // and transcripts back on a new machine on the same backend.
+  try{ const remote = await loadRemoteState(); if(remote){ state = remote; } }catch(_){}
   try{
     const saved = await idbGet(DIR_KEY);
     if(saved && typeof saved.queryPermission==='function'){
