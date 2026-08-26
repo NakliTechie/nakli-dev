@@ -236,7 +236,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     history() { return { text: state.history.map((h, i) => `${i + 1}  ${h}`).join('\n'), code: 0 }; },
     which(argv) {
       const v = argv[0];
-      const known = builtins[v] || REGISTRY_ALIAS[v] || registry.describeCommand(v) || (v === 'git' || v === 'python');
+      const known = builtins[v] || REGISTRY_ALIAS[v] || registry.describeCommand(v) || (v === 'git' || v === 'python' || v === 'python3' || v === 'py');
       return { text: known ? v : `${v} not found`, code: known ? 0 : 1 };
     },
     async cat(argv, stdin) {
@@ -494,7 +494,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     help() {
       const cmds = ['cd', 'pwd', 'ls', 'cat', 'echo', 'printf', 'grep', 'rg', 'sed', 'awk', 'diff',
         'find', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'xargs', 'basename', 'dirname',
-        'test', '[', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'chmod', 'stat', 'git', 'python',
+        'test', '[', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'chmod', 'stat', 'git', 'python', 'python3',
         'env', 'export', 'unset', 'clear', 'history', 'which'];
       return { text: 'commands: ' + cmds.join(' ') + '\noperators: | && || ; > >>\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD', code: 0 };
     },
@@ -587,7 +587,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     const verb = argv[0];
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);
-    if (verb === 'python' || verb === 'py') {
+    if (verb === 'python' || verb === 'py' || verb === 'python3') {
       if (!kiln) return { text: 'python: the Kiln kernel is not available (needs cross-origin isolation — open Forge as a tab)', code: 1 };
       // Resolve the code to run: `-c "<code>"`, a `<file.py>`, or bare text.
       let code;
