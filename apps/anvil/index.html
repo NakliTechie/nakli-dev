@@ -185,6 +185,7 @@
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
+  import { createMainThreadKiln } from '../../sys/kiln/main-thread-runtime.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -206,6 +207,7 @@
     // (e.g. inside NakliOS immersive until the host itself is isolated).
     let kiln = null;
     if (self.crossOriginIsolated === true) {
+      // Isolated (standalone tab): the worker Kiln — non-blocking, interruptible.
       try {
         const rigModuleSource = generateRigModule(registry).source;
         const fsBridge = createFsBridge({ backend, mount:'' });
@@ -215,6 +217,12 @@
           loadRuntime: () => createWorkerRuntime({ face, fsBridge, rigModuleSource }),
         });
       } catch(_) { kiln = null; }
+    }
+    if (!kiln) {
+      // Not isolated (e.g. inside NakliOS immersive): main-thread Pyodide with a
+      // workspace<->MEMFS snapshot — no SharedArrayBuffer, so `python` works in
+      // the embedded window too. Reuses one Pyodide across folder remounts.
+      try { kiln = createMainThreadKiln({ fs, mount:'work' }); } catch(_) { kiln = null; }
     }
     shell = createShell({ registry, face, kiln });
     $('ws').textContent = label;
