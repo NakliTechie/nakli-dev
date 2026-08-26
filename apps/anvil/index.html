@@ -70,6 +70,9 @@
   #taskbar .spacer{flex:1}
   .stopbtn{font-size:11px;color:var(--err);background:transparent;border:1px solid var(--err);border-radius:5px;padding:3px 10px;cursor:pointer;flex:0 0 auto}
   .stopbtn:hover{background:var(--err);color:#fff}
+  .gatebtn{font-family:var(--mono);font-size:10.5px;color:var(--fg-2);background:transparent;border:1px solid var(--rule);border-radius:5px;padding:3px 9px;cursor:pointer;flex:0 0 auto;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gatebtn:hover{border-color:var(--accent);color:var(--accent)}
+  .gatebtn.on{color:var(--ok);border-color:var(--ok)}
   #log{flex:1;overflow:auto;padding:16px 0}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .msg{margin:0 0 14px}
@@ -157,6 +160,7 @@
       <span class="dot idle" id="tb-dot"></span>
       <span class="ttl" id="tb-title">No task</span>
       <span class="spacer"></span>
+      <button id="gate-btn" class="gatebtn" title="Set a verify command — the agent isn't 'done' until it exits 0">✓ gate</button>
       <button id="stop" class="stopbtn" hidden>◼ Stop</button>
       <span class="meta" id="tb-meta"></span>
     </div>
@@ -196,7 +200,7 @@
   import { createGrant, createOpLog, createAgentFace } from '../../sys/rig/agent/index.mjs';
   import { createShell } from '../../sys/rig/cli/shell.mjs';
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
-  import { codingToolset, makeToolExecutor } from '../../sys/ai/agent-tools.mjs';
+  import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -208,7 +212,7 @@
   const nak = window.naklios || null;
 
   // ── Rig workspace stack (lifted from Forge) — the agent's file substrate ──
-  let backend, fs, git, registry, grant, opLog, face, shell;
+  let backend, fs, git, registry, grant, opLog, face, shell, kilnRef=null;
   let workspaceLabel = 'memory · scratch';
   function mountWorkspace(newBackend, label, root=''){
     backend = newBackend; workspaceLabel = label;
@@ -241,6 +245,7 @@
       // the embedded window too. Reuses one Pyodide across folder remounts.
       try { kiln = createMainThreadKiln({ fs, mount:'work' }); } catch(_) { kiln = null; }
     }
+    kilnRef = kiln;
     shell = createShell({ registry, face, kiln });
     $('ws').textContent = label;
   }
@@ -423,6 +428,7 @@
     $('tb-dot').className='dot '+((t&&t.status)||'idle');
     $('tb-title').textContent=t?t.title:'No task';
     $('tb-meta').textContent=t?(workspaceLabel):'';
+    const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ gate'; g.classList.toggle('on', !!vc); }
   }
   function renderLog(){
     const box=$('log'); const t=activeTask();
@@ -644,20 +650,30 @@
       }
       return baseExec(nm, ar, callObj);
     };
+    // Verify gate (opt-in per task): the model can't declare done until this
+    // command exits 0. A fresh shell over the SAME workspace (with Kiln, so
+    // `python` gates run); a failing gate feeds its bounded output back and the
+    // agent retries. task_done is enabled so completion is explicit.
+    const verifyCmd = ((t.verifyCmd)||'').trim();
+    const verify = verifyCmd ? makeShellVerifier({ createShell:(o)=>createShell({ ...o, kiln: kilnRef }), registry, face, command: verifyCmd }) : null;
     try{
       const result = await runAgentLoop({
-        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')}, ...convo],
-        tools: codingToolset(mode,{subagents:true}),
+        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
+        tools: codingToolset(mode,{subagents:true, completion: !!verify}),
         infer: inferViaHost,
         executeTool,
         maxSteps:24,
         signal: abortController.signal,
         budget: { tokens: 120000, wallClockMs: 240000 }, // stop runaway loops with a named reason
+        verify,
+        maxVerifyRounds: 3,
         onEvent:(e)=>{
           if(e.type==='tool-call'){ const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
           else if(e.type==='tool-result'){ if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); noteChange(t,liveTool.name,liveTool.args); liveTool=null; } renderLog(); }
           else if(e.type==='tool-error'){ if(liveTool){ liveTool.error=String(e.error); liveTool=null; } renderLog(); }
           else if(e.type==='assistant' && e.content){ t.log.push({k:'assistant',text:e.content}); renderLog(); }
+          else if(e.type==='verify-pass'){ t.log.push({k:'system',text:'✓ gate passed — `'+verifyCmd+'` exit 0'}); renderLog(); }
+          else if(e.type==='verify-fail'){ t.log.push({k:'system',text:'✗ gate failed (round '+(e.round||1)+') — `'+verifyCmd+'` exit '+((e.verdict&&e.verdict.exit)!=null?e.verdict.exit:'?')+'; agent retrying'}); renderLog(); }
           else if(e.type==='error'){ t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
         },
       });
@@ -666,7 +682,9 @@
       t.status = result.stop==='done'?'done':(result.stop==='error'?'error':'idle');
       const stopLabel = result.stop==='aborted' ? 'stopped'
         : result.stop==='budget' ? ('hit budget ('+(result.budgetAxis||'')+')')
+        : result.stop==='unverified' ? 'gate never passed'
         : result.stop;
+      if(result.stop==='unverified') t.status='error';
       t.log.push({k:'system',text:`agent ${stopLabel} · ${result.steps} steps`});
     }catch(e){
       t.status='error';
@@ -696,6 +714,11 @@
   $('send').onclick=submit;
   $('stop').onclick=stopRun;
   $('refresh-files').onclick=renderFiles;
+  $('gate-btn').onclick=()=>{
+    const t=activeTask(); if(!t) return;
+    const v=prompt('Gate command — runs after the agent finishes; the task isn\'t "done" until it exits 0 (e.g. "python -m pytest", "python fib.py", "sh check.sh"). Empty to clear:', t.verifyCmd||'');
+    if(v===null) return; t.verifyCmd=v.trim(); save(); renderTaskbar();
+  };
   const MODES=['code','plan','ask'];
   $('mode-btn').onclick=()=>{ const t=activeTask(); if(!t) return; const i=MODES.indexOf(t.mode||'code'); t.mode=MODES[(i+1)%3]; $('mode-btn').textContent='mode: '+t.mode; $('mode-btn').classList.toggle('on',t.mode!=='code'); save(); };
 
