@@ -721,4 +721,19 @@
   }catch(_){}
   if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
+
+  // Seamlessly follow the host storage backend: when the user switches
+  // browser/folder/crate elsewhere, remount this project's workspace on the new
+  // backend and refresh the explorer — no reload, no prompt.
+  if(nak && nak.onCapabilitiesChange){
+    let lastBackend = (nak.capabilities||{}).fsBackend || null;
+    nak.onCapabilitiesChange(async (caps)=>{
+      const nb = (caps||{}).fsBackend || null;
+      if(nb===lastBackend || folderMode) return;
+      lastBackend = nb;
+      mountedProject = null;
+      await mountProject(state.activeProject);
+      renderAll();
+    });
+  }
 </script>

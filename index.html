@@ -4924,27 +4924,10 @@ async function fsHostSelectBackend(appId, requestedBackendId){
   const currentId = appBoundBackend(appId);
   if (currentId === requestedBackendId) return true;
 
-  const appName = app?.name || appId;
-  const targetWhere = target.id === 'crate'
-    ? `Crate <code>${_dlgEscape(target.displayName() || 'Crate')}</code>`
-    : `NakliOS Folder <code>${_dlgEscape(target.displayName() || 'Folder')}</code>`;
-  const current = currentId ? BACKENDS[currentId] : null;
-  const intro = current
-    ? `Switch <strong>${_dlgEscape(appName)}</strong> from ${_dlgEscape(current.label)} to ${targetWhere}?`
-    : `Let <strong>${_dlgEscape(appName)}</strong> use ${targetWhere}?`;
-  const ok = await nakliosConfirm(
-    `${intro}\n\n` +
-    `It will see only <code>apps/${_dlgEscape(appId)}/</code> on that backend. ` +
-    `Nothing is copied or deleted when you switch.`,
-    {
-      title: `Use ${target.label} for ${appName}?`,
-      okLabel: `Use ${target.label}`,
-      cancelLabel: 'Cancel',
-      allowHtmlBody: true,
-    }
-  );
-  if (!ok) return false;
-
+  // No confirmation on switch: the app is scoped to apps/<id>/ on the user's own
+  // connected backend and switching copies or deletes nothing, so the dialog was
+  // pure friction. Third-party apps are still gated on the manifest 'storage'
+  // permission checked above.
   state.appPermissions[appId] = { backend: target.id, granted: true };
   saveAppPermissions();
   broadcastCapabilities();
