@@ -1,26 +1,39 @@
 # Anvil
 
-A full-fledged, browser-native **code editor** over the Rig workspace — the GUI
-sibling of Forge (the terminal). File tree · tabbed editor · save · real-folder
-persistence (File System Access) · and (planned) an integrated coding agent with
-diff review.
+A browser-native **coding-agent desktop** — a Claude-Code-desktop / Codex-style
+client for the naklios agent. Three panes:
 
-No server, no build (yet), no data leaving the device. A naklios app: it lives at
-`apps/anvil/` alongside Forge (`apps/forge/`) and shares the `sys/rig`
-(fileops/git/agent) and `sys/ai` (agent loop + tools) modules.
+- **Left** — projects → tasks (each task is an agent conversation over a workspace).
+- **Center** — the chat: your prompts, the agent's replies, and a live, collapsible
+  trace of every tool call it makes.
+- **Right** — a **preview** pane that opens only when a task has something to show
+  (rendered HTML, a diff, command/file output) and collapses when it doesn't.
 
-## Status: early foundation
-Working: file tree, tabbed textarea editor with line numbers, save (Ctrl/Cmd-S),
-open a real folder. Next: syntax highlighting (CodeMirror-class), the agent panel
-+ diff review, Python (Kiln). See the naklios `plan/workplan.md` (Batch 6).
+Not an IDE. The agent reads and writes your files; you drive it in conversation
+and review what it produced.
+
+No server, no build, no data leaving the device. A naklios app at `apps/anvil/`,
+the GUI sibling of **Forge** (the terminal). Both run the same agent core —
+`sys/ai` (`runAgentLoop` + `codingToolset`) over `sys/rig` (fileops/git/agent).
+
+## The agent is live inside NakliOS
+The chat calls the host agent-tier inference (`window.naklios.ai`, `agent: true`) —
+the exact transport Forge uses. Run Anvil inside NakliOS (naklios.dev) with a
+model set in Settings → AI and it drives real tool-using runs. Opened standalone
+(bare file server) it renders fully but reports honestly that it needs the host.
+
+## Workspace
+In-memory scratch by default; **Open folder** points the agent at a real local
+folder (File System Access), remembered across reloads (IndexedDB). Same substrate
+as Forge.
 
 ## Run (local)
-Served from the `naklios` repo root so `../../sys/…` resolves:
 
     cd ~/Code/naklios-universe/naklios && python3 -m http.server 8080
     open http://localhost:8080/apps/anvil/
 
-## Relationship to Forge
-Same substrate, two surfaces. Forge is the terminal + agent (keyboard-first,
-tool-call log). Anvil is the editor + agent (tree/editor/diff-review, GUI-first).
-Both are naklios apps over one `sys/` core.
+## Status
+Working: three-pane shell, projects/tasks (localStorage), chat transcript + tool
+trace, collapsible preview (HTML/diff/text), live agent transport, folder open.
+Next: diff-review accept/reject of staged edits, per-project workspace binding,
+richer preview (running app / git status), Crate-backed task persistence.
