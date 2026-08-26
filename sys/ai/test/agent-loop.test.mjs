@@ -12,7 +12,8 @@ import { createGitCore } from '../../rig/git/git-core.mjs';
 import { buildRigRegistry } from '../../rig/registry/index.mjs';
 import { createGrant, createOpLog, createAgentFace } from '../../rig/agent/index.mjs';
 import { createShell } from '../../rig/cli/shell.mjs';
-import { runAgentLoop, shellTool, makeShellExecutor } from '../agent-loop.mjs';
+import { runAgentLoop, shellTool, makeShellExecutor, taskDoneTool,
+  estimateTokens, boundedText, interceptBashCommand } from '../agent-loop.mjs';
 
 let passed = 0;
 const failures = [];
@@ -221,6 +222,175 @@ await test('no verifier → the model still completes on its own (back-compat)',
   });
   eq(result.stop, 'done', 'done without a verifier');
   assert(result.verified === undefined, 'no verified flag when no verifier');
+});
+
+// ── Batch 7: gate memoization by workspace hash ─────────────────────────
+await test('gate memoization: an unchanged workspace hash replays the cached failure — no rerun', async () => {
+  let verifyCalls = 0;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: async () => ({ content: 'I claim it is done', toolCalls: [] }), // never acts
+    executeTool: makeShellExecutor(freshShell()),
+    verify: async () => { verifyCalls++; return { ok: false, exit: 1, stderr: 'still red' }; },
+    workspaceHash: async () => 'STABLE', // workspace never changes
+    maxVerifyRounds: 3,
+  });
+  eq(result.stop, 'unverified', 'stopped unverified');
+  eq(verifyCalls, 1, 'gate ran once; the 2 later identical-hash rounds replayed the memo');
+});
+
+await test('gate memoization: a changed workspace hash reruns the gate', async () => {
+  let verifyCalls = 0;
+  let hashN = 0;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: async () => ({ content: 'done?', toolCalls: [] }),
+    executeTool: makeShellExecutor(freshShell()),
+    verify: async () => { verifyCalls++; return { ok: false, exit: 1, stderr: 'red' }; },
+    workspaceHash: async () => `H${hashN++}`, // different every check
+    maxVerifyRounds: 3,
+  });
+  eq(result.stop, 'unverified', 'unverified');
+  eq(verifyCalls, 3, 'gate reran each round because the hash changed');
+});
+
+// ── Batch 7: bounded gate output as the repair prompt ───────────────────
+await test('bounded gate output is fed back as the repair prompt', async () => {
+  const bigStdout = Array.from({ length: 500 }, (_, i) => `error line ${i}`).join('\n');
+  let sawFeedback = null;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: scriptedInfer([
+      { content: 'done (early)', toolCalls: [] }, // fails → feedback injected
+      (messages) => { sawFeedback = messages[messages.length - 1]; return { content: '', toolCalls: [] }; },
+    ]),
+    executeTool: makeShellExecutor(freshShell()),
+    verify: async () => ({ ok: false, exit: 2, stdout: bigStdout }),
+    gateOutputCap: { maxLines: 50, maxBytes: 5000 },
+    maxVerifyRounds: 3,
+  });
+  assert(sawFeedback && sawFeedback.role === 'user', 'a user repair message was injected');
+  assert(/exit 2/.test(sawFeedback.content), 'the exit code is in the repair prompt');
+  assert(/output truncated/.test(sawFeedback.content), 'the gate output was bounded');
+  assert(sawFeedback.content.split('\n').length < 100, 'feedback is capped, not the full 500 lines');
+});
+
+// ── Batch 7: explicit completion (task_done) + gate veto ────────────────
+await test('task_done: a red gate rejects completion; a later green gate accepts it', async () => {
+  const shell = freshShell();
+  const verify = async () => {
+    const out = (await shell.feed('cat status.txt')).output;
+    const ok = /PASS/.test(out);
+    return { ok, exit: ok ? 0 : 1, stdout: out };
+  };
+  const events = [];
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'do it' }],
+    tools: [shellTool(), taskDoneTool()],
+    infer: scriptedInfer([
+      { content: '', toolCalls: [call('shell', { command: 'echo FAIL > status.txt' }, 's0')] },
+      { content: '', toolCalls: [call('task_done', { summary: 'think done' }, 'd0')] }, // gate RED → rejected
+      { content: '', toolCalls: [call('shell', { command: 'echo PASS > status.txt' }, 's1')] },
+      { content: '', toolCalls: [call('task_done', { summary: 'really done' }, 'd1')] }, // gate GREEN → accepted
+    ]),
+    executeTool: makeShellExecutor(shell),
+    verify,
+    onEvent: (e) => events.push(e),
+  });
+  eq(result.stop, 'done', 'completed via task_done');
+  eq(result.verified, true, 'verified true');
+  // The rejected task_done left a tool message with the gate failure.
+  const rejected = result.messages.find((m) => m.role === 'tool' && m.tool_call_id === 'd0');
+  assert(/NOT complete/.test(rejected.content), 'red task_done fed back the failure');
+  const accepted = result.messages.find((m) => m.role === 'tool' && m.tool_call_id === 'd1');
+  assert(/complete/i.test(accepted.content), 'green task_done accepted');
+});
+
+await test('task_done with no gate wired is accepted as the explicit done signal', async () => {
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool(), taskDoneTool()],
+    infer: scriptedInfer([{ content: '', toolCalls: [call('task_done', {}, 'd')] }]),
+    executeTool: makeShellExecutor(freshShell()),
+  });
+  eq(result.stop, 'done', 'done'); eq(result.verified, true, 'accepted');
+});
+
+// ── Batch 7: the budget ladder (turns / tokens / wall-clock) ────────────
+await test('budget ladder: the turns axis trips its stop reason', async () => {
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: async () => ({ content: '', toolCalls: [call('shell', { command: `echo ${Math.random()}` }, `c${Math.random()}`)] }),
+    executeTool: makeShellExecutor(freshShell()),
+    budget: { turns: 3 },
+    maxSteps: 50,
+  });
+  eq(result.stop, 'budget', 'stopped on budget');
+  eq(result.budgetAxis, 'turns', 'the turns axis');
+  eq(result.steps, 3, 'stopped at the turn budget');
+});
+
+await test('budget ladder: the tokens axis trips its stop reason', async () => {
+  const huge = 'x'.repeat(40_000); // ~10k tokens, dwarfs the budget
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: huge }],
+    tools: [shellTool()],
+    infer: async () => ({ content: '', toolCalls: [call('shell', { command: 'echo hi' }, 'c')] }),
+    executeTool: makeShellExecutor(freshShell()),
+    budget: { tokens: 100 },
+    maxSteps: 50,
+  });
+  eq(result.stop, 'budget', 'stopped on budget');
+  eq(result.budgetAxis, 'tokens', 'the tokens axis');
+});
+
+await test('budget ladder: the wall-clock axis trips its stop reason', async () => {
+  let t = 1000;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: async () => { t += 5000; return { content: '', toolCalls: [call('shell', { command: 'echo hi' }, `c${t}`)] }; },
+    executeTool: makeShellExecutor(freshShell()),
+    budget: { wallClockMs: 10_000 },
+    now: () => t, // injected clock advances 5s per turn
+    maxSteps: 50,
+  });
+  eq(result.stop, 'budget', 'stopped on budget');
+  eq(result.budgetAxis, 'wall-clock', 'the wall-clock axis');
+});
+
+// ── Batch 3 rest: bash interceptor hints ────────────────────────────────
+await test('interceptBashCommand redirects sed -i / grep -r / cat > to structured tools', () => {
+  assert(/edit/.test(interceptBashCommand('sed -i s/a/b/ f.txt') || ''), 'sed -i → edit');
+  assert(/edit/.test(interceptBashCommand('perl -i -pe s/a/b/ f') || ''), 'perl -i → edit');
+  assert(/rg|ripgrep/.test(interceptBashCommand('grep -r foo src/') || ''), 'grep -r → rg');
+  assert(/rg|ripgrep/.test(interceptBashCommand('grep -R foo .') || ''), 'grep -R → rg');
+  assert(/write/.test(interceptBashCommand('cat > out.txt') || ''), 'cat > → write');
+  assert(/write/.test(interceptBashCommand('cat <<EOF') || ''), 'cat heredoc → write');
+  eq(interceptBashCommand('cat f.txt'), null, 'plain cat read is not intercepted');
+  eq(interceptBashCommand('grep foo f.txt'), null, 'non-recursive grep is not intercepted');
+  eq(interceptBashCommand('echo hi > f.txt'), null, 'echo redirect (supported) is not intercepted');
+  eq(interceptBashCommand('ls -la'), null, 'ls is not intercepted');
+});
+
+await test('the shell executor returns the interceptor hint instead of running the command', async () => {
+  const exec = makeShellExecutor(freshShell());
+  const out = await exec('shell', { command: 'sed -i s/a/b/ f.txt' });
+  assert(/edit/.test(out), `hint returned: ${out}`);
+});
+
+// ── token estimator + boundedText (compaction/budget primitives) ────────
+await test('estimateTokens and boundedText behave as monotonic, capping primitives', () => {
+  assert(estimateTokens('a'.repeat(400)) === 100, '~4 chars/token');
+  assert(estimateTokens([{ role: 'user', content: 'a'.repeat(40) }]) === 10, 'over a transcript');
+  const capped = boundedText(Array.from({ length: 300 }, (_, i) => `L${i}`).join('\n'), { maxLines: 10, maxBytes: 9999 });
+  assert(/truncated/.test(capped), 'marks truncation');
+  assert(capped.split('\n').length <= 12, 'capped to ~10 lines');
+  eq(boundedText('short'), 'short', 'short text passes through unchanged');
 });
 
 if (failures.length) {

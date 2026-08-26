@@ -42,6 +42,97 @@ export function shellTool() {
   };
 }
 
+// The explicit-completion tool (Prime Agent's goal.complete()). The model calls
+// it to assert the task is done; the loop's handler runs the verifier gate
+// before accepting, and rejects with the gate's bounded output if it is red.
+// Stronger than "the assistant stopped talking = done" — completion is an
+// affirmative act the harness gets to veto.
+export function taskDoneTool() {
+  return {
+    type: 'function',
+    function: {
+      name: 'task_done',
+      description:
+        'Call this when you believe the task is complete. The verification gate ' +
+        'runs before this is accepted; if the gate is red you receive its output ' +
+        'and must fix the problem and try again. Only a green gate ends the task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'A one-line summary of what you did (optional).' },
+        },
+        required: [],
+      },
+    },
+  };
+}
+
+// Rough token estimate (~4 chars/token) over a string or a message transcript.
+// Deliberately cheap and dependency-free — the budget ladder and compaction only
+// need a monotonic proxy, not a real tokenizer.
+export function estimateTokens(input) {
+  if (typeof input === 'string') return Math.ceil(input.length / 4);
+  if (Array.isArray(input)) {
+    let chars = 0;
+    for (const m of input) {
+      if (typeof m?.content === 'string') chars += m.content.length;
+      if (Array.isArray(m?.tool_calls)) {
+        for (const c of m.tool_calls) chars += (c.function?.arguments || '').length + (c.function?.name || '').length;
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+  return 0;
+}
+
+// Bound a block of text to a line/byte cap for feeding back into the model — the
+// same discipline as tool-output capping, applied to verifier gate output (Prime
+// Agent: "a failed gate returns its bounded output to the agent"). Pure: no file
+// spill (the loop has no workspace face), just a truncation marker.
+export function boundedText(text, { maxLines = 200, maxBytes = 4000 } = {}) {
+  const s = String(text == null ? '' : text);
+  const lines = s.split('\n');
+  let capped = s;
+  let truncated = false;
+  if (lines.length > maxLines) { capped = lines.slice(0, maxLines).join('\n'); truncated = true; }
+  if (capped.length > maxBytes) { capped = capped.slice(0, maxBytes); truncated = true; }
+  return truncated ? capped + `\n… (output truncated: ${lines.length} lines / ${s.length} bytes)` : capped;
+}
+
+// A capped, model-facing rendering of a verifier verdict — the exact text fed
+// back as the repair prompt / task_done rejection.
+function gateFeedback(verdict, cap) {
+  const exit = verdict?.exit ?? 1;
+  const body = String(verdict?.stdout || '') + (verdict?.stderr ? (verdict?.stdout ? '\n' : '') + verdict.stderr : '');
+  return `Verification failed (exit ${exit}). The task is NOT complete.` +
+    (body ? '\n\n' + boundedText(body, cap) : '');
+}
+
+// omp's bash interceptors: shell idioms with a strictly-better structured tool
+// are redirected instead of run, so the model reaches for read/write/edit/rg.
+// Returns a hint string (the tool result) when a command should be intercepted,
+// or null to run it normally. Conservative by design — only idioms the curated
+// shell handles poorly or destructively-in-place are intercepted; plain reads
+// (`cat file`) and simple redirects the shell supports are left alone.
+export function interceptBashCommand(command) {
+  const cmd = String(command == null ? '' : command).trim();
+  if (!cmd) return null;
+  // In-place stream editors → the edit tool (the shell's sed reads stdin only).
+  if (/(^|\|)\s*sed\s+[^|]*-i\b/.test(cmd) || /(^|\|)\s*perl\s+[^|]*-i\b/.test(cmd) ||
+      /(^|\|)\s*awk\s+[^|]*-i\s+inplace\b/.test(cmd)) {
+    return 'Use the `edit` tool for in-place file edits instead of `sed -i`/`perl -i` — it is exact, reviewable, and cannot silently corrupt the file.';
+  }
+  // Recursive grep → the `rg` tool (the shell grep does not recurse directories).
+  if (/(^|\|)\s*grep\s+[^|]*-(?:r|R|-recursive)\b/.test(cmd)) {
+    return 'Use the `rg` tool (ripgrep) for recursive search — the shell `grep` reads named files/stdin only, not directory trees.';
+  }
+  // Writing a file via cat/heredoc redirection → the write tool.
+  if (/(^|\|)\s*cat\s*(?:<<|>)/.test(cmd) || /(^|\|)\s*cat\s+[^|]*<</.test(cmd)) {
+    return 'Use the `write` tool to create or overwrite a file instead of `cat >`/heredoc — it creates parent directories and is unambiguous.';
+  }
+  return null;
+}
+
 // Build the assistant turn to append to the transcript. Mirrors the OpenAI
 // contract: content is null when the turn is purely tool calls.
 function assistantTurn(content, toolCalls) {
@@ -73,6 +164,10 @@ export async function runAgentLoop({
   onEvent = () => {},
   verify = null,           // optional async () => { ok, exit, stdout, stderr } (a K3 verifier)
   maxVerifyRounds = 3,     // how many times a failing verdict is fed back before giving up
+  workspaceHash = null,    // optional async () => string — gate memoization by workspace state
+  budget = null,           // optional { turns, tokens, wallClockMs } — the completion budget ladder
+  gateOutputCap = { maxLines: 200, maxBytes: 4000 }, // how much gate output is fed back
+  now = () => Date.now(),  // injectable clock (wall-clock budget is testable headlessly)
 }) {
   if (typeof infer !== 'function') throw new Error('runAgentLoop needs an infer function');
   if (typeof executeTool !== 'function') throw new Error('runAgentLoop needs an executeTool function');
@@ -81,8 +176,46 @@ export async function runAgentLoop({
   let repeats = 0;
   let prevSignature = null;
   let verifyRounds = 0;
+  const startedAt = now();
+
+  // Gate memoization (Prime Agent): after a verifier failure, remember the
+  // workspace hash and the failing verdict. If the next gate request arrives on
+  // an identical hash, replay the cached failure instead of re-running the gate —
+  // no burning gate runtime on an unchanged workspace. Returns { verdict, ran }.
+  let memo = null; // { hash, verdict }
+  async function runGate() {
+    let hash = null;
+    if (typeof workspaceHash === 'function') {
+      try { hash = await workspaceHash(); } catch { hash = null; }
+    }
+    if (memo && hash != null && hash === memo.hash) {
+      return { verdict: memo.verdict, ran: false };
+    }
+    let verdict;
+    try { verdict = await verify(); }
+    catch (e) { verdict = { ok: false, exit: 1, stderr: String(e?.message || e) }; }
+    if (verdict && !verdict.ok && hash != null) memo = { hash, verdict };
+    else if (verdict && verdict.ok) memo = null; // a pass invalidates any cached failure
+    return { verdict, ran: true };
+  }
+
+  // The budget ladder: turns / tokens / wall-clock. Any tripped axis stops the
+  // loop with stop:'budget' and names the axis. Checked at the top of each turn.
+  function budgetTripped(step) {
+    if (!budget) return null;
+    if (Number.isFinite(budget.turns) && step >= budget.turns) return 'turns';
+    if (Number.isFinite(budget.tokens) && estimateTokens(convo) > budget.tokens) return 'tokens';
+    if (Number.isFinite(budget.wallClockMs) && now() - startedAt >= budget.wallClockMs) return 'wall-clock';
+    return null;
+  }
 
   for (let step = 0; step < maxSteps; step++) {
+    const axis = budgetTripped(step);
+    if (axis) {
+      onEvent({ type: 'budget', axis, step });
+      onEvent({ type: 'done', reason: 'budget', axis, step });
+      return { messages: convo, steps: step, stop: 'budget', budgetAxis: axis, text: lastText };
+    }
     let reply;
     try {
       reply = await infer({ messages: convo, tools });
@@ -101,24 +234,20 @@ export async function runAgentLoop({
     if (!toolCalls.length) {
       convo.push(assistantTurn(content, null));
       if (verify) {
-        let verdict;
-        try { verdict = await verify(); }
-        catch (e) { verdict = { ok: false, exit: 1, stderr: String(e?.message || e) }; }
+        const { verdict, ran } = await runGate();
         if (verdict && verdict.ok) {
           onEvent({ type: 'verify-pass', verdict, step });
           onEvent({ type: 'done', reason: 'verified', step });
           return { messages: convo, steps: step + 1, stop: 'done', verified: true, text: lastText };
         }
         verifyRounds++;
-        onEvent({ type: 'verify-fail', verdict, round: verifyRounds, step });
+        onEvent({ type: 'verify-fail', verdict, round: verifyRounds, ran, step });
         if (verifyRounds >= maxVerifyRounds) {
           onEvent({ type: 'done', reason: 'unverified', step });
           return { messages: convo, steps: step + 1, stop: 'unverified', verified: false, text: lastText, verdict };
         }
-        const detail = String(verdict?.stderr || verdict?.stdout || '').slice(0, 1000);
         convo.push({ role: 'user', content:
-          `Verification failed (exit ${verdict?.exit ?? 1}). The task is NOT complete. ` +
-          `Fix the problem and continue.${detail ? '\n\n' + detail : ''}` });
+          gateFeedback(verdict, gateOutputCap) + '\nFix the problem and continue.' });
         continue;
       }
       onEvent({ type: 'done', reason: reply?.finishReason || 'stop', step });
@@ -138,11 +267,39 @@ export async function runAgentLoop({
 
     convo.push(assistantTurn(content, toolCalls));
 
-    // Execute each tool call and feed the result back as a tool message.
+    // Execute each tool call and feed the result back as a tool message. A
+    // `task_done` call is intercepted here (not passed to executeTool): the loop
+    // owns completion, so it runs the gate and either accepts or rejects.
+    let gateGreen = false;
     for (let i = 0; i < toolCalls.length; i++) {
       const call = toolCalls[i];
       const id = callId(call, step, i);
       const name = call.function?.name || '';
+
+      if (name === 'task_done') {
+        if (!verify) { // no gate wired → the explicit signal is accepted as-is
+          onEvent({ type: 'tool-result', name, id, result: 'accepted', step });
+          convo.push({ role: 'tool', tool_call_id: id, content: 'Task accepted (no verification gate configured).' });
+          gateGreen = true;
+          continue;
+        }
+        const { verdict, ran } = await runGate();
+        if (verdict && verdict.ok) {
+          onEvent({ type: 'verify-pass', verdict, step });
+          convo.push({ role: 'tool', tool_call_id: id, content: 'Verification passed. Task complete.' });
+          gateGreen = true;
+        } else {
+          verifyRounds++;
+          onEvent({ type: 'verify-fail', verdict, round: verifyRounds, ran, step });
+          convo.push({ role: 'tool', tool_call_id: id, content: gateFeedback(verdict, gateOutputCap) });
+          if (verifyRounds >= maxVerifyRounds) {
+            onEvent({ type: 'done', reason: 'unverified', step });
+            return { messages: convo, steps: step + 1, stop: 'unverified', verified: false, text: lastText, verdict };
+          }
+        }
+        continue;
+      }
+
       const parsed = parseToolArguments(call);
       let resultText;
       if (!parsed.ok) {
@@ -160,6 +317,11 @@ export async function runAgentLoop({
       }
       convo.push({ role: 'tool', tool_call_id: id, content: String(resultText ?? '') });
     }
+
+    if (gateGreen) {
+      onEvent({ type: 'done', reason: 'verified', step });
+      return { messages: convo, steps: step + 1, stop: 'done', verified: true, text: lastText };
+    }
   }
 
   onEvent({ type: 'max-steps', steps: maxSteps });
@@ -174,6 +336,8 @@ export function makeShellExecutor(shell) {
     if (name !== 'shell') return `Error: unknown tool "${name}"`;
     const command = typeof args?.command === 'string' ? args.command : '';
     if (!command.trim()) return 'Error: shell tool requires a non-empty command';
+    const hint = interceptBashCommand(command);
+    if (hint) return hint; // omp interceptor: redirect to a structured tool, don't run
     const res = await shell.feed(command);
     const out = res?.output ?? '';
     return out === '' ? '(no output)' : String(out);
