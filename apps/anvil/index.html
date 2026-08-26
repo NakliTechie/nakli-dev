@@ -182,6 +182,9 @@
   import { createShell } from '../../sys/rig/cli/shell.mjs';
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
   import { codingToolset, makeToolExecutor } from '../../sys/ai/agent-tools.mjs';
+  import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
+  import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
+  import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -197,7 +200,23 @@
     grant = createGrant({ prefixes:[''], scopes:['fs:read','fs:write','fs:remove','git:read','git:write'] });
     opLog = createOpLog({ fs: createFileops({ backend:new MemoryBackend() }) });
     face = createAgentFace({ registry, grant, opLog, actor:'agent' });
-    shell = createShell({ registry, face, kiln:null });
+    // Kiln (Pyodide) — same wiring as Forge. Requires cross-origin isolation
+    // (SharedArrayBuffer); available when Anvil is a top-level tab under the
+    // /apps/anvil/* COI headers, degrades to "python unavailable" otherwise
+    // (e.g. inside NakliOS immersive until the host itself is isolated).
+    let kiln = null;
+    if (self.crossOriginIsolated === true) {
+      try {
+        const rigModuleSource = generateRigModule(registry).source;
+        const fsBridge = createFsBridge({ backend, mount:'' });
+        kiln = createKiln({
+          sizeBytes: 12 * 1024 * 1024,
+          consent: () => true,
+          loadRuntime: () => createWorkerRuntime({ face, fsBridge, rigModuleSource }),
+        });
+      } catch(_) { kiln = null; }
+    }
+    shell = createShell({ registry, face, kiln });
     $('ws').textContent = label;
   }
   async function seedScratch(){

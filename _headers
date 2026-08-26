@@ -6,11 +6,15 @@
 # with COOP: same-origin + COEP. We use `credentialless` so cross-origin
 # subresources (Pyodide wasm/wheels from the CDN) load without a CORP header.
 #
-# Scope: /apps/forge/* only. As a TOP-LEVEL tab, Forge then isolates itself and
-# `python` works; as an EMBEDDED iframe (Immersive) it is not isolated (the
-# parent shell has no COOP/COEP) and degrades gracefully to the "needs
-# cross-origin isolation" notice — no change to how the shell or any other
-# embedded app loads. Isolating the shell itself is a separate, larger step.
+# Scope: /apps/forge/* and /apps/anvil/* (both run the Kiln kernel). As a
+# TOP-LEVEL tab each isolates itself and `python` works; as an EMBEDDED iframe
+# (Immersive) it is not isolated (the parent shell has no COOP/COEP) and degrades
+# gracefully to the "needs cross-origin isolation" notice — no change to how the
+# shell or any other embedded app loads. Isolating the shell itself is a
+# separate, larger step (COI Phase 2).
 /apps/forge/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+/apps/anvil/*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: credentialless
