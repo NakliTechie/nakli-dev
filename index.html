@@ -5361,6 +5361,52 @@ function aiSelectedModel(){
   };
 }
 
+// ── On-device model — Chrome's built-in Gemini Nano (Prompt API) ────────
+// GENERAL-PURPOSE ONLY. Nano is the zero-config default for non-agent (GP)
+// completions whenever the browser exposes it. The agent tier (tool-calling,
+// Anvil/Forge) NEVER uses Nano — it resolves to the user's configured endpoint,
+// and the existing "tool-calling requires an endpoint" gate applies from there.
+// Availability is async, so it's probed once at boot and cached.
+const aiNano = { checked:false, available:false, downloadable:false };
+// Apps that consume the HOST agent tier (tool-calling coding). They report their
+// configured model and their agent requests never touch Nano. Apps with their
+// own agent stacks are migrated onto this split one at a time.
+const AI_HOST_AGENT_APPS = new Set(['anvil', 'forge']);
+function aiOnDeviceApi(){
+  return (typeof self !== 'undefined' && 'LanguageModel' in self) ? self.LanguageModel : null;
+}
+async function aiProbeNano(){
+  aiNano.checked = true;
+  const api = aiOnDeviceApi();
+  if (!api){ aiNano.available = false; aiNano.downloadable = false; return; }
+  try {
+    const status = await api.availability();
+    aiNano.available = status === 'available';
+    aiNano.downloadable = status === 'downloadable' || status === 'downloading';
+  } catch(_){ aiNano.available = false; aiNano.downloadable = false; }
+}
+function aiNanoModel(){
+  return {
+    key:'nano', id:'gemini-nano', label:'Gemini Nano (on-device)',
+    description:"Chrome's built-in on-device model — private, offline, zero setup. General-purpose only; coding uses your configured endpoint.",
+    runtime:'ondevice', scope:'device', generationConfig:{},
+  };
+}
+// Tier-aware model resolution. GP → Nano when available, unless the user has
+// explicitly chosen an endpoint (their choice for GP wins). Agent → the user's
+// explicit selection, never Nano.
+function aiResolveModel(wantsAgent){
+  const selected = aiSelectedModel();
+  if (wantsAgent) return selected;
+  if (selected.runtime === 'endpoint') return selected;
+  if (aiNano.available) return aiNanoModel();
+  return selected;
+}
+// GP availability: Nano covers the general tier even without WebGPU or an endpoint.
+function aiGeneralRuntimeAvailable(){
+  return aiNano.available || aiRuntimeAvailable(aiSelectedModel());
+}
+
 function aiSelectedImageModel(){
   if (aiSettings.imageModelKey === 'endpoint'){
     let baseUrl = '';
@@ -5404,6 +5450,9 @@ function aiRefreshSelectedModel(){
     : `LocalMind · ${imageSelected.label}`;
 }
 aiRefreshSelectedModel();
+// Probe on-device (Gemini Nano) availability once at boot; re-broadcast so
+// general-purpose apps pick it up as their zero-config default without a reload.
+void aiProbeNano().then(() => { try { broadcastCapabilities(); } catch(_){} });
 
 function aiCredentialId(baseUrl){
   try { return new URL(aiNormaliseEndpointBase(baseUrl)).origin; } catch(_) { return ''; }
@@ -5522,6 +5571,7 @@ const aiHost = {
   lastAppId:null,
   permissionPrompts:new Map(),
   endpointAbort:null,
+  onDeviceAbort:null,
 };
 
 const aiImageHost = {
@@ -5545,6 +5595,7 @@ function aiRuntimeAvailable(model = aiSelectedModel()){
   if (model.runtime === 'endpoint') {
     return !!model.baseUrl && !!model.model && typeof fetch === 'function';
   }
+  if (model.runtime === 'ondevice') return aiNano.available;
   return aiWebGpuAvailable();
 }
 
@@ -5562,7 +5613,7 @@ function aiManifestAllows(appId){
 
 function aiCapabilityForApp(appId){
   const decision = aiPermissionDecision(appId);
-  return aiRuntimeAvailable() &&
+  return aiGeneralRuntimeAvailable() &&
     aiManifestAllows(appId) &&
     decision?.granted !== false;
 }
@@ -5838,7 +5889,7 @@ function aiCreateImageWorker(model){
 
 async function aiEnsureLoaded(model, onProgress){
   if (aiImageHost.worker) aiDestroyImageWorker();
-  if (model.runtime === 'endpoint'){
+  if (model.runtime === 'endpoint' || model.runtime === 'ondevice'){
     aiSetState('ready');
     return;
   }
@@ -6215,7 +6266,57 @@ async function aiGenerate(request){
       aiHost.endpointAbort = null;
     }
   }
+  if (request.model.runtime === 'ondevice') return aiGenerateOnDevice(request);
   return aiGenerateWorker(request);
+}
+
+// On-device (Gemini Nano) streamed completion. GP tier only — no tools. Maps the
+// OpenAI-style messages to a system prompt + prompt text, streams the reply, and
+// emits the incremental delta (Chrome versions differ on cumulative vs.
+// incremental chunks, so we diff against what we've emitted).
+async function aiGenerateOnDevice(request){
+  const api = aiOnDeviceApi();
+  if (!api) throw new Error('On-device model is unavailable in this browser');
+  const controller = new AbortController();
+  aiHost.onDeviceAbort = controller;
+  let session = null;
+  try {
+    const msgs = request.messages || [];
+    const system = msgs.filter(m => m.role === 'system')
+      .map(m => String(m.content || '')).filter(Boolean).join('\n\n');
+    const convo = msgs.filter(m => m.role !== 'system');
+    const promptText = convo.length <= 1
+      ? String((convo[0] && convo[0].content) || '')
+      : convo.map(m => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${String(m.content || '')}`)
+          .join('\n') + '\nAssistant:';
+    let usedInitialPrompts = false;
+    try {
+      const opts = { signal: controller.signal };
+      if (system) { opts.initialPrompts = [{ role: 'system', content: system }]; usedInitialPrompts = true; }
+      session = await api.create(opts);
+    } catch (_){
+      usedInitialPrompts = false;
+      session = await api.create({ signal: controller.signal });
+    }
+    const text = (system && !usedInitialPrompts) ? (system + '\n\n' + promptText) : promptText;
+    const stream = session.promptStreaming(text, { signal: controller.signal });
+    let emitted = '';
+    for await (const chunk of stream){
+      if (request.cancelled) break;
+      const full = String(chunk == null ? '' : chunk);
+      let delta;
+      if (full.startsWith(emitted)) { delta = full.slice(emitted.length); emitted = full; }
+      else { delta = full; emitted += full; }
+      if (delta) aiEmit(request, { event:'token', token: delta });
+    }
+    return request.cancelled ? 'cancelled' : 'stop';
+  } catch (error){
+    if (request.cancelled || error?.name === 'AbortError') return 'cancelled';
+    throw new Error('On-device model failed: ' + (error?.message || error));
+  } finally {
+    aiHost.onDeviceAbort = null;
+    try { session?.destroy?.(); } catch(_){}
+  }
 }
 
 async function aiProcessQueue(){
@@ -6277,11 +6378,17 @@ async function aiHostSubmit(source, msg, appId){
     kind:'chat',
   };
   try {
-    const model = aiSelectedModel();
+    // Tier-aware routing: agent requests use the user's configured model (never
+    // Nano); general-purpose requests default to on-device Nano when available.
+    const wantsAgent = msg.agent === true;
+    const model = aiResolveModel(wantsAgent);
     if (!requestId) throw new Error('Local AI requestId is required');
     if (!aiRuntimeAvailable(model)){
       if (model.runtime === 'endpoint') {
         throw new Error('Configure an endpoint URL and model in Settings → AI');
+      }
+      if (model.runtime === 'ondevice') {
+        throw new Error('The on-device model (Gemini Nano) is not available in this browser');
       }
       throw new Error('This on-device model requires WebGPU in a recent Chrome or Edge browser');
     }
@@ -6296,7 +6403,6 @@ async function aiHostSubmit(source, msg, appId){
     // Agent tier — raised caps + tool-calling, restricted to system apps. A
     // third-party app can never reach it (its manifest cannot express it), so a
     // request with agent:true from one is refused rather than silently downgraded.
-    const wantsAgent = msg.agent === true;
     if (wantsAgent && !aiAppIsSystem(appId)) {
       throw new Error('Agent-tier inference is restricted to system apps');
     }
@@ -6460,6 +6566,8 @@ function aiHostCancel(source, requestId){
     if (aiHost.active.model?.runtime === 'endpoint' ||
         aiHost.active.model?.runtime === 'endpoint-image'){
       aiHost.endpointAbort?.abort();
+    } else if (aiHost.active.model?.runtime === 'ondevice'){
+      aiHost.onDeviceAbort?.abort();
     } else if (aiHost.active.kind === 'image'){
       const reject = aiImageHost.activeReject || aiImageHost.loadReject;
       aiDestroyImageWorker();
@@ -6483,6 +6591,8 @@ function aiHostCancelSource(source){
     if (aiHost.active.model?.runtime === 'endpoint' ||
         aiHost.active.model?.runtime === 'endpoint-image'){
       aiHost.endpointAbort?.abort();
+    } else if (aiHost.active.model?.runtime === 'ondevice'){
+      aiHost.onDeviceAbort?.abort();
     } else if (aiHost.active.kind === 'image'){
       const reject = aiImageHost.activeReject || aiImageHost.loadReject;
       aiDestroyImageWorker();
@@ -7090,9 +7200,13 @@ function capabilitySnapshot(appId){
   const fsCap = available.length > 0 && !explicitlyDenied;
   const fsBackends = available.map(backendDescriptor).filter(Boolean);
   const fsBackend = appBoundBackend(appId);
-  const aiModel = aiSelectedModel();
-  const aiImageModel = aiSelectedImageModel();
   const isSystem = aiAppIsSystem(appId);
+  // The host's agent-tier consumers (coding) report their configured model;
+  // every other app runs the GP tier and reports the resolved GP model (Nano
+  // when it's the zero-config default). Other apps with their own agent stacks
+  // are migrated onto this split one by one.
+  const aiModel = AI_HOST_AGENT_APPS.has(appId) ? aiSelectedModel() : aiResolveModel(false);
+  const aiImageModel = aiSelectedImageModel();
   return {
     fs: fsCap,
     fsBackends,
