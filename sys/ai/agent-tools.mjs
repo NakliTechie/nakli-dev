@@ -17,7 +17,8 @@
 //   const exec  = makeToolExecutor({ shell, face });
 //   await runAgentLoop({ messages, tools, infer, executeTool: exec });
 
-import { shellTool, makeShellExecutor, runAgentLoop } from './agent-loop.mjs';
+import { shellTool, makeShellExecutor, runAgentLoop, taskDoneTool } from './agent-loop.mjs';
+import { renderHashline, applyHashlineBlock, parseHashlineEdit } from './hashline.mjs';
 
 const READ_MAX_LINES = 2000;
 const READ_MAX_BYTES = 50_000;
@@ -79,6 +80,28 @@ export function todoTool() {
   } };
 }
 
+// omp hashline edit mode (a second edit surface). `read_lines` returns a
+// content-hash-anchored read; `edit_lines` applies line-ref ops whose header TAG
+// must match the current file (a stale tag is rejected — no corrupting edit).
+export function readLinesTool() {
+  return { type: 'function', function: {
+    name: 'read_lines',
+    description: 'Read a file anchored for line edits: a header "[path#TAG]" plus 1-indexed "N: line" rows. Copy the TAG into an edit_lines block to edit by line number without retyping the old text.',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: 'Workspace-relative path.' },
+    }, required: ['path'] },
+  } };
+}
+export function editLinesTool() {
+  return { type: 'function', function: {
+    name: 'edit_lines',
+    description: 'Edit a file by line reference. Provide a block: first line "[path#TAG]" (TAG copied from the latest read_lines), then ops — PUT N.=M: (replace lines N..M with +body rows) / PUT <N: (insert before N) / PUT >N: (insert after N) / PUT >$: (append) / CUT N.=M (delete N..M). Body rows are "+text"; a bare "+" is a blank line. A stale TAG is rejected.',
+    parameters: { type: 'object', properties: {
+      edit: { type: 'string', description: 'The full edit block including the [path#TAG] header.' },
+    }, required: ['edit'] },
+  } };
+}
+
 export function taskTool() {
   return { type: 'function', function: {
     name: 'task',
@@ -99,10 +122,13 @@ export const MODE_TOOLS = {
 };
 
 // The coding tool set for a mode. `shell` stays the escape hatch (code mode only).
-// `task` is included only when subagents are wired (an infer is available).
-export function codingToolset(mode = 'code', { subagents = false } = {}) {
+// Opt-in extras keep the default surface minimal (pi's lesson): `subagents` adds
+// `task`, `hashline` adds read_lines/edit_lines, `completion` adds task_done.
+export function codingToolset(mode = 'code', { subagents = false, hashline = false, completion = false } = {}) {
   const all = [readTool(), editTool(), writeTool(), applyPatchTool(), todoTool(), shellTool()];
   if (subagents) all.push(taskTool());
+  if (hashline) all.push(readLinesTool(), editLinesTool());
+  if (completion) all.push(taskDoneTool());
   const allow = MODE_TOOLS[mode];
   return allow ? all.filter((t) => allow.has(t.function.name)) : all;
 }
@@ -464,6 +490,29 @@ export function makeToolExecutor({ shell, face, mode = 'code', infer = null, sub
         const w = await writeFile(args?.path, ed.content);
         if (w.ok) noteRead(p); // the new state is now known
         return w.ok ? `Edited ${resolve(args?.path)} (${ed.count} replacement${ed.count === 1 ? '' : 's'}, ${ed.strategy} match)` : `Error writing ${args?.path}: ${w.error}`;
+      }
+
+      if (name === 'read_lines') {
+        const r = await readFile(args?.path);
+        if (!r.ok) return `Error reading ${args?.path}: ${r.error}`;
+        noteRead(resolve(args?.path));
+        return await capOutput(renderHashline(resolve(args?.path), r.data), 'read_lines output');
+      }
+
+      if (name === 'edit_lines') {
+        const block = String(args?.edit ?? '');
+        const parsed = parseHashlineEdit(block);
+        if (!parsed.ok) return `Error: ${parsed.error}`;
+        const p = resolve(parsed.path);
+        const r = await readFile(parsed.path);
+        if (!r.ok) return `Error: cannot edit ${parsed.path}: ${r.error}`;
+        // The content-hash TAG is the freshness guarantee (stronger than the
+        // read-before-edit ledger), so a stale file is rejected here structurally.
+        const res = applyHashlineBlock(r.data, block);
+        if (!res.ok) return `Error editing ${parsed.path}: ${res.error}`;
+        const w = await writeFile(parsed.path, res.content);
+        if (w.ok) noteRead(p);
+        return w.ok ? `Edited ${p} by line ref (${res.applied} op${res.applied === 1 ? '' : 's'})` : `Error writing ${parsed.path}: ${w.error}`;
       }
 
       if (name === 'apply_patch') {
