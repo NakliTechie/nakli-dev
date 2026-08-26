@@ -393,6 +393,33 @@ await test('estimateTokens and boundedText behave as monotonic, capping primitiv
   eq(boundedText('short'), 'short', 'short text passes through unchanged');
 });
 
+// ── abort: a Stop signal ends the loop cooperatively ──
+await test('an already-aborted signal stops before the first inference', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  let inferCalls = 0;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [], infer: async () => { inferCalls++; return { content: 'hi', toolCalls: [] }; },
+    executeTool: async () => 'ok', signal: ac.signal,
+  });
+  eq(result.stop, 'aborted', 'stop reason is aborted');
+  eq(inferCalls, 0, 'never called infer once already aborted');
+});
+await test('aborting mid-run stops at the next turn boundary', async () => {
+  const ac = new AbortController();
+  let inferCalls = 0;
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [{ type: 'function', function: { name: 'noop', parameters: {} } }],
+    infer: async () => { inferCalls++; if (inferCalls === 1) return { content: 'working', toolCalls: [call('noop', {}, 't1')] }; return { content: 'more', toolCalls: [call('noop', {}, 't2')] }; },
+    executeTool: async () => { ac.abort(); return 'did work'; }, // abort during the first tool
+    signal: ac.signal, maxSteps: 10,
+  });
+  eq(result.stop, 'aborted', 'stopped after the aborting turn');
+  assert(inferCalls <= 2, 'did not keep looping after abort');
+});
+
 if (failures.length) {
   console.error(`agent-loop: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);

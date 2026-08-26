@@ -168,6 +168,7 @@ export async function runAgentLoop({
   budget = null,           // optional { turns, tokens, wallClockMs } — the completion budget ladder
   gateOutputCap = { maxLines: 200, maxBytes: 4000 }, // how much gate output is fed back
   now = () => Date.now(),  // injectable clock (wall-clock budget is testable headlessly)
+  signal = null,           // optional AbortSignal — cooperative stop between turns/tools
 }) {
   if (typeof infer !== 'function') throw new Error('runAgentLoop needs an infer function');
   if (typeof executeTool !== 'function') throw new Error('runAgentLoop needs an executeTool function');
@@ -177,6 +178,13 @@ export async function runAgentLoop({
   let prevSignature = null;
   let verifyRounds = 0;
   const startedAt = now();
+
+  // Cooperative stop: the caller aborts the signal (a Stop button). We check it
+  // between turns, right after inference, and before each tool call, then return
+  // stop:'aborted' with whatever conversation exists so far. An in-flight
+  // inference/tool call is not force-killed — the loop stops at the next boundary.
+  const aborted = () => !!(signal && signal.aborted);
+  const abortReturn = (step) => { onEvent({ type: 'aborted', step }); return { messages: convo, steps: step, stop: 'aborted', text: lastText }; };
 
   // Gate memoization (Prime Agent): after a verifier failure, remember the
   // workspace hash and the failing verdict. If the next gate request arrives on
@@ -210,6 +218,7 @@ export async function runAgentLoop({
   }
 
   for (let step = 0; step < maxSteps; step++) {
+    if (aborted()) return abortReturn(step);
     const axis = budgetTripped(step);
     if (axis) {
       onEvent({ type: 'budget', axis, step });
@@ -224,6 +233,7 @@ export async function runAgentLoop({
       return { messages: convo, steps: step, stop: 'error', text: lastText, error: String(e?.message || e) };
     }
 
+    if (aborted()) return abortReturn(step);
     const content = typeof reply?.content === 'string' ? reply.content : '';
     const toolCalls = Array.isArray(reply?.toolCalls) ? reply.toolCalls : [];
     if (content) { lastText = content; onEvent({ type: 'assistant', content, step }); }
@@ -272,6 +282,7 @@ export async function runAgentLoop({
     // owns completion, so it runs the gate and either accepts or rejects.
     let gateGreen = false;
     for (let i = 0; i < toolCalls.length; i++) {
+      if (aborted()) return abortReturn(step + 1);
       const call = toolCalls[i];
       const id = callId(call, step, i);
       const name = call.function?.name || '';
