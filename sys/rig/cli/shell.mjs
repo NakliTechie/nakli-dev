@@ -216,6 +216,28 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
 
   async function runRegistry(cmdName, argv, stdin) {
     const long = cmdName === 'fs.list' && argv.includes('-l');
+    // Multi-path fan-out for `rm`: a glob (`rm *.txt`) expands to several
+    // positionals, but fs.remove takes one `path`. Invoke per path so every
+    // match is removed (bash semantics), and batch the destructive confirms
+    // into one prompt instead of losing all but the first match.
+    if (cmdName === 'fs.remove') {
+      const flags = argv.filter((a) => a.length > 1 && a[0] === '-');
+      const paths = argv.filter((a) => !(a.length && a[0] === '-'));
+      if (paths.length > 1) {
+        const proposals = [];
+        const errors = [];
+        for (const p of paths) {
+          const res = await face.invoke('fs.remove', buildRegistryInput(cmdName, [...flags, p]));
+          if (res.staged) proposals.push({ proposalId: res.proposalId, verb: `rm ${p}` });
+          else if (!res.ok) errors.push(`rm: ${p}: ${res.message || 'failed'}`);
+        }
+        if (proposals.length) {
+          return { staged: proposals[0].proposalId, proposals, verb: `rm (${proposals.length} paths)` };
+        }
+        if (errors.length) return { text: errors.join('\n'), code: 1 };
+        return { text: '', code: 0 };
+      }
+    }
     const input = buildRegistryInput(cmdName, argv);
     const res = await face.invoke(cmdName, input);
     if (res.staged) return { staged: res.proposalId, verb: cmdName };
@@ -626,7 +648,22 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     let name; let input = {};
     switch (sub) {
       case 'init': input = {}; name = 'git.init'; break;
-      case 'add': name = 'git.add'; input = { filepath: rel(positional[0] || '') }; break;
+      case 'add': {
+        // Multi-path fan-out: `git add *.txt` expands to several positionals;
+        // stage each (git.add is non-destructive — no confirm) so all matches
+        // are added, not just the first.
+        if (positional.length > 1) {
+          const errors = [];
+          for (const f of positional) {
+            const r = await face.invoke('git.add', { filepath: rel(f) });
+            if (!r.ok) errors.push(`git add: ${f}: ${r.message || 'failed'}`);
+          }
+          return errors.length
+            ? { text: errors.join('\n'), code: 1 }
+            : { text: renderGit('add', { ok: true }), code: 0 };
+        }
+        name = 'git.add'; input = { filepath: rel(positional[0] || '') }; break;
+      }
       case 'rm': name = 'git.remove'; input = { filepath: rel(positional[0] || '') }; break;
       case 'commit': {
         const mi = rest.findIndex((a) => a === '-m' || a === '--message');
@@ -672,10 +709,20 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     if (pending) {
       const ans = String(line == null ? '' : line).trim().toLowerCase();
       const p = pending; pending = null;
+      // One or many staged proposals (a glob like `rm *.txt` batches several
+      // under a single confirm). Accept/reject them all as a unit.
+      const proposals = p.proposals || [{ proposalId: p.proposalId, verb: p.verb }];
       if (ans === 'y' || ans === 'yes') {
-        const r = await face.accept(p.proposalId);
-        write(r.ok ? '' : `${p.verb}: ${r.message || 'failed'}`);
-      } else { face.reject(p.proposalId); write(`cancelled: ${p.verb}`); }
+        const errs = [];
+        for (const pr of proposals) {
+          const r = await face.accept(pr.proposalId);
+          if (!r.ok) errs.push(`${pr.verb}: ${r.message || 'failed'}`);
+        }
+        write(errs.join('\n'));
+      } else {
+        for (const pr of proposals) face.reject(pr.proposalId);
+        write(`cancelled: ${p.verb}`);
+      }
       return { output: out.join('\n') };
     }
 
@@ -690,7 +737,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       lastCode = res.code || 0;
       if (res.clear) { cleared = true; continue; }
       if (res.staged) {
-        pending = { proposalId: res.staged, verb: res.verb };
+        pending = { proposalId: res.staged, verb: res.verb, proposals: res.proposals };
         write(`${res.verb} is destructive. confirm? [y/N]`);
         return { output: out.join('\n'), awaitingConfirm: res.staged };
       }

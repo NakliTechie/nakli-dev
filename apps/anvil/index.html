@@ -152,7 +152,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -203,6 +203,7 @@
   import { createShell } from '../../sys/rig/cli/shell.mjs';
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
+  import { buildProjectContext, appendMemory, countMemory, rememberTool } from '../../sys/ai/project-context.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -451,9 +452,28 @@
       ? 'Showing the whole store (all apps) — click for this project only'
       : 'Showing this project — click for the whole store (all apps)';
   }
+  // Project memory chip: visible when the project workspace has AGENTS.md or
+  // memory.md; clicking opens whichever exists (memory first) in the preview.
+  async function updateMemChip(){
+    const b=$('mem-chip'); if(!b) return;
+    let has=false;
+    for(const f of ['memory.md','AGENTS.md']){
+      try{ const r=await fs.read(f,{encoding:'utf-8'}); if(r&&r.ok){ has=true; break; } }catch(_){}
+    }
+    b.hidden=!has;
+  }
+  async function openProjectMemory(){
+    for(const f of ['memory.md','AGENTS.md']){
+      try{ const r=await fs.read(f,{encoding:'utf-8'}); if(r&&r.ok){
+        globalPreview={ type:'text', file:f, content:String(r.data).slice(0,50000) };
+        state.previewOpen=true; save(); renderPreview(); return;
+      } }catch(_){}
+    }
+  }
   async function renderFiles(){
     const box=$('files'); if(!box) return;
     updateScopeBtn();
+    void updateMemChip();
     const efs = explorerFs();
     const tag=$('ws-tag');
     if(tag) tag.textContent = filesScope==='all' ? 'all files' : ((workspaceLabel||'').split(' · ')[0]||'');
@@ -706,6 +726,16 @@
     // review is after-the-fact). Cheap: one extra read per mutating tool call.
     const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
     const executeTool = async (nm, ar, callObj)=>{
+      // Project memory: the agent records a durable learning into memory.md at
+      // the workspace root (append-only), so future tasks here start with it.
+      if(nm==='remember'){
+        const note=String((ar&&ar.note)||'').trim();
+        if(!note) return 'Nothing recorded (empty note).';
+        let cur=null; try{ const r=await fs.read('memory.md',{encoding:'utf-8'}); if(r&&r.ok) cur=r.data; }catch(_){}
+        const next=appendMemory(cur, note);
+        if(next!==cur){ await fs.write('memory.md', next); renderFiles(); }
+        return 'Recorded to memory.md ('+countMemory(next)+' note'+(countMemory(next)===1?'':'s')+').';
+      }
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
         try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }
@@ -718,10 +748,27 @@
     // agent retries. task_done is enabled so completion is explicit.
     const verifyCmd = ((t.verifyCmd)||'').trim();
     const verify = verifyCmd ? makeShellVerifier({ createShell:(o)=>createShell({ ...o, kiln: kilnRef }), registry, face, command: verifyCmd }) : null;
+    // Per-project memory & skills: prepend AGENTS.md + memory.md (workspace root)
+    // so the task starts with this project's conventions and past learnings.
+    let projectContext='';
+    try{
+      const [ag, mem] = await Promise.all([
+        fs.read('AGENTS.md',{encoding:'utf-8'}).catch(()=>null),
+        fs.read('memory.md',{encoding:'utf-8'}).catch(()=>null),
+      ]);
+      projectContext = buildProjectContext({
+        agents: ag&&ag.ok? ag.data : null,
+        memory: mem&&mem.ok? mem.data : null,
+      });
+    }catch(_){}
+    // `remember` writes memory.md, so it's offered only in code mode (plan/ask
+    // are read-only).
+    const tools = codingToolset(mode,{subagents:true, completion: !!verify});
+    if(mode==='code') tools.push(rememberTool());
     try{
       const result = await runAgentLoop({
-        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
-        tools: codingToolset(mode,{subagents:true, completion: !!verify}),
+        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
+        tools,
         infer: inferViaHost,
         executeTool,
         maxSteps:24,
@@ -776,6 +823,7 @@
   $('send').onclick=submit;
   $('stop').onclick=stopRun;
   $('refresh-files').onclick=renderFiles;
+  $('mem-chip').onclick=openProjectMemory;
   $('files-scope').onclick=()=>{
     if(filesScope!=='all' && !sysFsAvailable()) return;
     filesScope = filesScope==='all' ? 'project' : 'all';

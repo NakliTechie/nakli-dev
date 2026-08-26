@@ -30,7 +30,12 @@ assert.match(
   /<script src="\.\.\/\.\.\/sdk\/naklios\.js(?:\?[^\"]+)?"><\/script>/,
   "Files must load the full naklios.fs SDK",
 );
-assert.match(filesSource, /const fs = window\.naklios\?\.fs;/);
+// Files picks the whole-store system bridge when available and falls back to
+// the namespaced host bridge — both are the Crate-capable naklios fs surface.
+assert.match(filesSource, /window\.naklios\?\.sys\?\.fs/,
+  "Files uses the system-scoped host bridge (whole-store)");
+assert.match(filesSource, /window\.naklios\?\.fs/,
+  "Files falls back to the namespaced host bridge");
 for (const method of ["list", "readBinary", "write", "delete"]) {
   assert.match(
     filesSource,

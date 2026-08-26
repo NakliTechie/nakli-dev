@@ -34,8 +34,8 @@ assert.match(host, /msg\.type\.startsWith\('naklios:fs:'\)/);
 assert.match(host, /op === 'selectBackend'\) reply\.result = await fsHostSelectBackend/);
 assert.match(host, /op === 'list'\) reply\.result = await fsHostList/);
 assert.match(host, /reply\.result = await fsHostHandle/);
-assert.match(host, /Nothing is copied or deleted when you switch\./,
-  'host confirmation must explain non-destructive backend switching');
+assert.match(host, /switching copies or deletes nothing/,
+  'host keeps backend switching non-destructive (no confirmation, scoped to apps/<id>/)');
 assert.match(host, /fsBackends,/);
 assert.match(host, /fsBackend,/);
 assert.match(host, /const safe = fsSafePath\(appId, msg\.path \|\| ''\)/,

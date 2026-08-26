@@ -309,6 +309,47 @@ await test('python dispatch: -c code, <file>, and the unavailable message', asyn
   assert(/cross-origin isolation/.test(await run(bare, 'python -c "print(1)"')), 'no kiln → COI notice');
 });
 
+await test('rm *.glob fans out to every match, one confirm', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo a > a.txt');
+  await run(shell, 'echo b > b.txt');
+  await run(shell, 'echo c > c.txt');
+  await run(shell, 'echo keep > keep.md');
+  const staged = await run(shell, 'rm *.txt');
+  assert(/destructive/.test(staged), `rm *.txt should stage: ${staged}`);
+  assert(shell.awaitingConfirm, 'one confirm for the whole glob');
+  await run(shell, 'y');
+  assert(!shell.awaitingConfirm, 'confirm cleared');
+  for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+    assert(/error|not|ENOENT|failed/i.test(await run(shell, `cat ${f}`)), `${f} should be gone`);
+  }
+  eq(await run(shell, 'cat keep.md'), 'keep', 'non-matching file untouched');
+});
+
+await test('rm *.glob cancelled on n leaves every match', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo a > a.txt');
+  await run(shell, 'echo b > b.txt');
+  await run(shell, 'rm *.txt');
+  const cancelled = await run(shell, 'n');
+  assert(/cancelled/.test(cancelled), `should cancel: ${cancelled}`);
+  eq(await run(shell, 'cat a.txt'), 'a', 'a.txt survives');
+  eq(await run(shell, 'cat b.txt'), 'b', 'b.txt survives');
+});
+
+await test('git add *.glob stages every match', async () => {
+  const { shell } = freshShell({ git: true });
+  await run(shell, 'git init');
+  await run(shell, 'echo a > a.txt');
+  await run(shell, 'echo b > b.txt');
+  await run(shell, 'echo c > c.txt');
+  eq(await run(shell, 'git add *.txt'), 'ok', 'git add *.txt returns ok');
+  const status = await run(shell, 'git status');
+  for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+    assert(new RegExp(`A\\s+${f}`).test(status), `${f} staged: ${status}`);
+  }
+});
+
 if (failures.length) {
   console.error(`shell core: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
