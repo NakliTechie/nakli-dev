@@ -36,7 +36,15 @@
   #left{background:var(--bg-1);border-right:1px solid var(--rule);display:flex;flex-direction:column;min-width:0;overflow:hidden}
   #left .lhead{display:flex;align-items:center;gap:6px;padding:9px 12px 6px;color:var(--fg-2);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
   #left .lhead .spacer{flex:1}
-  #projects{flex:1;overflow:auto;padding:2px 0 8px}
+  #projects{flex:1;overflow:auto;padding:2px 0 8px;min-height:60px}
+  #left .ws-tag{font-family:var(--mono);font-size:9px;color:var(--accent);border:1px solid var(--accent-dim);border-radius:999px;padding:1px 6px;text-transform:none;letter-spacing:0}
+  #files{flex:1.2;overflow:auto;padding:2px 0 8px;min-height:60px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12px}
+  #files .frow{display:flex;align-items:center;gap:5px;padding:3px 10px;cursor:pointer;color:var(--fg-1);white-space:nowrap;user-select:none}
+  #files .frow:hover{background:var(--bg-2)}
+  #files .frow.dir{color:var(--fg-0)}
+  #files .ftw{color:var(--fg-2);width:1em;flex:0 0 auto;text-align:center}
+  #files .fname{overflow:hidden;text-overflow:ellipsis}
+  #files .fempty{color:var(--fg-2);padding:8px 12px;font-size:11px}
   .proj{margin:0}
   .proj > .prow{display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;color:var(--fg-0);font-weight:600;font-size:12px;user-select:none}
   .proj > .prow:hover{background:var(--bg-2)}
@@ -137,6 +145,8 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
 
@@ -190,6 +200,7 @@
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
   import { createMainThreadKiln } from '../../sys/kiln/main-thread-runtime.mjs';
   import { createOpfsBackend, opfsAvailable } from '../../sys/rig/fileops/opfs.mjs';
+  import { CrateBackend } from '../../sys/rig/fileops/crate-backend.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -197,9 +208,9 @@
   // ── Rig workspace stack (lifted from Forge) — the agent's file substrate ──
   let backend, fs, git, registry, grant, opLog, face, shell;
   let workspaceLabel = 'memory · scratch';
-  function mountWorkspace(newBackend, label){
+  function mountWorkspace(newBackend, label, root=''){
     backend = newBackend; workspaceLabel = label;
-    fs = createFileops({ backend });
+    fs = createFileops({ backend, root });
     git = createGitCore({ fs, dir:'/' });
     registry = buildRigRegistry({ fs, git });
     grant = createGrant({ prefixes:[''], scopes:['fs:read','fs:write','fs:remove','git:read','git:write'] });
@@ -245,14 +256,44 @@
   // with a real disk folder (global, remembered in IndexedDB). Mounting is done in
   // boot (below) once state has loaded, and again on project switch.
   let folderMode = false;      // true once the user picks a real disk folder
-  let mountedProject = null;   // which project's OPFS workspace is mounted
+  let mountedProject = null;   // which project's workspace is mounted
+  // Storage preference (files should be visible to the user, not trapped in OPFS):
+  //   1. the host's connected Folder/Crate via naklios.fs — files land under
+  //      apps/anvil/ws/<project>/, visible in the naklios Files app (and Finder for
+  //      a Folder), and (Crate) synced across devices;
+  //   2. OPFS — persistent but browser-private, when no host storage is connected;
+  //   3. in-memory — last resort.
   async function mountProject(projectId){
     if(folderMode) return;
     const p = state && (state.projects||[]).find(x=>x.id===projectId);
-    try{ mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+(p?p.name:projectId)); }
-    catch(_){ mountWorkspace(new MemoryBackend(), 'memory · scratch'); }
+    const name = p ? p.name : projectId;
+    try{
+      if(nak && nak.capabilities && nak.capabilities.fs && nak.fs){
+        const raw = nak.capabilities.fsBackend || 'host';
+        const which = raw==='fsa' ? 'folder' : raw;
+        mountWorkspace(new CrateBackend(nak.fs), which+' · '+name, 'ws/'+projectId);
+        // Round-trip probe: only commit to the host fs if it actually works —
+        // otherwise fall through to OPFS (throws are caught below).
+        await fs.write('.anvil-probe','ok');
+        const rd = await fs.read('.anvil-probe',{encoding:'utf-8'});
+        await fs.remove('.anvil-probe').catch(()=>{});
+        if(!(rd && rd.ok && rd.data==='ok')) throw new Error('host fs probe failed');
+      } else {
+        mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+name);
+      }
+    }catch(_){
+      try{ mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+name); }
+      catch(__){ mountWorkspace(new MemoryBackend(), 'memory · scratch'); }
+    }
     mountedProject = projectId;
     await seedIfEmpty();
+  }
+  // Give the host a moment to report whether a Folder/Crate is connected (the
+  // capabilities handshake lands shortly after ready()).
+  async function waitForFsCaps(timeoutMs=1200){
+    if(!nak || !nak.capabilities) return;
+    const t0=Date.now();
+    while(Date.now()-t0 < timeoutMs){ if(nak.capabilities.fs) return; await new Promise(r=>setTimeout(r,80)); }
   }
 
   // ── Folder persistence (IndexedDB), lifted from Forge ──
@@ -326,6 +367,37 @@
 
   $('new-project').onclick=async ()=>{ const n=prompt('Project name:','project'); if(!n) return; const p={id:id(),name:n,open:true,tasks:[]}; state.projects.push(p); state.activeProject=p.id; save(); if(!folderMode) await mountProject(p.id); renderAll(); };
   $('new-task').onclick=()=>{ const p=activeProject(); if(!p) return; const t={id:id(),title:'Untitled task',status:'idle',mode:'code',convo:[],log:[],preview:null}; p.tasks.push(t); p.open=true; selectTask(t.id); $('prompt').focus(); };
+
+  // ── File explorer: the active workspace's tree (whatever backend), so files
+  // are visible in-app. Clicking a file opens it in the preview; the backend tag
+  // (folder / crate / opfs) shows WHERE they actually live. ──
+  const expandedDirs = new Set();
+  async function renderFiles(){
+    const box=$('files'); if(!box) return;
+    const tag=$('ws-tag'); if(tag) tag.textContent=(workspaceLabel||'').split(' · ')[0]||'';
+    const rows=[];
+    async function walk(prefix, depth){
+      let res; try{ res = await fs.list(prefix, { recursive:false }); }catch(_){ return; }
+      if(!res || !res.ok) return;
+      const ents = res.entries.slice().sort((a,b)=> (b.type==='dir')-(a.type==='dir') || a.name.localeCompare(b.name));
+      for(const e of ents){
+        rows.push({ path:e.path, name:e.name, type:e.type, depth });
+        if(e.type==='dir' && expandedDirs.has(e.path)) await walk(e.path, depth+1);
+      }
+    }
+    try{ await walk('', 0); }catch(_){}
+    box.innerHTML='';
+    if(!rows.length){ box.innerHTML='<div class="fempty">empty workspace</div>'; return; }
+    for(const r of rows){
+      const d=document.createElement('div'); d.className='frow'+(r.type==='dir'?' dir':'');
+      d.style.paddingLeft=(10+r.depth*12)+'px';
+      const tw = r.type==='dir' ? (expandedDirs.has(r.path)?'▾':'▸') : '·';
+      d.innerHTML=`<span class="ftw">${tw}</span><span class="fname">${esc(r.name)}</span>`;
+      if(r.type==='dir') d.onclick=()=>{ expandedDirs.has(r.path)?expandedDirs.delete(r.path):expandedDirs.add(r.path); renderFiles(); };
+      else d.onclick=()=>openChange(r.path);
+      box.appendChild(d);
+    }
+  }
 
   // ── Center render ──
   function renderTaskbar(){
@@ -404,7 +476,7 @@
     else if(pv.type==='diff'){ body.innerHTML='<pre></pre>'; body.querySelector('pre').innerHTML=diffHtml(pv.content); }
     else { body.innerHTML='<pre></pre>'; body.querySelector('pre').textContent=pv.content; }
   }
-  function renderAll(){ renderProjects(); renderTaskbar(); renderLog(); renderPreview(); }
+  function renderAll(){ renderProjects(); renderTaskbar(); renderLog(); renderPreview(); renderFiles(); }
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function diffHtml(s){ return String(s).split('\n').map(l=>{ const c=l[0]; const cls=c==='+'?'add':c==='-'?'del':(c==='@'?'hd':''); return cls?`<span class="${cls}">${esc(l)}</span>`:esc(l); }).join('\n'); }
@@ -563,6 +635,7 @@
   });
   $('send').onclick=submit;
   $('stop').onclick=stopRun;
+  $('refresh-files').onclick=renderFiles;
   const MODES=['code','plan','ask'];
   $('mode-btn').onclick=()=>{ const t=activeTask(); if(!t) return; const i=MODES.indexOf(t.mode||'code'); t.mode=MODES[(i+1)%3]; $('mode-btn').textContent='mode: '+t.mode; $('mode-btn').classList.toggle('on',t.mode!=='code'); save(); };
 
@@ -572,8 +645,10 @@
 
   // ── boot ──
   function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='mode: '+m; $('mode-btn').classList.toggle('on',m!=='code'); }
-  // Mount the workspace: a remembered disk folder if still granted, else the
-  // active project's persistent OPFS namespace.
+  // Signal ready first so the host reports connected storage, then mount:
+  // a remembered disk folder if still granted, else the host Folder/Crate, else OPFS.
+  if(nak && nak.ready) nak.ready();
+  await waitForFsCaps();
   try{
     const saved = await idbGet(DIR_KEY);
     if(saved && typeof saved.queryPermission==='function'){
@@ -583,5 +658,4 @@
   }catch(_){}
   if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
-  if(nak && nak.ready) nak.ready();
 </script>
