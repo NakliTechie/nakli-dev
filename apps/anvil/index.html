@@ -146,6 +146,13 @@
   </aside>
 </main>
 
+<!-- The NakliOS host bridge: establishes window.naklios (+ .ai) over postMessage
+     when running as a system-app window inside NakliOS. Same as Forge. Standalone
+     (window.parent === window) every method no-ops / rejects, so Anvil degrades
+     honestly. Loaded as a classic script before the module so window.naklios
+     exists when the app boots. -->
+<script src="../../sdk/naklios.js"></script>
+
 <script type="module">
   import { createFileops, MemoryBackend } from '../../sys/rig/fileops/index.mjs';
   import { FsaBackend } from '../../sys/rig/fileops/fsa-backend.mjs';
