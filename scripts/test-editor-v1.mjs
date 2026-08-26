@@ -46,7 +46,9 @@ assert.doesNotMatch(html, /\b(?:alert|confirm|prompt)\s*\(/, 'Editor uses styled
 assert.match(html, /\.welcome\[hidden\]\{display:none\}/, 'the empty-workspace welcome yields to an open editor tab');
 assert.doesNotMatch(files, /\b(?:alert|confirm|prompt)\s*\(/, 'Files uses styled in-app UI');
 assert.match(files, /id="ctx-edit"[^>]*>Edit in Editor/);
-assert.match(files, /naklios\.files\.openWith\('editor', path\)/);
+// Whole-store mode passes editPath (the apps/files-relative path) to the
+// namespaced Open-With handoff; namespaced mode passes it through unchanged.
+assert.match(files, /naklios\.files\.openWith\('editor', editPath\)/);
 
 assert.match(sdk, /files:\s*\{[\s\S]*?openWith:[\s\S]*?onOpen:[\s\S]*?read:[\s\S]*?write:[\s\S]*?release:/);
 assert.match(sdk, /naklios:file:grant/);

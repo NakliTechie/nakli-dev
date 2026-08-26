@@ -14,6 +14,6 @@ assert.match(
   'local development loads the local Books checkout for browser validation',
 );
 assert.match(html, /op === 'selectBackend'[\s\S]*fsHostSelectBackend/, 'host handles explicit app backend selection');
-assert.match(html, /Nothing is copied or deleted when you switch/, 'host confirms backend isolation');
+assert.match(html, /switching copies or deletes nothing/, 'host keeps backend switching non-destructive (scoped to apps/<id>/)');
 
 console.log('NakliOS ↔ Lorewell storage bridge contract: PASS');
