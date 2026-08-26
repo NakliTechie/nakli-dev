@@ -12,6 +12,14 @@
 # gracefully to the "needs cross-origin isolation" notice — no change to how the
 # shell or any other embedded app loads. Isolating the shell itself is a
 # separate, larger step (COI Phase 2).
+# COI Phase 2: isolate the host shell itself, so embedded (Immersive) apps that
+# run Kiln — Forge, Anvil — get SharedArrayBuffer and `python` works in-place.
+# COEP `credentialless` (not require-corp) keeps cross-origin subresources
+# loading without a CORP header; cross-origin embedded apps load in
+# credentialless mode. Smoke-tested against Crate + cross-origin apps on deploy.
+/
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
 /apps/forge/*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: credentialless
