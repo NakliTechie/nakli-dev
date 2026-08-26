@@ -527,6 +527,7 @@
       // Keep the pre-image with the change (capped, so state.json stays lean).
       const raw = (path in preImages) ? preImages[path] : null;
       const pre = (raw!=null && String(raw).length < 20000) ? raw : null;
+      console.log('[anvil-dbg] noteChange', name, JSON.stringify(path), 'inPre=', path in preImages, 'keys=', JSON.stringify(Object.keys(preImages)));
       t.log.push({ k:'change', file:path, verb: name==='edit'?'edited':'wrote', pre });
     }catch(_){}
   }
@@ -641,6 +642,7 @@
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
         try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }
+        console.log('[anvil-dbg] pre-captured', nm, JSON.stringify(p), 'inPre=', p in preImages, 'len=', (preImages[p]||'').length);
       }
       return baseExec(nm, ar, callObj);
     };
