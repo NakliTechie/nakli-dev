@@ -186,6 +186,7 @@
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
   import { createMainThreadKiln } from '../../sys/kiln/main-thread-runtime.mjs';
+  import { createOpfsBackend, opfsAvailable } from '../../sys/rig/fileops/opfs.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -227,24 +228,35 @@
     shell = createShell({ registry, face, kiln });
     $('ws').textContent = label;
   }
-  async function seedScratch(){
-    await fs.write('README.md', '# Workspace\n\nA scratch workspace the agent can read and write.\nOpen a real folder to work on your files.\n');
+  async function seedIfEmpty(){
+    try{
+      const l = await fs.list('', { recursive:false });
+      if(l && l.ok && l.entries.length===0){
+        await fs.write('README.md', '# Workspace\n\nA persistent workspace (OPFS) — files the agent writes survive reload.\nEach project has its own. Use "Open folder" to work on a real disk folder instead.\n');
+      }
+    }catch(_){}
   }
-  mountWorkspace(new MemoryBackend(), 'memory · scratch');
-  await seedScratch();
+
+  // Each project gets its own PERSISTENT workspace via OPFS (survives reload, no
+  // permission prompt, works inside the immersive iframe). "Open folder" overrides
+  // with a real disk folder (global, remembered in IndexedDB). Mounting is done in
+  // boot (below) once state has loaded, and again on project switch.
+  let folderMode = false;      // true once the user picks a real disk folder
+  let mountedProject = null;   // which project's OPFS workspace is mounted
+  async function mountProject(projectId){
+    if(folderMode) return;
+    const p = state && (state.projects||[]).find(x=>x.id===projectId);
+    try{ mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+(p?p.name:projectId)); }
+    catch(_){ mountWorkspace(new MemoryBackend(), 'memory · scratch'); }
+    mountedProject = projectId;
+    await seedIfEmpty();
+  }
 
   // ── Folder persistence (IndexedDB), lifted from Forge ──
   const DIR_DB='anvil-fs', DIR_STORE='h', DIR_KEY='workspace-dir';
   function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open(DIR_DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(DIR_STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
   async function idbGet(k){try{const db=await idbOpen();return await new Promise((res)=>{const t=db.transaction(DIR_STORE).objectStore(DIR_STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>res(null);});}catch(_){return null;}}
   async function idbSet(k,v){try{const db=await idbOpen();await new Promise((res)=>{const t=db.transaction(DIR_STORE,'readwrite').objectStore(DIR_STORE).put(v,k);t.oncomplete=res;t.onerror=res;});}catch(_){} }
-  try{
-    const saved = await idbGet(DIR_KEY);
-    if(saved && typeof saved.queryPermission==='function'){
-      const perm = await saved.queryPermission({mode:'readwrite'});
-      if(perm==='granted'){ mountWorkspace(new FsaBackend(saved), 'folder · '+saved.name); }
-    }
-  }catch(_){}
 
   $('open-folder').onclick = async ()=>{
     if(!window.showDirectoryPicker){ pushSystem('This browser has no File System Access — folders unavailable.'); return; }
@@ -253,9 +265,11 @@
       let perm = await h.queryPermission({mode:'readwrite'});
       if(perm!=='granted') perm = await h.requestPermission({mode:'readwrite'});
       if(perm!=='granted'){ pushSystem('Folder permission not granted.'); return; }
+      folderMode = true;
       mountWorkspace(new FsaBackend(h), 'folder · '+h.name);
       await idbSet(DIR_KEY, h);
-      pushSystem('Workspace → folder "'+h.name+'". The agent now reads/writes your files.');
+      pushSystem('Workspace → folder "'+h.name+'". The agent now reads/writes your files (this overrides the per-project workspace).');
+      renderTaskbar();
     }catch(e){ if(!(e&&e.name==='AbortError')) pushSystem('Open folder: '+(e&&e.message||e)); }
   };
 
@@ -299,9 +313,15 @@
       box.appendChild(pd);
     }
   }
-  function selectTask(tid){ state.activeTask=tid; for(const p of state.projects) if((p.tasks||[]).some(t=>t.id===tid)) state.activeProject=p.id; save(); renderAll(); }
+  async function selectTask(tid){
+    state.activeTask=tid;
+    for(const p of state.projects) if((p.tasks||[]).some(t=>t.id===tid)) state.activeProject=p.id;
+    save();
+    if(!folderMode && state.activeProject!==mountedProject) await mountProject(state.activeProject);
+    renderAll();
+  }
 
-  $('new-project').onclick=()=>{ const n=prompt('Project name:','project'); if(!n) return; const p={id:id(),name:n,open:true,tasks:[]}; state.projects.push(p); state.activeProject=p.id; save(); renderProjects(); };
+  $('new-project').onclick=async ()=>{ const n=prompt('Project name:','project'); if(!n) return; const p={id:id(),name:n,open:true,tasks:[]}; state.projects.push(p); state.activeProject=p.id; save(); if(!folderMode) await mountProject(p.id); renderAll(); };
   $('new-task').onclick=()=>{ const p=activeProject(); if(!p) return; const t={id:id(),title:'Untitled task',status:'idle',mode:'code',convo:[],log:[],preview:null}; p.tasks.push(t); p.open=true; selectTask(t.id); $('prompt').focus(); };
 
   // ── Center render ──
@@ -538,6 +558,16 @@
 
   // ── boot ──
   function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='mode: '+m; $('mode-btn').classList.toggle('on',m!=='code'); }
+  // Mount the workspace: a remembered disk folder if still granted, else the
+  // active project's persistent OPFS namespace.
+  try{
+    const saved = await idbGet(DIR_KEY);
+    if(saved && typeof saved.queryPermission==='function'){
+      const perm = await saved.queryPermission({mode:'readwrite'});
+      if(perm==='granted'){ folderMode=true; mountWorkspace(new FsaBackend(saved), 'folder · '+saved.name); await seedIfEmpty(); }
+    }
+  }catch(_){}
+  if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
   if(nak && nak.ready) nak.ready();
 </script>
