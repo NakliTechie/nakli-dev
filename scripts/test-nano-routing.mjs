@@ -20,9 +20,10 @@ assert.match(resolver, /if\s*\(wantsAgent\)\s*return\s+selected;/,
 const guardIdx = resolver.indexOf('if (wantsAgent)');
 const nanoIdx = resolver.indexOf('aiNanoModel()');
 assert.ok(guardIdx >= 0 && nanoIdx > guardIdx, 'aiNanoModel() is only reachable on the GP path');
-// GP: endpoint selection wins over Nano.
-assert.match(resolver, /if\s*\(selected\.runtime === 'endpoint'\)\s*return\s+selected;/,
-  'an explicitly configured endpoint wins for the GP tier too');
+// GP defaults to Nano whenever available (wired in by default), regardless of
+// the agent-tier endpoint selection.
+assert.match(resolver, /if\s*\(aiNano\.available\)\s*return\s+aiNanoModel\(\);/,
+  'GP prefers on-device Nano whenever it is available');
 
 // Submit path resolves by tier and the ondevice runtime is dispatched + gated.
 assert.match(host, /const model = aiResolveModel\(wantsAgent\)/, 'aiHostSubmit routes by tier');

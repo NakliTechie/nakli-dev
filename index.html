@@ -5392,13 +5392,14 @@ function aiNanoModel(){
     runtime:'ondevice', scope:'device', generationConfig:{},
   };
 }
-// Tier-aware model resolution. GP → Nano when available, unless the user has
-// explicitly chosen an endpoint (their choice for GP wins). Agent → the user's
-// explicit selection, never Nano.
+// Tier-aware model resolution. The single model selection is the AGENT-tier
+// transport (coding). GP defaults to on-device Nano whenever it's available —
+// wired in by default — and only falls back to the selected model when Nano
+// isn't there. (A separate GP-tier model selector, to let a user point GP at an
+// endpoint too, is a clean follow-up.) Agent → the selection, never Nano.
 function aiResolveModel(wantsAgent){
   const selected = aiSelectedModel();
   if (wantsAgent) return selected;
-  if (selected.runtime === 'endpoint') return selected;
   if (aiNano.available) return aiNanoModel();
   return selected;
 }
