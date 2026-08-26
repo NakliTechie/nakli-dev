@@ -1,0 +1,180 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Anvil</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg-0:#0E1012; --bg-1:#15181B; --bg-2:#1C2024; --bg-3:#242A2F;
+    --fg-0:#E6E9EB; --fg-1:#A8B0B6; --fg-2:#6E777D; --rule:#262C31;
+    --accent:#D98A28; --accent-dim:#8A5A1C; --err:#C2564B;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --ui:"IBM Plex Sans",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  *{scrollbar-width:thin;scrollbar-color:var(--accent-dim) transparent}
+  *::-webkit-scrollbar{width:10px;height:10px}
+  *::-webkit-scrollbar-thumb{background:var(--accent-dim);border:2px solid transparent;border-radius:999px;background-clip:padding-box}
+  *::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg-0);color:var(--fg-0);font-family:var(--ui);font-size:13px;display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--rule);background:var(--bg-1);flex:0 0 auto}
+  header .brand{font-weight:600} header .brand b{color:var(--accent)}
+  header .ws{color:var(--fg-2);font-family:var(--mono);font-size:11px}
+  header .spacer{flex:1}
+  button{font-family:var(--ui);font-size:12px;color:var(--fg-1);background:var(--bg-2);border:1px solid var(--rule);border-radius:4px;padding:4px 9px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  main{flex:1;display:grid;grid-template-columns:220px 1fr;min-height:0}
+  #tree{background:var(--bg-1);border-right:1px solid var(--rule);overflow:auto;padding:6px 0;font-family:var(--mono);font-size:12px}
+  .row{padding:3px 10px;white-space:nowrap;cursor:pointer;color:var(--fg-1);user-select:none}
+  .row:hover{background:var(--bg-2)} .row.active{background:var(--bg-3);color:var(--fg-0)}
+  .row.dir{color:var(--fg-0)} .row .tw{color:var(--fg-2);display:inline-block;width:1em}
+  .editor-wrap{display:flex;flex-direction:column;min-width:0;min-height:0}
+  .tabs{display:flex;gap:1px;background:var(--bg-1);border-bottom:1px solid var(--rule);overflow-x:auto;flex:0 0 auto}
+  .tab{padding:6px 12px;font-family:var(--mono);font-size:12px;color:var(--fg-2);background:var(--bg-1);cursor:pointer;white-space:nowrap;border-right:1px solid var(--rule)}
+  .tab.active{color:var(--fg-0);background:var(--bg-0)} .tab .dot{color:var(--accent)}
+  .edit-area{flex:1;display:grid;grid-template-columns:auto 1fr;min-height:0;background:var(--bg-0)}
+  .gutter{margin:0;padding:10px 8px 40px;text-align:right;color:var(--fg-2);background:var(--bg-1);border-right:1px solid var(--rule);font:12px/1.55 var(--mono);user-select:none;overflow:hidden;min-width:44px}
+  textarea{width:100%;height:100%;border:0;outline:0;resize:none;background:var(--bg-0);color:var(--fg-0);padding:10px 12px 40px;font:12px/1.55 var(--mono);tab-size:2;white-space:pre;overflow:auto}
+  .empty{grid-column:1/-1;display:grid;place-items:center;color:var(--fg-2);text-align:center;padding:30px}
+  footer{flex:0 0 auto;padding:4px 12px;border-top:1px solid var(--rule);background:var(--bg-1);color:var(--fg-2);font-family:var(--mono);font-size:11px;display:flex;gap:14px}
+</style>
+<header>
+  <span class="brand"><b>◆</b> Anvil</span>
+  <span class="ws" id="ws">memory · scratch</span>
+  <span class="spacer"></span>
+  <button id="open-folder">Open folder</button>
+  <button id="new-file">New file</button>
+  <button id="save" title="Ctrl/Cmd-S">Save</button>
+</header>
+<main>
+  <div id="tree" aria-label="Files"></div>
+  <div class="editor-wrap">
+    <div class="tabs" id="tabs"></div>
+    <div class="edit-area" id="edit-area">
+      <div class="empty" id="empty">Open a file from the tree, or “New file”.<br>A full-fledged code editor over the Rig workspace — early foundation.</div>
+    </div>
+  </div>
+</main>
+<footer>
+  <span id="status">ready</span>
+  <span class="spacer" style="flex:1"></span>
+  <span id="pos"></span>
+</footer>
+<script type="module">
+  // Foundation of Anvil: a file tree + editor + save over the Rig
+  // fileops substrate (in-memory scratch, or a real folder via File System
+  // Access). A naklios app (apps/anvil/) alongside Forge (apps/forge/); both
+  // import the shared sys/rig + sys/ai modules via ../../sys/.
+  import { createFileops, MemoryBackend } from '../../sys/rig/fileops/index.mjs';
+  import { FsaBackend } from '../../sys/rig/fileops/fsa-backend.mjs';
+
+  let backend = new MemoryBackend();
+  let fs = createFileops({ backend });
+  const $ = (id) => document.getElementById(id);
+  const status = (s) => { $('status').textContent = s; };
+
+  // Seed a starter scratch workspace.
+  await fs.write('README.md', '# Anvil\n\nA code editor over the Rig workspace.\nOpen a real folder with “Open folder”.\n');
+  await fs.write('src/hello.js', 'export function hello(name) {\n  return `Hi, ${name}`;\n}\n');
+
+  const open = new Map();   // path -> { text, dirty }
+  let active = null;
+
+  // ── file tree ──────────────────────────────────────────────────────────
+  async function walk(prefix, depth, out) {
+    const res = await fs.list(prefix, { recursive: false });
+    if (!res.ok) return;
+    for (const e of res.entries.sort((a, b) => (b.type === 'dir') - (a.type === 'dir') || a.name.localeCompare(b.name))) {
+      const path = prefix ? prefix + '/' + e.name : e.name;
+      out.push({ path, name: e.name, type: e.type, depth });
+      if (e.type === 'dir' && expanded.has(path)) await walk(path, depth + 1, out);
+    }
+  }
+  const expanded = new Set();
+  async function renderTree() {
+    const rows = [];
+    await walk('', 0, rows);
+    const tree = $('tree');
+    tree.innerHTML = '';
+    for (const r of rows) {
+      const div = document.createElement('div');
+      div.className = 'row' + (r.type === 'dir' ? ' dir' : '') + (r.path === active ? ' active' : '');
+      div.style.paddingLeft = (10 + r.depth * 12) + 'px';
+      const tw = r.type === 'dir' ? (expanded.has(r.path) ? '▾ ' : '▸ ') : '  ';
+      div.innerHTML = `<span class="tw">${tw.trim()}</span>${r.name}`;
+      div.onclick = () => (r.type === 'dir' ? toggleDir(r.path) : openFile(r.path));
+      tree.appendChild(div);
+    }
+  }
+  async function toggleDir(path) { expanded.has(path) ? expanded.delete(path) : expanded.add(path); await renderTree(); }
+
+  // ── editor ───────────────────────────────────────────────────────────────
+  function renderTabs() {
+    const tabs = $('tabs');
+    tabs.innerHTML = '';
+    for (const path of open.keys()) {
+      const t = document.createElement('div');
+      t.className = 'tab' + (path === active ? ' active' : '');
+      t.innerHTML = `${path.split('/').pop()}${open.get(path).dirty ? ' <span class="dot">●</span>' : ''}`;
+      t.onclick = () => showFile(path);
+      tabs.appendChild(t);
+    }
+  }
+  function mountTextarea(path) {
+    const area = $('edit-area');
+    area.innerHTML = '';
+    const gutter = document.createElement('pre'); gutter.className = 'gutter';
+    const ta = document.createElement('textarea'); ta.spellcheck = false;
+    ta.value = open.get(path).text;
+    const syncGutter = () => { gutter.textContent = ta.value.split('\n').map((_, i) => i + 1).join('\n'); };
+    const syncPos = () => { const upto = ta.value.slice(0, ta.selectionStart); $('pos').textContent = `Ln ${upto.split('\n').length}, Col ${upto.length - upto.lastIndexOf('\n')}`; };
+    ta.addEventListener('input', () => { open.get(path).text = ta.value; open.get(path).dirty = true; syncGutter(); renderTabs(); });
+    ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+    ta.addEventListener('keyup', syncPos); ta.addEventListener('click', syncPos);
+    area.appendChild(gutter); area.appendChild(ta);
+    syncGutter(); ta.focus(); syncPos();
+    area._ta = ta;
+  }
+  async function openFile(path) {
+    if (!open.has(path)) {
+      const r = await fs.read(path, { encoding: 'utf-8' });
+      open.set(path, { text: r.ok ? r.data : '', dirty: false });
+    }
+    showFile(path);
+  }
+  function showFile(path) { active = path; mountTextarea(path); renderTabs(); renderTree(); status(path); }
+  async function saveActive() {
+    if (!active) return;
+    const w = await fs.write(active, open.get(active).text);
+    if (w.ok) { open.get(active).dirty = false; renderTabs(); status('saved ' + active); await renderTree(); }
+    else status('save failed: ' + (w.message || 'error'));
+  }
+
+  // ── folder + new file ──────────────────────────────────────────────────
+  $('open-folder').onclick = async () => {
+    if (!window.showDirectoryPicker) { status('no File System Access in this browser'); return; }
+    try {
+      const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+      let perm = await h.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') perm = await h.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') { status('permission not granted'); return; }
+      backend = new FsaBackend(h); fs = createFileops({ backend });
+      open.clear(); active = null; expanded.clear();
+      $('ws').textContent = 'folder · ' + h.name;
+      $('edit-area').innerHTML = '<div class="empty" id="empty">Folder opened. Pick a file from the tree.</div>';
+      renderTabs(); await renderTree(); status('opened folder ' + h.name);
+    } catch (e) { status('open folder: ' + (e && e.name === 'AbortError' ? 'cancelled' : (e && e.message || e))); }
+  };
+  $('new-file').onclick = async () => {
+    const name = prompt('New file path (relative to workspace):', 'untitled.txt');
+    if (!name) return;
+    await fs.write(name, '');
+    open.set(name, { text: '', dirty: false });
+    await renderTree(); showFile(name);
+  };
+  $('save').onclick = saveActive;
+  addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveActive(); } });
+
+  await renderTree();
+  openFile('README.md');
+</script>
