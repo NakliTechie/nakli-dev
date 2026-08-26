@@ -5108,12 +5108,21 @@ const AI_ENDPOINT_PRESETS = Object.freeze({
     keyRequired:true,
   }),
   agentrouter: Object.freeze({
-    // Aggregator (OpenAI-compatible). Model e.g. `gpt-5.6-sol`. CORS is open and
-    // browser requests pass its client-UA gate (the gate blocks curl/python, not
-    // browsers), so BYOK works directly from here — no proxy. Key entered in
-    // Settings → AI, never stored in this file.
+    // Aggregator (OpenAI-compatible). Model e.g. `gpt-5.6-sol`. NOTE: AgentRouter's
+    // client gate blocks *browser* requests (401 "unauthorized client detected") —
+    // it wants a non-browser UA the browser can't set. Works from a server-side
+    // proxy (nakli-cf-worker), not directly from here. Key entered in Settings → AI.
     label:'AgentRouter',
     baseUrl:'https://agentrouter.org/v1',
+    keyRequired:true,
+  }),
+  deepseek: Object.freeze({
+    // DeepSeek (OpenAI-compatible). Browser-friendly: open CORS, no client gate.
+    // Current models: `deepseek-v4-flash` (fast, tool-calling — use for the agent)
+    // and `deepseek-v4-pro`. Legacy `deepseek-chat`/`deepseek-reasoner` retired
+    // 2026-07-24. Key entered in Settings → AI, never stored in this file.
+    label:'DeepSeek',
+    baseUrl:'https://api.deepseek.com/v1',
     keyRequired:true,
   }),
   custom: Object.freeze({

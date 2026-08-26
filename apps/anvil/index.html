@@ -77,6 +77,26 @@
   .tool.err summary .tn{color:var(--err)}
   #log .empty{max-width:560px;margin:8vh auto 0;text-align:center;color:var(--fg-2);padding:0 20px}
   #log .empty h2{color:var(--fg-1);font-weight:600;font-size:15px;margin:0 0 8px}
+  /* markdown, copy buttons, change chips */
+  .msg .mhead{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+  .msg .mhead .who{margin-bottom:0;flex:1}
+  .msg.assistant .body{line-height:1.5}
+  .md-p{white-space:pre-wrap;word-wrap:break-word;line-height:1.5;margin:0 0 8px}
+  .md-p:last-child{margin-bottom:0}
+  .body code.inline{font-family:var(--mono);font-size:.92em;background:var(--bg-2);border:1px solid var(--rule);border-radius:4px;padding:0 4px}
+  .body strong{color:var(--fg-0);font-weight:600}
+  .code{border:1px solid var(--rule);border-radius:7px;overflow:hidden;margin:8px 0;background:var(--bg-1)}
+  .code-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:10px;color:var(--fg-2)}
+  .code-head .lang{flex:1;text-transform:uppercase;letter-spacing:.05em}
+  .code pre{margin:0;padding:9px 11px;overflow:auto;max-height:420px}
+  .code code{font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--fg-0);white-space:pre}
+  .copybtn{font-family:var(--ui);font-size:10px;color:var(--fg-2);background:var(--bg-2);border:1px solid var(--rule);border-radius:4px;padding:2px 7px;cursor:pointer;flex:0 0 auto}
+  .copybtn:hover{border-color:var(--accent);color:var(--accent)}
+  .copybtn.ok{color:var(--ok);border-color:var(--ok)}
+  .change{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:6px 10px;border:1px solid var(--rule);border-radius:7px;background:var(--bg-1);font-family:var(--mono);font-size:11.5px;color:var(--fg-1);cursor:pointer}
+  .change:hover{border-color:var(--accent);color:var(--fg-0)}
+  .change .ci{color:var(--accent);flex:0 0 auto} .change .cf{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .change .cv{color:var(--fg-2);margin-left:auto;padding-left:8px;flex:0 0 auto}
+  .msg.queued{opacity:.5} .msg.queued .who{color:var(--accent)}
   /* composer */
   #composer{flex:0 0 auto;border-top:1px solid var(--rule);background:var(--bg-1);padding:10px 20px 12px}
   #composer .cwrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:6px}
@@ -134,7 +154,7 @@
         </div>
         <div class="hint">
           <button class="mode" id="mode-btn" title="Cycle mode">mode: code</button>
-          <span>⌘/Ctrl + ↵ to send</span>
+          <span>↵ send · ⇧↵ newline · queues while running</span>
         </div>
       </div>
     </div>
@@ -270,16 +290,57 @@
     if(!t.log||!t.log.length){ box.innerHTML=`<div class="empty"><h2>${esc(t.title)}</h2>Describe what you want the agent to do. It works over the current workspace (<b>${esc(workspaceLabel)}</b>) with read / write / edit / shell tools.</div>`; return; }
     const w=document.createElement('div'); w.className='wrap';
     for(const e of t.log){
-      if(e.k==='user'||e.k==='assistant'||e.k==='system'){
+      if(e.k==='user'||e.k==='system'){
         const d=document.createElement('div'); d.className='msg '+e.k;
-        d.innerHTML=`<div class="who">${e.k==='user'?'you':e.k==='assistant'?'agent':'system'}</div><div class="body"></div>`;
+        d.innerHTML=`<div class="who">${e.k==='user'?'you':'system'}</div><div class="body"></div>`;
         d.querySelector('.body').textContent=e.text; w.appendChild(d);
+      } else if(e.k==='assistant'){
+        // Agent reply: render Markdown (code blocks get a Copy button), plus a
+        // "Copy md" button on the whole reply.
+        const d=document.createElement('div'); d.className='msg assistant';
+        const head=document.createElement('div'); head.className='mhead';
+        head.innerHTML='<div class="who">agent</div>';
+        const cp=document.createElement('button'); cp.className='copybtn'; cp.textContent='Copy md';
+        cp.title='Copy this reply as Markdown'; cp.onclick=()=>copyText(e.text, cp);
+        head.appendChild(cp);
+        const body=document.createElement('div'); body.className='body';
+        renderMarkdown(body, e.text);
+        d.appendChild(head); d.appendChild(body); w.appendChild(d);
       } else if(e.k==='tool'){
         const dt=document.createElement('details'); dt.className='tool'+(e.error?' err':''); if(e.open) dt.open=true;
-        dt.innerHTML=`<summary><span class="tn">${esc(e.name)}</span><span class="td">${esc(e.detail||'')}</span><span class="tg">${e.error?'error':(e.result!=null?'result':'…')}</span></summary>`;
-        if(e.error||e.result!=null){ const o=document.createElement('div'); o.className='tout'; o.textContent=e.error||e.result; dt.appendChild(o); }
+        const sum=document.createElement('summary');
+        sum.innerHTML=`<span class="tn">${esc(e.name)}</span><span class="td">${esc(e.detail||'')}</span><span class="tg">${e.error?'error':(e.result!=null?'result':'…')}</span>`;
+        dt.appendChild(sum);
+        const out = e.error!=null?e.error:e.result;
+        if(out!=null){
+          const o=document.createElement('div'); o.className='tout'; o.textContent=out; dt.appendChild(o);
+          const cp=document.createElement('button'); cp.className='copybtn'; cp.textContent='Copy';
+          cp.title='Copy output as Markdown';
+          cp.onclick=(ev)=>{ ev.preventDefault(); ev.stopPropagation(); copyText('```\n'+out+'\n```', cp); };
+          sum.appendChild(cp);
+        }
         w.appendChild(dt);
+      } else if(e.k==='change'){
+        // "We made changes — view" (Claude Code / Codex style). The write/edit is
+        // already applied (YOLO); clicking reads the current file and shows it in
+        // the preview, instead of auto-popping the pane.
+        const c=document.createElement('div'); c.className='change'; c.title='View this file in the preview';
+        c.innerHTML=`<span class="ci">✎</span><span class="cf">${esc(e.verb||'wrote')} ${esc(e.file)}</span><span class="cv">view →</span>`;
+        c.onclick=()=>openChange(e.file);
+        w.appendChild(c);
       }
+    }
+    // Queued follow-ups (Codex-style): prompts waiting for the current run to end.
+    for(let qi=0; qi<(t.queued||[]).length; qi++){
+      const q=t.queued[qi], idx=qi;
+      const d=document.createElement('div'); d.className='msg user queued';
+      const head=document.createElement('div'); head.className='mhead';
+      head.innerHTML='<div class="who">queued</div>';
+      const x=document.createElement('button'); x.className='copybtn'; x.textContent='✕'; x.title='Remove from queue';
+      x.onclick=()=>{ (t.queued||[]).splice(idx,1); save(); renderLog(); };
+      head.appendChild(x);
+      const body=document.createElement('div'); body.className='body'; body.textContent=q;
+      d.appendChild(head); d.appendChild(body); w.appendChild(d);
     }
     box.innerHTML=''; box.appendChild(w); box.scrollTop=box.scrollHeight;
   }
@@ -300,17 +361,66 @@
 
   function pushSystem(text){ const t=activeTask(); if(!t) return; (t.log=t.log||[]).push({k:'system',text}); save(); renderLog(); }
 
-  // ── Preview capture: when the agent touches a showable file, surface it ──
-  function maybePreview(t, name, args, result){
+  // ── Change capture (view-on-click): the agent applies writes/edits directly
+  // (YOLO); we don't auto-pop the preview. Instead we drop a compact "✎ wrote X ·
+  // view" chip in the chat — click it to open the file/diff in the preview. ──
+  function noteChange(t, name, args){
     try{
       const path = args && (args.path||args.file);
-      if(!path) return;
-      if(name==='write' && /\.html?$/.test(path)){ t.preview={type:'html', file:path, content:String(args.content||'')}; state.previewOpen=true; }
-      else if((name==='write'||name==='edit') && result && !/\.html?$/.test(path)){
-        // show the resulting file as text
-        t.preview={type:'text', file:path, content:String(args.content!=null?args.content:result).slice(0,20000)}; state.previewOpen=true;
-      }
+      if(!path || !(name==='write'||name==='edit')) return;
+      t.log.push({ k:'change', file:path, verb: name==='edit'?'edited':'wrote' });
     }catch(_){}
+  }
+  // Clicking a change chip reads the CURRENT file from the workspace and shows it
+  // in the preview (correct for both write and edit — no stale/partial content).
+  async function openChange(file){
+    const at=activeTask(); if(!at) return;
+    let content='(could not read '+file+')';
+    try{ const r=await fs.read(file,{encoding:'utf-8'}); if(r&&r.ok) content=r.data; }catch(_){}
+    at.preview={ type:/\.html?$/.test(file)?'html':'text', file, content:String(content).slice(0,50000) };
+    state.previewOpen=true; save(); renderPreview();
+  }
+
+  // ── Lightweight Markdown → DOM (fenced code blocks get a Copy button; inline
+  // `code` and **bold**). Kept minimal on purpose — no external library. ──
+  function renderMarkdown(container, text){
+    container.innerHTML='';
+    const parts = String(text==null?'':text).split('```');
+    for(let i=0;i<parts.length;i++){
+      if(i%2===1){
+        let block=parts[i], lang='';
+        const nl=block.indexOf('\n');
+        if(nl>=0){ const first=block.slice(0,nl).trim(); if(/^[\w+.-]*$/.test(first)){ lang=first; block=block.slice(nl+1); } }
+        container.appendChild(codeCard(lang, block.replace(/\n$/,'')));
+      } else {
+        const seg=parts[i]; if(!seg || !seg.replace(/\s/g,'')) continue;
+        const p=document.createElement('div'); p.className='md-p';
+        p.innerHTML = esc(seg.replace(/^\n+|\n+$/g,''))
+          .replace(/`([^`]+)`/g, '<code class="inline">$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        container.appendChild(p);
+      }
+    }
+    if(!container.childNodes.length){ const p=document.createElement('div'); p.className='md-p'; p.textContent=String(text||''); container.appendChild(p); }
+  }
+  function codeCard(lang, code){
+    const wrap=document.createElement('div'); wrap.className='code';
+    const head=document.createElement('div'); head.className='code-head';
+    const l=document.createElement('span'); l.className='lang'; l.textContent=lang||'code';
+    const btn=document.createElement('button'); btn.className='copybtn'; btn.textContent='Copy';
+    btn.title='Copy code'; btn.onclick=()=>copyText(code, btn);
+    head.appendChild(l); head.appendChild(btn);
+    const pre=document.createElement('pre'); const c=document.createElement('code'); c.textContent=code; pre.appendChild(c);
+    wrap.appendChild(head); wrap.appendChild(pre);
+    return wrap;
+  }
+  function copyText(str, btn){
+    const done=()=>{ if(!btn) return; const o=btn.textContent; btn.textContent='Copied'; btn.classList.add('ok'); setTimeout(()=>{ btn.textContent=o; btn.classList.remove('ok'); },1200); };
+    try{ if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(str).then(done, ()=>fallbackCopy(str,done)); return; } }catch(_){}
+    fallbackCopy(str, done);
+  }
+  function fallbackCopy(str, done){
+    try{ const ta=document.createElement('textarea'); ta.value=str; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done&&done(); }catch(_){}
   }
 
   // ── The model side — identical transport to Forge (host agent tier) ──
@@ -332,10 +442,17 @@
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
-  async function runTask(){
-    const t=activeTask(); if(!t||running) return;
+  // Enter sends; while a run is in flight, Enter/Send QUEUES the prompt (Codex-
+  // style) and it runs automatically when the current run finishes.
+  function submit(){
+    const t=activeTask(); if(!t) return;
     const text=$('prompt').value.trim(); if(!text) return;
     $('prompt').value=''; autoGrow();
+    if(running){ (t.queued=t.queued||[]).push(text); save(); renderLog(); return; }
+    runTask(t, text);
+  }
+  async function runTask(t, text){
+    if(!t||running) return;
     if(t.title==='Untitled task'){ t.title=text.slice(0,48); }
     (t.log=t.log||[]).push({k:'user',text});
     const mode=t.mode||'code';
@@ -353,7 +470,7 @@
         maxSteps:24,
         onEvent:(e)=>{
           if(e.type==='tool-call'){ const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
-          else if(e.type==='tool-result'){ if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); maybePreview(t,liveTool.name,liveTool.args,liveTool.result); liveTool=null; } renderLog(); renderPreview(); }
+          else if(e.type==='tool-result'){ if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); noteChange(t,liveTool.name,liveTool.args); liveTool=null; } renderLog(); }
           else if(e.type==='tool-error'){ if(liveTool){ liveTool.error=String(e.error); liveTool=null; } renderLog(); }
           else if(e.type==='assistant' && e.content){ t.log.push({k:'assistant',text:e.content}); renderLog(); }
           else if(e.type==='error'){ t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
@@ -369,16 +486,22 @@
     }finally{
       running=false; setSend(); save(); renderAll();
       if(nak&&nak.title) nak.title('Anvil — '+t.title);
+      // Drain the queue: run the next queued prompt for this task, if any.
+      if(t.queued && t.queued.length){ const next=t.queued.shift(); save(); renderLog(); setTimeout(()=>runTask(t, next), 0); }
     }
   }
-  function setSend(){ $('send').disabled=running; $('send').textContent=running?'Running…':'Send'; }
+  // Never disabled — while running the button queues; label signals which.
+  function setSend(){ $('send').textContent = running ? 'Queue' : 'Send'; }
 
   // ── Composer wiring ──
   const ta=$('prompt');
   function autoGrow(){ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,180)+'px'; }
   ta.addEventListener('input', autoGrow);
-  ta.addEventListener('keydown',(e)=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){ e.preventDefault(); runTask(); } });
-  $('send').onclick=runTask;
+  ta.addEventListener('keydown',(e)=>{
+    // Enter sends (or queues); Shift+Enter inserts a newline. Guard IME composition.
+    if(e.key==='Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); submit(); }
+  });
+  $('send').onclick=submit;
   const MODES=['code','plan','ask'];
   $('mode-btn').onclick=()=>{ const t=activeTask(); if(!t) return; const i=MODES.indexOf(t.mode||'code'); t.mode=MODES[(i+1)%3]; $('mode-btn').textContent='mode: '+t.mode; $('mode-btn').classList.toggle('on',t.mode!=='code'); save(); };
 
