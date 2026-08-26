@@ -20,6 +20,8 @@
   button{font-family:var(--ui);font-size:12px;color:var(--fg-1);background:var(--bg-2);border:1px solid var(--rule);border-radius:5px;padding:4px 9px;cursor:pointer}
   button:hover{border-color:var(--accent);color:var(--accent)}
   button.icon{padding:4px 7px;line-height:1}
+  button.icon.scope{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px}
+  button.icon.scope.on{color:var(--accent);border-color:var(--accent)}
 
   /* header */
   header{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--rule);background:var(--bg-1);flex:0 0 auto}
@@ -150,7 +152,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -395,12 +397,69 @@
   // are visible in-app. Clicking a file opens it in the preview; the backend tag
   // (folder / crate / opfs) shows WHERE they actually live. ──
   const expandedDirs = new Set();
+  // Explorer scope: 'project' (this workspace only, via the mounted backend) or
+  // 'all' (the whole store, via naklios.sys.fs — same-origin system apps only).
+  // Anvil is a system app, so it can browse across every app's namespace when
+  // the host advertises sysFs. Project scope stays the default: a coding
+  // workspace is normally what you want, and only it carries diff/revert.
+  let filesScope = 'project';
+  const sysFsAvailable = () => !!(nak && nak.capabilities && nak.capabilities.sysFs && nak.sys && nak.sys.fs);
+  // Adapt naklios.sys.fs (full-path strings, trailing-slash dirs) to the same
+  // Rig-fileops shape the explorer walk already speaks, so the walk is scope-
+  // agnostic.
+  function sysFileops(){
+    const sfs = nak.sys.fs;
+    return {
+      async list(prefix){
+        try{
+          const raw = await sfs.list(prefix||'');
+          const entries = (raw||[]).map(p=>{
+            const isDir = p.endsWith('/');
+            const path = isDir ? p.slice(0,-1) : p;
+            const name = path.split('/').filter(Boolean).pop() || path;
+            return { path, name, type: isDir?'dir':'file' };
+          });
+          return { ok:true, entries };
+        }catch(_){ return { ok:false, entries:[] }; }
+      },
+      async read(path, opts){
+        try{
+          if(opts && opts.encoding==='utf-8') return { ok:true, data: await sfs.read(path) };
+          return { ok:true, data: await sfs.readBinary(path) };
+        }catch(e){ return { ok:false, error:String(e&&e.message||e) }; }
+      },
+    };
+  }
+  function explorerFs(){ return filesScope==='all' ? sysFileops() : fs; }
+  // Whole-store files open read-only (they're outside this workspace, so the
+  // diff/revert pre-image machinery doesn't apply). Routed through globalPreview
+  // so a preview works even with no active task.
+  async function openSysFile(fullPath){
+    let content='(could not read '+fullPath+')';
+    try{ const r=await sysFileops().read(fullPath,{encoding:'utf-8'}); if(r&&r.ok) content=r.data; }catch(_){}
+    globalPreview = { type:/\.html?$/.test(fullPath)?'html':'text', file:fullPath, content:String(content).slice(0,50000) };
+    state.previewOpen=true; save(); renderPreview();
+  }
+  function updateScopeBtn(){
+    const b=$('files-scope'); if(!b) return;
+    const on = sysFsAvailable();
+    b.hidden = !on;
+    if(!on && filesScope==='all') filesScope='project';
+    b.textContent = filesScope==='all' ? 'all' : 'proj';
+    b.classList.toggle('on', filesScope==='all');
+    b.title = filesScope==='all'
+      ? 'Showing the whole store (all apps) — click for this project only'
+      : 'Showing this project — click for the whole store (all apps)';
+  }
   async function renderFiles(){
     const box=$('files'); if(!box) return;
-    const tag=$('ws-tag'); if(tag) tag.textContent=(workspaceLabel||'').split(' · ')[0]||'';
+    updateScopeBtn();
+    const efs = explorerFs();
+    const tag=$('ws-tag');
+    if(tag) tag.textContent = filesScope==='all' ? 'all files' : ((workspaceLabel||'').split(' · ')[0]||'');
     const rows=[];
     async function walk(prefix, depth){
-      let res; try{ res = await fs.list(prefix, { recursive:false }); }catch(_){ return; }
+      let res; try{ res = await efs.list(prefix, { recursive:false }); }catch(_){ return; }
       if(!res || !res.ok) return;
       const ents = res.entries.slice().sort((a,b)=> (b.type==='dir')-(a.type==='dir') || a.name.localeCompare(b.name));
       for(const e of ents){
@@ -410,14 +469,14 @@
     }
     try{ await walk('', 0); }catch(_){}
     box.innerHTML='';
-    if(!rows.length){ box.innerHTML='<div class="fempty">empty workspace</div>'; return; }
+    if(!rows.length){ box.innerHTML='<div class="fempty">'+(filesScope==='all'?'store is empty':'empty workspace')+'</div>'; return; }
     for(const r of rows){
       const d=document.createElement('div'); d.className='frow'+(r.type==='dir'?' dir':'');
       d.style.paddingLeft=(10+r.depth*12)+'px';
       const tw = r.type==='dir' ? (expandedDirs.has(r.path)?'▾':'▸') : '·';
       d.innerHTML=`<span class="ftw">${tw}</span><span class="fname">${esc(r.name)}</span>`;
       if(r.type==='dir') d.onclick=()=>{ expandedDirs.has(r.path)?expandedDirs.delete(r.path):expandedDirs.add(r.path); renderFiles(); };
-      else d.onclick=()=>openChange(r.path);
+      else d.onclick=()=> filesScope==='all' ? openSysFile(r.path) : openChange(r.path);
       box.appendChild(d);
     }
   }
@@ -490,8 +549,10 @@
     }
     box.innerHTML=''; box.appendChild(w); box.scrollTop=box.scrollHeight;
   }
+  // Preview not tied to a task (whole-store read-only views land here).
+  let globalPreview = null;
   function renderPreview(){
-    const t=activeTask(); const pv=t&&t.preview; const rev=$('pv-revert');
+    const t=activeTask(); const pv=(t&&t.preview)||globalPreview; const rev=$('pv-revert');
     $('main').classList.toggle('preview-open', !!state.previewOpen && !!pv);
     if(!pv){ $('pv-file').textContent=''; $('pv-body').innerHTML='<div class="pempty">Nothing to preview yet.<br>Agent output that can be shown appears here.</div>'; if(rev) rev.hidden=true; return; }
     $('pv-file').textContent=pv.file||'';
@@ -540,6 +601,7 @@
   // we have the pre-image (with a Revert), else the current file.
   async function openChange(file, pre){
     const at=activeTask(); if(!at) return;
+    globalPreview=null;
     let content='(could not read '+file+')';
     try{ const r=await fs.read(file,{encoding:'utf-8'}); if(r&&r.ok) content=r.data; }catch(_){}
     if(pre!=null && !/\.html?$/.test(file)){
@@ -714,6 +776,19 @@
   $('send').onclick=submit;
   $('stop').onclick=stopRun;
   $('refresh-files').onclick=renderFiles;
+  $('files-scope').onclick=()=>{
+    if(filesScope!=='all' && !sysFsAvailable()) return;
+    filesScope = filesScope==='all' ? 'project' : 'all';
+    if(filesScope==='project' && globalPreview){
+      // Leaving whole-store: drop the read-only cross-app preview so the pane
+      // reflects the project again (an active task's own preview still shows).
+      globalPreview=null;
+      if(!(activeTask()&&activeTask().preview)) state.previewOpen=false;
+      renderPreview();
+    }
+    expandedDirs.clear();
+    renderFiles();
+  };
   $('gate-btn').onclick=()=>{
     const t=activeTask(); if(!t) return;
     const v=prompt('Gate command — runs after the agent finishes; the task isn\'t "done" until it exits 0 (e.g. "python -m pytest", "python fib.py", "sh check.sh"). Empty to clear:', t.verifyCmd||'');
@@ -751,6 +826,7 @@
   if(nak && nak.onCapabilitiesChange){
     let lastBackend = (nak.capabilities||{}).fsBackend || null;
     nak.onCapabilitiesChange(async (caps)=>{
+      updateScopeBtn();
       const nb = (caps||{}).fsBackend || null;
       if(nb===lastBackend || folderMode) return;
       lastBackend = nb;

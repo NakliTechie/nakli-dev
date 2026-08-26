@@ -68,6 +68,11 @@
     fs: false,
     fsBackends: [],
     fsBackend: null,
+    // system: this app is a same-origin system app (non-third-party).
+    // sysFs: system-scoped filesystem is available — the whole store, not just
+    // apps/<your-id>/. Only true for system apps with a connected backend.
+    system: false,
+    sysFs: false,
     ai: false,
     aiModel: null,
     aiModelLabel: null,
@@ -280,6 +285,8 @@
       if (typeof msg.fs === 'boolean') capabilities.fs = msg.fs;
       if (Array.isArray(msg.fsBackends)) capabilities.fsBackends = msg.fsBackends;
       capabilities.fsBackend = typeof msg.fsBackend === 'string' ? msg.fsBackend : null;
+      capabilities.system = msg.system === true;
+      capabilities.sysFs = msg.sysFs === true;
       if (typeof msg.ai === 'boolean') capabilities.ai = msg.ai;
       capabilities.aiModel = typeof msg.aiModel === 'string' ? msg.aiModel : null;
       capabilities.aiModelLabel = typeof msg.aiModelLabel === 'string' ? msg.aiModelLabel : null;
@@ -484,6 +491,23 @@
       // Explicit backend changes are always confirmed by the NakliOS host.
       // Switching changes the app-scoped view; it never copies or deletes data.
       useBackend: function (backend)    { return rpc('naklios:fs:selectBackend', { backend: backend }); },
+    },
+    // System-scoped filesystem — the WHOLE store on the active backend, not just
+    // this app's apps/<id>/ namespace. Available to same-origin system apps only
+    // (capabilities.sysFs); the host rejects the call otherwise. Paths are
+    // full-from-store-root (e.g. 'apps/anvil/ws/demo/main.py', 'state.json'),
+    // and list() returns full paths. This is the primitive behind the OS-level
+    // file manager: one app can see every other app's files.
+    sys: {
+      fs: {
+        read:       function (path)       { return rpc('naklios:sysfs:read', fsPayload({ path: path })); },
+        readBinary: function (path)       { return rpc('naklios:sysfs:readBinary', fsPayload({ path: path })); },
+        write:      function (path, data) { return rpc('naklios:sysfs:write', fsPayload({ path: path, data: data })); },
+        append:     function (path, line) { return rpc('naklios:sysfs:append', fsPayload({ path: path, line: line })); },
+        list:       function (prefix)     { return rpc('naklios:sysfs:list', fsPayload({ prefix: prefix || '' })); },
+        delete:     function (path)       { return rpc('naklios:sysfs:delete', fsPayload({ path: path })); },
+        exists:     function (path)       { return rpc('naklios:sysfs:exists', fsPayload({ path: path })); },
+      },
     },
     files: {
       // Ask NakliOS to open one app-relative file in another cooperative app.

@@ -61,8 +61,17 @@ button.danger:hover{background:color-mix(in srgb, #d94545 30%, var(--row)); colo
   border-bottom:1px solid var(--line); flex:0 0 auto;
   font-size:11px; color:var(--muted);
 }
-.toolbar .crumbs{flex:1;}
-.toolbar .crumbs span{color:var(--ink);}
+.toolbar .crumbs{flex:1; display:flex; align-items:center; flex-wrap:wrap; gap:2px;}
+.toolbar .crumbs .crumb{color:var(--ink); cursor:pointer; padding:1px 3px; border-radius:4px;}
+.toolbar .crumbs .crumb:hover{background:var(--row); text-decoration:underline;}
+.toolbar .crumbs .sep{color:var(--muted); padding:0 1px;}
+.scope-badge{
+  font-size:10px; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
+  padding:2px 7px; border-radius:999px; margin-left:2px;
+  background:color-mix(in srgb, var(--brand) 22%, var(--panel));
+  color:color-mix(in srgb, var(--ink) 90%, var(--brand));
+  border:1px solid var(--line-strong);
+}
 .list{flex:1; overflow:auto;}
 .list-row{
   display:flex; align-items:center; gap:10px;
@@ -136,10 +145,11 @@ dialog::backdrop{background:rgba(0,0,0,.58);}
 </style>
 </head>
 <body>
-<script src="../../sdk/naklios.js?v=2026-08-01-files-v1"></script>
+<script src="../../sdk/naklios.js?v=2026-08-26-files-rootfs"></script>
 
 <header>
   <h1>📁 Files</h1>
+  <span class="scope-badge" id="scope-badge" hidden>All apps</span>
   <span class="folder" id="folder-name">—</span>
   <span class="spacer"></span>
   <button id="new-text">New text file</button>
@@ -197,15 +207,37 @@ dialog::backdrop{background:rgba(0,0,0,.58);}
 (function(){
 'use strict';
 
-// Files is a system window, but it deliberately uses the same namespaced SDK
-// as every other cooperative app. The host therefore limits it to
-// apps/files/ and lets the user bind it to either Folder or Crate.
-const fs = window.naklios?.fs;
+// Files is the OS-level file manager. When the host grants system-fs
+// (capabilities.sysFs — true for same-origin system apps), it browses the
+// WHOLE store on the active backend: every app's apps/<id>/ tree plus any
+// top-level files. If system-fs is unavailable it degrades to the namespaced
+// SDK (its own apps/files/ only). Either way the code below works on whatever
+// paths the active facade returns from list() — full-from-store-root in root
+// mode, app-relative otherwise — and never re-concatenates parent + entry.
 const $ = id => document.getElementById(id);
 
-let currentPath = '';     // selected folder, '' = root
-let selectedFile = null;  // selected file path (full from root)
-let expanded = new Set(); // expanded folder paths
+// The active fs facade + whether it sees the whole store. Chosen in refresh().
+let fs = window.naklios?.fs || null;
+let rootMode = false;
+
+// Friendly labels for known app namespaces (apps/<id>). Unknowns title-case.
+const APP_LABELS = {
+  anvil:'Anvil', files:'Files', notes:'Notes', editor:'Editor',
+  slate:'Slate', tijori:'Tijori', kanzen:'KanZen', vaultmind:'VaultMind',
+  nakliposter:'NakliPoster', forge:'Forge', mehfil:'Mehfil', roster:'Roster',
+};
+function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+function pickFacade(){
+  const caps = window.naklios?.capabilities || {};
+  if (caps.sysFs && window.naklios?.sys?.fs){ rootMode = true; return window.naklios.sys.fs; }
+  rootMode = false;
+  return window.naklios?.fs || null;
+}
+
+let currentPath = '';     // listing prefix, '' = facade root (full-path in root mode)
+let selectedFile = null;  // selected file path (as returned by list, full for facade)
+let expanded = new Set(); // expanded folder paths (facade-full)
 let listing = [];         // current dir entries
 
 function setStatus(text){ $('status').textContent = text; }
@@ -232,13 +264,30 @@ function fmtDate(ts){
 }
 function fmtPath(p){ return '/' + p; }
 
-// Use a simpler heuristic: trailing slash from fsList means directory.
+// Use a simpler heuristic: trailing slash from list() means directory.
 function isDirEntry(name){ return name.endsWith('/'); }
-function basename(p){ return p.split('/').filter(Boolean).pop() || ''; }
+function basename(p){ return p.replace(/\/$/, '').split('/').filter(Boolean).pop() || ''; }
 function parent(p){
-  const segs = p.split('/').filter(Boolean);
+  const segs = p.replace(/\/$/, '').split('/').filter(Boolean);
   segs.pop();
   return segs.join('/');
+}
+// Display label for an entry path. In root mode, an app namespace root
+// (apps/<id>) shows the app's friendly name instead of the bare id.
+function prettyLabel(entryPath){
+  const segs = entryPath.replace(/\/$/, '').split('/').filter(Boolean);
+  const name = segs[segs.length - 1] || '';
+  if (rootMode && segs.length === 2 && segs[0] === 'apps'){
+    return APP_LABELS[name] || cap(name);
+  }
+  return name;
+}
+// Icon for a directory entry (app roots and the apps/ container get their own).
+function dirIconFor(entryPath){
+  const segs = entryPath.replace(/\/$/, '').split('/').filter(Boolean);
+  if (rootMode && segs.length === 1 && segs[0] === 'apps') return '📂';
+  if (rootMode && segs.length === 2 && segs[0] === 'apps') return '📦';
+  return '📁';
 }
 
 function notConnected(detail){
@@ -260,7 +309,14 @@ function notConnected(detail){
   $('status').textContent = 'Not connected';
 }
 
+function backendLabel(){
+  const caps = window.naklios?.capabilities || {};
+  const d = (caps.fsBackends || []).find(b => b && b.id === caps.fsBackend);
+  return d?.label || (caps.fsBackend === 'crate' ? 'Crate' : caps.fsBackend === 'fsa' ? 'Folder' : '');
+}
+
 async function refresh(){
+  fs = pickFacade();
   if (!naklios.capabilities.hosted || !fs){
     notConnected();
     return;
@@ -274,9 +330,13 @@ async function refresh(){
     notConnected(e.message);
     return;
   }
-  const name = 'Files';
-  $('folder-name').textContent = name;
-  naklios.title('Files — ' + name);
+  // Reset navigation to the facade root if the previous path no longer applies
+  // (e.g. we just upgraded from namespaced → whole-store).
+  const be = backendLabel();
+  $('scope-badge').hidden = !rootMode;
+  const title = rootMode ? 'All apps' : 'Files';
+  $('folder-name').textContent = be ? `${be}` : '';
+  naklios.title(rootMode ? `Files — All apps${be ? ' · ' + be : ''}` : `Files${be ? ' — ' + be : ''}`);
   await renderTree();
   await openPath(currentPath);
 }
@@ -284,9 +344,13 @@ async function refresh(){
 async function renderTree(){
   const root = $('tree');
   root.innerHTML = '';
-  await renderTreeNode(root, '', 'root', '📁');
+  const rootLabel = rootMode ? 'All files' : 'Files';
+  const rootIcon = rootMode ? '💽' : '📁';
+  await renderTreeNode(root, '', rootLabel, rootIcon);
 }
 
+// path is the facade-full path of this node ('' = root). Entries returned by
+// list(path) are themselves facade-full paths, so we use them directly.
 async function renderTreeNode(parentEl, path, label, icon){
   let entries = [];
   try { entries = await fs.list(path); } catch(_){}
@@ -300,11 +364,10 @@ async function renderTreeNode(parentEl, path, label, icon){
 
   const hasChildren = dirs.length > 0;
   const chev = hasChildren ? '▸' : ' ';
-  const displayLabel = label === 'root' ? 'Files' : label;
   node.innerHTML = `
     <span class="chev">${chev}</span>
     <span class="icon">${icon}</span>
-    <span class="label">${displayLabel}</span>
+    <span class="label">${escapeHtml(label)}</span>
   `;
   node.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -321,26 +384,55 @@ async function renderTreeNode(parentEl, path, label, icon){
   if ((expanded.has(path) || path === '') && hasChildren){
     const children = document.createElement('div');
     children.className = 'tree-children';
-    for (const dir of dirs){
-      const fullPath = path ? `${path}/${dir}` : dir;
-      const dirIcon = path === '' && dir === 'apps' ? '📂' : '📁';
-      await renderTreeNode(children, fullPath, dir, dirIcon);
+    for (const dirPath of dirs){
+      await renderTreeNode(children, dirPath, prettyLabel(dirPath), dirIconFor(dirPath));
     }
     parentEl.appendChild(children);
   }
 }
 
+function renderCrumbs(path){
+  const el = $('crumbs');
+  el.innerHTML = '';
+  const nav = (target) => async () => {
+    currentPath = target;
+    if (target) expanded.add(target);
+    await openPath(target);
+    await renderTree();
+  };
+  const mkCrumb = (label, target) => {
+    const span = document.createElement('span');
+    span.className = 'crumb';
+    span.textContent = label;
+    span.addEventListener('click', nav(target));
+    return span;
+  };
+  const mkSep = () => {
+    const s = document.createElement('span');
+    s.className = 'sep'; s.textContent = '/';
+    return s;
+  };
+  el.appendChild(mkCrumb(rootMode ? 'All files' : 'Files', ''));
+  const segs = path.split('/').filter(Boolean);
+  let acc = '';
+  segs.forEach((seg, i) => {
+    acc = acc ? `${acc}/${seg}` : seg;
+    el.appendChild(mkSep());
+    const label = (rootMode && i === 1 && segs[0] === 'apps') ? (APP_LABELS[seg] || cap(seg)) : seg;
+    el.appendChild(mkCrumb(label, acc));
+  });
+}
+
 async function openPath(path){
   currentPath = path;
-  $('crumbs').innerHTML = path
-    ? `<span>${'/' + path.split('/').join(' / ')}</span>`
-    : '<span>/</span>';
+  renderCrumbs(path);
 
   let entries = [];
   try { entries = await fs.list(path); }
   catch (e){ setStatus('Error: ' + e.message); return; }
 
-  // Sort: directories first, alphabetical within each
+  // Sort: directories first, alphabetical within each. Entries are facade-full
+  // paths, so navigation and reads use them verbatim — no re-concatenation.
   const dirs = entries.filter(isDirEntry).sort();
   const files = entries.filter(e => !isDirEntry(e)).sort();
   listing = [...dirs, ...files];
@@ -357,15 +449,15 @@ async function openPath(path){
   }
 
   for (const entry of listing){
-    const fullPath = path ? `${path}/${entry.replace(/\/$/, '')}` : entry.replace(/\/$/, '');
+    const fullPath = entry.replace(/\/$/, '');
     const isDir = isDirEntry(entry);
     const row = document.createElement('div');
     row.className = 'list-row';
     row.dataset.path = fullPath;
     row.dataset.isDir = isDir ? '1' : '0';
     row.innerHTML = `
-      <span class="icon">${isDir ? '📁' : iconFor(entry)}</span>
-      <span class="name">${entry.replace(/\/$/, '')}</span>
+      <span class="icon">${isDir ? dirIconFor(entry) : iconFor(fullPath)}</span>
+      <span class="name">${escapeHtml(prettyLabel(fullPath))}</span>
       <span class="size" id="size-${cssEscape(fullPath)}"></span>
     `;
     row.addEventListener('click', () => selectRow(row));
@@ -495,10 +587,16 @@ function showContextMenu(x, y, path, isDir){
   menu.id = 'ctx-menu';
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
+  // "Edit in Editor" rides the namespaced Open-With grant, which the host
+  // clamps to apps/files/. It can therefore only hand off files that live in
+  // the Files namespace — offer it only for those (all files, in namespaced
+  // mode; only apps/files/* in whole-store mode).
+  const editable = !rootMode || path === 'apps/files' || path.startsWith('apps/files/');
+  const editPath = rootMode ? path.replace(/^apps\/files\//, '') : path;
   const inner = [];
   if (!isDir){
     inner.push(`<button id="ctx-open">Open / preview</button>`);
-    inner.push(`<button id="ctx-edit">Edit in Editor</button>`);
+    if (editable) inner.push(`<button id="ctx-edit">Edit in Editor</button>`);
     inner.push(`<button id="ctx-download">Download…</button>`);
     inner.push(`<div class="sep"></div>`);
   }
@@ -513,7 +611,7 @@ function showContextMenu(x, y, path, isDir){
   menu.querySelector('#ctx-edit')?.addEventListener('click', async () => {
     closeContextMenu();
     try {
-      const opened = await naklios.files.openWith('editor', path);
+      const opened = await naklios.files.openWith('editor', editPath);
       setStatus(opened ? `Opened ${basename(path)} in Editor` : 'Open With cancelled');
     } catch (e){ showToast('Could not open in Editor: ' + e.message); }
   });
@@ -569,10 +667,11 @@ $('new-file-form').addEventListener('submit', async e => {
     return;
   }
   try {
-    await fs.write(name, $('new-file-contents').value);
+    const target = currentPath ? `${currentPath}/${name}` : name;
+    await fs.write(target, $('new-file-contents').value);
     $('new-file-dialog').close('create');
     await refresh();
-    setStatus(`Created ${name}`);
+    setStatus(`Created ${target}`);
   } catch (e){
     $('new-file-error').textContent = 'Create failed: ' + e.message;
   }
@@ -584,7 +683,15 @@ let storageWasAvailable = false;
 let filesBootComplete = false;
 naklios.onCapabilitiesChange(capabilities => {
   const available = !!capabilities.fs;
-  if (available && !storageWasAvailable && filesBootComplete) void refresh();
+  // Whole-store access can arrive a beat after fs (the host resolves system
+  // status + backend binding separately). Re-refresh when it flips so a boot
+  // that started namespaced upgrades to the full file manager.
+  const wantRoot = !!(capabilities.sysFs && window.naklios?.sys?.fs);
+  const facadeChanged = wantRoot !== rootMode;
+  if (available && filesBootComplete && (!storageWasAvailable || facadeChanged)){
+    if (facadeChanged) currentPath = '';
+    void refresh();
+  }
   if (!available && storageWasAvailable) notConnected();
   storageWasAvailable = available;
 });

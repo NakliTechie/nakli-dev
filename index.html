@@ -4970,6 +4970,51 @@ async function fsHostList(msg, appId){
   return all.map(p => p.startsWith(stripPrefix) ? p.slice(stripPrefix.length) : p);
 }
 
+// ── System-scoped filesystem (the whole store, no app clamp) ─────────
+// This is the OS-level file surface: it sees every app's apps/<id>/ tree plus
+// any top-level files, on whichever backend the ladder resolves to (OPFS/FSA/
+// Crate). Only same-origin system apps (non-third-party — the Files manager,
+// Anvil) may reach it; third-party apps stay clamped to apps/<id>/ via the
+// namespaced route above and never get here. Paths are full-from-store-root;
+// list() returns full paths (native backend shape), unlike the namespaced
+// list() which strips the app prefix.
+function fsSysCleanPath(path, { allowEmpty = false } = {}){
+  const raw = typeof path === 'string' ? path : '';
+  const segs = raw.split('/').filter(s => s && s !== '.');
+  if (segs.some(s => s === '..' || s.startsWith('/'))) throw new Error('Invalid path: ' + raw);
+  if (!segs.length && !allowEmpty) throw new Error('Path required');
+  return segs.join('/');
+}
+async function fsSysBackend(msg, appId){
+  if (!aiAppIsSystem(appId)) throw new Error('System filesystem is available to system apps only');
+  const backendId = await fsEnsurePermission(appId);
+  if (!backendId) throw new Error('Permission denied');
+  if (msg.backend && msg.backend !== backendId) {
+    throw new Error('Storage backend changed before the operation completed; retry on the active backend');
+  }
+  const backend = BACKENDS[backendId];
+  if (!backend.isConnected()) throw new Error('Backend disconnected');
+  return backend;
+}
+async function fsHostSysHandle(msg, op, appId){
+  const backend = await fsSysBackend(msg, appId);
+  const safe = fsSysCleanPath(msg.path || '');
+  switch (op){
+    case 'read':       return await backend.read(safe);
+    case 'readBinary': return await backend.readBinary(safe);
+    case 'write':      await backend.write(safe, msg.data); return null;
+    case 'append':     await backend.append(safe, String(msg.line ?? '')); return null;
+    case 'delete':     await backend.delete(safe); return null;
+    case 'exists':     return await backend.exists(safe);
+  }
+  throw new Error('Unknown system fs op: ' + op);
+}
+async function fsHostSysList(msg, appId){
+  const backend = await fsSysBackend(msg, appId);
+  const prefix = fsSysCleanPath(msg.prefix || '', { allowEmpty: true });
+  return await backend.list(prefix);
+}
+
 // ── Exact-file handoff ───────────────────────────────────────────────
 // Open With never broadens an app's filesystem namespace. The source asks the
 // host to mint a window-lifetime grant for one already-scoped text file. The
@@ -7047,10 +7092,15 @@ function capabilitySnapshot(appId){
   const fsBackend = appBoundBackend(appId);
   const aiModel = aiSelectedModel();
   const aiImageModel = aiSelectedImageModel();
+  const isSystem = aiAppIsSystem(appId);
   return {
     fs: fsCap,
     fsBackends,
     fsBackend,
+    // System apps (non-third-party) may browse the whole store, not just their
+    // own apps/<id>/ namespace — this is what powers the OS-level file manager.
+    system: isSystem,
+    sysFs: isSystem && fsCap,
     ai: aiCapabilityForApp(appId),
     aiModel: aiModel.id,
     aiModelLabel: aiModel.label,
@@ -7501,6 +7551,21 @@ window.addEventListener('message', async e => {
       else if (op === 'unsubscribe') reply.result = fsHostUnsubscribe(e.source, msg.subscriptionId);
       else if (op === 'list') reply.result = await fsHostList(msg, appId);
       else reply.result = await fsHostHandle(msg, op, appId);
+    } catch (err){
+      reply.error = String(err?.message || err);
+    }
+    if (msg.requestId) {
+      try { e.source.postMessage(reply, '*'); } catch(_){}
+    }
+  } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:sysfs:')){
+    // System-scoped fs — whole-store access for same-origin system apps only.
+    const reply = { type: 'naklios:fs:reply', requestId: msg.requestId };
+    try {
+      const appId = getAppId();
+      if (!appId) throw new Error('Unknown app');
+      const op = msg.type.slice('naklios:sysfs:'.length);
+      if (op === 'list') reply.result = await fsHostSysList(msg, appId);
+      else reply.result = await fsHostSysHandle(msg, op, appId);
     } catch (err){
       reply.error = String(err?.message || err);
     }
