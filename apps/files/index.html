@@ -680,28 +680,37 @@ $('refresh').addEventListener('click', () => refresh());
 
 // Boot
 let storageWasAvailable = false;
-let filesBootComplete = false;
+// Coalesce overlapping refreshes: the initial namespaced render can race the
+// capability message that upgrades us to whole-store mode.
+let refreshing = false, refreshQueued = false;
+async function refreshSafe(){
+  if (refreshing){ refreshQueued = true; return; }
+  refreshing = true;
+  try { await refresh(); }
+  finally {
+    refreshing = false;
+    if (refreshQueued){ refreshQueued = false; void refreshSafe(); }
+  }
+}
 naklios.onCapabilitiesChange(capabilities => {
   const available = !!capabilities.fs;
   // Whole-store access can arrive a beat after fs (the host resolves system
-  // status + backend binding separately). Re-refresh when it flips so a boot
-  // that started namespaced upgrades to the full file manager.
+  // status + backend binding separately) and does NOT necessarily re-broadcast
+  // after ready(). Upgrade the moment it flips — not gated on boot completion —
+  // so first open lands directly in the full file manager, no manual refresh.
   const wantRoot = !!(capabilities.sysFs && window.naklios?.sys?.fs);
   const facadeChanged = wantRoot !== rootMode;
-  if (available && filesBootComplete && (!storageWasAvailable || facadeChanged)){
+  if (available && (facadeChanged || !storageWasAvailable)){
     if (facadeChanged) currentPath = '';
-    void refresh();
+    void refreshSafe();
   }
   if (!available && storageWasAvailable) notConnected();
   storageWasAvailable = available;
 });
 naklios.requestCapabilities();
-refresh()
+refreshSafe()
   .catch(e => setStatus('Error: ' + e.message))
-  .finally(() => {
-    filesBootComplete = true;
-    naklios.ready();
-  });
+  .finally(() => { naklios.ready(); });
 
 })();
 </script>
