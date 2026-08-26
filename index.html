@@ -355,6 +355,15 @@ input{font:inherit; color:inherit;}
   background:#fff;
 }
 .nw-window.is-dragging .nw-body iframe{pointer-events:none;}
+/* Drag-to-resize handles — sides + bottom corners, below the titlebar so they
+   never clash with its buttons. The window's overflow:hidden keeps them inside. */
+.nw-rz{position:absolute; z-index:6; touch-action:none;}
+.nw-rz.e{right:0; top:34px; bottom:12px; width:7px; cursor:ew-resize;}
+.nw-rz.w{left:0; top:34px; bottom:12px; width:7px; cursor:ew-resize;}
+.nw-rz.s{left:12px; right:12px; bottom:0; height:7px; cursor:ns-resize;}
+.nw-rz.se{right:0; bottom:0; width:16px; height:16px; cursor:nwse-resize;}
+.nw-rz.sw{left:0; bottom:0; width:16px; height:16px; cursor:nesw-resize;}
+.nw-window.is-fullscreen .nw-rz, .nw-window.is-mobile-window .nw-rz{display:none;}
 .nw-window.is-mobile-window{
   min-width:0; min-height:0;
   border-left:0; border-right:0; border-radius:0;
@@ -4184,6 +4193,8 @@ function makeWindow(opts){
   // Restore saved position if it exists and is at least partially in-viewport;
   // otherwise fall back to centered placement with cascading offset.
   const saved = state.layout.windowPositions[id];
+  if (saved && saved.w > 200) win.style.width = saved.w + 'px';
+  if (saved && saved.h > 150) win.style.height = saved.h + 'px';
   const area = document.getElementById('icon-grid').getBoundingClientRect();
   let px, py;
   if (saved && typeof saved.x === 'number' && typeof saved.y === 'number'
@@ -4209,6 +4220,11 @@ function makeWindow(opts){
       <button class="nw-close" aria-label="Close">✕</button>
     </div>
     <div class="nw-body"></div>
+    <div class="nw-rz e" data-dir="e"></div>
+    <div class="nw-rz w" data-dir="w"></div>
+    <div class="nw-rz s" data-dir="s"></div>
+    <div class="nw-rz se" data-dir="se"></div>
+    <div class="nw-rz sw" data-dir="sw"></div>
   `;
   root.appendChild(win);
   fitWindowToViewport(win);
@@ -4227,8 +4243,60 @@ function makeWindow(opts){
     e.stopPropagation(); minimizeWindow(win);
   });
   makeDraggable(win);
+  makeResizable(win);
   focusWindow(win);
   return win;
+}
+
+// Drag-to-resize from the side/bottom handles. Mirrors makeDraggable: the iframe
+// is made pointer-transparent during the drag, and the new size persists to
+// windowPositions so reopen/reload restores it.
+function makeResizable(win){
+  win.querySelectorAll('.nw-rz').forEach(handle => {
+    handle.addEventListener('pointerdown', e => {
+      if (isMobile()) return;
+      if (e.button !== 0) return;
+      if (win.classList.contains('is-fullscreen')) return;
+      e.preventDefault(); e.stopPropagation();
+      const dir = handle.dataset.dir || '';
+      const startX = e.clientX, startY = e.clientY;
+      const r = win.getBoundingClientRect();
+      const origW = r.width, origH = r.height, origLeft = parseFloat(win.style.left) || r.left;
+      const minW = 280, minH = 200;
+      win.classList.add('is-dragging');
+      focusWindow(win);
+      const onMove = ev => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (dir.includes('e')) win.style.width = Math.max(minW, origW + dx) + 'px';
+        if (dir.includes('s')) win.style.height = Math.max(minH, origH + dy) + 'px';
+        if (dir.includes('w')) {
+          const w = Math.max(minW, origW - dx);
+          win.style.width = w + 'px';
+          win.style.left = (origLeft + (origW - w)) + 'px';
+        }
+      };
+      const onUp = () => {
+        win.classList.remove('is-dragging');
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        if (win.dataset.id && !win.classList.contains('is-fullscreen')){
+          const cur = state.layout.windowPositions[win.dataset.id] || {};
+          state.layout.windowPositions[win.dataset.id] = {
+            ...cur,
+            x: parseFloat(win.style.left) || cur.x || 0,
+            y: parseFloat(win.style.top) || cur.y || 0,
+            w: parseFloat(win.style.width) || cur.w,
+            h: parseFloat(win.style.height) || cur.h,
+          };
+          saveLayout();
+        }
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+  });
 }
 
 let fullscreenWin = null;
