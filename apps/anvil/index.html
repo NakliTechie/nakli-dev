@@ -123,6 +123,8 @@
   #preview{background:var(--bg-1);border-left:1px solid var(--rule);display:flex;flex-direction:column;min-width:0;overflow:hidden}
   #preview .phead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--rule);flex:0 0 auto}
   #preview .phead .pt{font-weight:600;font-size:12px} #preview .phead .pf{color:var(--fg-2);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .revertbtn{font-size:10px;color:var(--err);background:transparent;border:1px solid var(--err);border-radius:5px;padding:2px 8px;cursor:pointer;flex:0 0 auto}
+  .revertbtn:hover{background:var(--err);color:#fff}
   #preview .pbody{flex:1;min-height:0;overflow:auto}
   #preview iframe{width:100%;height:100%;border:0;background:#fff}
   #preview pre{margin:0;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--fg-0)}
@@ -174,7 +176,7 @@
   </section>
 
   <aside id="preview">
-    <div class="phead"><span class="pt">Preview</span><span class="pf" id="pv-file"></span><button class="icon" id="pv-close" title="Close">✕</button></div>
+    <div class="phead"><span class="pt">Preview</span><span class="pf" id="pv-file"></span><button id="pv-revert" class="revertbtn" hidden title="Undo this change">↶ Revert</button><button class="icon" id="pv-close" title="Close">✕</button></div>
     <div class="pbody" id="pv-body"><div class="pempty">Nothing to preview yet.<br>Agent output that can be shown appears here.</div></div>
   </aside>
 </main>
@@ -464,7 +466,7 @@
         // the preview, instead of auto-popping the pane.
         const c=document.createElement('div'); c.className='change'; c.title='View this file in the preview';
         c.innerHTML=`<span class="ci">✎</span><span class="cf">${esc(e.verb||'wrote')} ${esc(e.file)}</span><span class="cv">view →</span>`;
-        c.onclick=()=>openChange(e.file);
+        c.onclick=()=>openChange(e.file, e.pre);
         w.appendChild(c);
       }
     }
@@ -483,10 +485,11 @@
     box.innerHTML=''; box.appendChild(w); box.scrollTop=box.scrollHeight;
   }
   function renderPreview(){
-    const t=activeTask(); const pv=t&&t.preview;
+    const t=activeTask(); const pv=t&&t.preview; const rev=$('pv-revert');
     $('main').classList.toggle('preview-open', !!state.previewOpen && !!pv);
-    if(!pv){ $('pv-file').textContent=''; $('pv-body').innerHTML='<div class="pempty">Nothing to preview yet.<br>Agent output that can be shown appears here.</div>'; return; }
+    if(!pv){ $('pv-file').textContent=''; $('pv-body').innerHTML='<div class="pempty">Nothing to preview yet.<br>Agent output that can be shown appears here.</div>'; if(rev) rev.hidden=true; return; }
     $('pv-file').textContent=pv.file||'';
+    if(rev){ rev.hidden = pv.pre==null; rev.onclick = pv.pre==null ? null : (()=>revertChange(pv)); }
     const body=$('pv-body');
     if(pv.type==='html'){ body.innerHTML=''; const f=document.createElement('iframe'); f.setAttribute('sandbox','allow-scripts'); f.srcdoc=pv.content; body.appendChild(f); }
     else if(pv.type==='diff'){ body.innerHTML='<pre></pre>'; body.querySelector('pre').innerHTML=diffHtml(pv.content); }
@@ -496,6 +499,21 @@
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function diffHtml(s){ return String(s).split('\n').map(l=>{ const c=l[0]; const cls=c==='+'?'add':c==='-'?'del':(c==='@'?'hd':''); return cls?`<span class="${cls}">${esc(l)}</span>`:esc(l); }).join('\n'); }
+  // Line-level diff (LCS): ' ' context, '-' removed, '+' added — rendered by diffHtml.
+  function lineDiff(a, b){
+    const A=String(a==null?'':a).split('\n'), B=String(b==null?'':b).split('\n');
+    const m=A.length, n=B.length;
+    if(m*n > 3_000_000) return B.map(l=>'+'+l).join('\n'); // too large to diff cheaply
+    const dp=Array.from({length:m+1},()=>new Int32Array(n+1));
+    for(let i=m-1;i>=0;i--) for(let j=n-1;j>=0;j--) dp[i][j]=A[i]===B[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
+    const out=[]; let i=0,j=0;
+    while(i<m&&j<n){ if(A[i]===B[j]){ out.push(' '+A[i]); i++;j++; } else if(dp[i+1][j]>=dp[i][j+1]){ out.push('-'+A[i]); i++; } else { out.push('+'+B[j]); j++; } }
+    while(i<m) out.push('-'+A[i++]); while(j<n) out.push('+'+B[j++]);
+    return out.join('\n');
+  }
+  // Pre-images snapshotted just before a write/edit runs (see runTask), so a
+  // change chip can show a real before→after diff and offer Revert.
+  const preImages = {};
 
   function pushSystem(text){ const t=activeTask(); if(!t) return; (t.log=t.log||[]).push({k:'system',text}); save(); renderLog(); }
 
@@ -506,17 +524,32 @@
     try{
       const path = args && (args.path||args.file);
       if(!path || !(name==='write'||name==='edit')) return;
-      t.log.push({ k:'change', file:path, verb: name==='edit'?'edited':'wrote' });
+      // Keep the pre-image with the change (capped, so state.json stays lean).
+      const raw = (path in preImages) ? preImages[path] : null;
+      const pre = (raw!=null && String(raw).length < 20000) ? raw : null;
+      t.log.push({ k:'change', file:path, verb: name==='edit'?'edited':'wrote', pre });
     }catch(_){}
   }
-  // Clicking a change chip reads the CURRENT file from the workspace and shows it
-  // in the preview (correct for both write and edit — no stale/partial content).
-  async function openChange(file){
+  // Clicking a change chip opens it in the preview: a real before→after DIFF when
+  // we have the pre-image (with a Revert), else the current file.
+  async function openChange(file, pre){
     const at=activeTask(); if(!at) return;
     let content='(could not read '+file+')';
     try{ const r=await fs.read(file,{encoding:'utf-8'}); if(r&&r.ok) content=r.data; }catch(_){}
-    at.preview={ type:/\.html?$/.test(file)?'html':'text', file, content:String(content).slice(0,50000) };
+    if(pre!=null && !/\.html?$/.test(file)){
+      at.preview={ type:'diff', file, content: lineDiff(pre, content), pre };
+    } else {
+      at.preview={ type:/\.html?$/.test(file)?'html':'text', file, content:String(content).slice(0,50000) };
+    }
     state.previewOpen=true; save(); renderPreview();
+  }
+  // Revert: write the pre-image back to the file, then show it plainly.
+  async function revertChange(pv){
+    if(!pv || pv.pre==null) return;
+    try{ await fs.write(pv.file, pv.pre); }catch(_){}
+    pushSystem('Reverted '+pv.file+'.');
+    const at=activeTask(); if(at) at.preview={ type:'text', file:pv.file, content:pv.pre };
+    save(); renderAll();
   }
 
   // ── Lightweight Markdown → DOM (fenced code blocks get a Copy button; inline
@@ -600,12 +633,23 @@
     const convo = (t.convo=t.convo||[]);
     convo.push({role:'user', content:text});
     let liveTool=null;
+    // Wrap the executor to snapshot each file's PRE-IMAGE just before a write/edit
+    // applies — that's what powers the real before→after diff + revert (YOLO stays;
+    // review is after-the-fact). Cheap: one extra read per mutating tool call.
+    const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
+    const executeTool = async (nm, ar, callObj)=>{
+      if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
+        const p=ar.path||ar.file;
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }
+      }
+      return baseExec(nm, ar, callObj);
+    };
     try{
       const result = await runAgentLoop({
         messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')}, ...convo],
         tools: codingToolset(mode,{subagents:true}),
         infer: inferViaHost,
-        executeTool: makeToolExecutor({ shell, face, mode, infer: inferViaHost }),
+        executeTool,
         maxSteps:24,
         signal: abortController.signal,
         budget: { tokens: 120000, wallClockMs: 240000 }, // stop runaway loops with a named reason
