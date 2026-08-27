@@ -86,6 +86,17 @@ Groq, or a custom provider. Cooperative apps keep one SDK regardless of which
 runtime the user chooses. Requests are bounded, queued fairly, reset between
 apps, streamed, and cancellable.
 
+Inference is **split by tier.** General-purpose (non-agent) completions — the
+Spotlight ask, a quick summary, any desktop query — default to the browser's
+built-in **Gemini Nano** on-device model whenever Chrome exposes it (zero setup,
+nothing downloaded, nothing leaves the device), and fall back to a LocalMind
+runtime or a configured endpoint otherwise. The **agent tier** — the coding
+agents below, or any `agent:true` request from a system app — is separate: it
+always uses the configured OpenAI-compatible endpoint and never a
+general-purpose on-device model, because coding needs reliable tool-calling.
+There is no silent weak-model fallback; with no coding endpoint set, the agent
+tier degrades honestly rather than answering with a weak model.
+
 The same broker exposes image generation through
 `naklios.ai.images.generate(...)`. The default image runtime is LocalMind's
 private, on-device Bonsai FLUX.2-Klein WebGPU engine. Users may instead connect
@@ -107,6 +118,43 @@ LocalMind remains the source repository for inference runtime work. NakliOS
 checks in the tested workers, catalog, and engine under
 [`vendor/localmind/`](vendor/localmind/) with an upstream commit and SHA-256
 lock, so the full LocalMind workbench and the shared OS service cannot drift.
+
+## Coding agents — Forge + Anvil
+
+NakliOS ships two on-device coding agents built on **Rig**, an in-browser
+file/git/shell substrate. Both run entirely in the tab — nothing leaves your
+device — and are same-origin system apps (`apps/forge/`, `apps/anvil/`) so File
+System Access and cross-origin isolation (Python via Kiln/Pyodide) work inside
+Immersive mode.
+
+- **Forge** — a bash-style terminal over your files and git (`ls`, `cat`,
+  `grep`, `sed`, pipes, globs, `git`, and more) with a real agent loop:
+  `agent "<task>"` drives surgical file tools (read/write/edit/apply_patch) and
+  the shell to completion.
+- **Anvil** — the GUI sibling: a coding-agent desktop with projects and tasks, a
+  chat showing the agent's live tool-call trace, a diff/preview pane with
+  per-change revert, plan/code/ask modes, and an optional verify gate (the agent
+  is not "done" until your command exits 0).
+
+Anvil's capabilities are at parity with desktop coding agents:
+
+- **Edit robustness** — a 9-strategy replacer chain plus a read-before-edit
+  ledger, so an edit lands even when whitespace drifts and never touches content
+  the agent has not seen.
+- **Skills** (`.anvil/skills/<name>/SKILL.md`) and **structured Memory**
+  (`.anvil/memory/`, one fact per file) on one progressive-disclosure mechanism —
+  only the descriptions load into context; the full item is fetched on demand.
+- **Hooks** (`.anvil/hooks.json`) — per-project pre/post-tool shell hooks
+  (auto-format, lint, policy) without touching the agent core.
+- **Supervisor + parallel subagents** — `dispatch` fans independent sub-tasks to
+  subagents that run **in parallel**, each isolated in a copy-on-write overlay of
+  the workspace (a browser-native "worktree"); their changes merge back
+  automatically when they touch different files, and any conflict is held for you
+  to resolve. `review` spawns an independent read-only reviewer for a second
+  opinion. Only a subagent that finishes cleanly is merged.
+
+The agent tier calls your configured endpoint (Settings → AI) for inference; see
+the tier split in [AI](#ai) above.
 
 ## Mirroring an app for same-origin embedding
 
@@ -184,6 +232,12 @@ reloads, supports notebooks, full-text search, pinning, and soft deletion, and
 uses `naklios.fs.subscribe()` for live storage-change notifications when the
 host backend supports them. It complements Notepad: Notes manages a library;
 Notepad opens arbitrary files.
+
+**Draft** and **Reckon** round out the productivity set in Create & Convert —
+Draft a private browser word processor for rich-text documents, Reckon a private
+browser spreadsheet with formulas, sorting, and charts. Both keep files on your
+device via the File System Access API and are mirrored under `apps/` for
+same-origin embedding in Immersive mode.
 
 ## License
 
