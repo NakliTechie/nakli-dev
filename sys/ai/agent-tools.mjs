@@ -18,6 +18,10 @@
 //   await runAgentLoop({ messages, tools, infer, executeTool: exec });
 
 import { shellTool, makeShellExecutor, runAgentLoop, taskDoneTool } from './agent-loop.mjs';
+import {
+  dispatchTool, reviewTool, normalizeTasks, planMerge, formatDispatchDigest,
+  SUBAGENT_SYSTEM, REVIEW_SYSTEM, SUBAGENT_MAX_STEPS,
+} from './subagents.mjs';
 import { renderHashline, applyHashlineBlock, parseHashlineEdit } from './hashline.mjs';
 
 const READ_MAX_LINES = 2000;
@@ -123,10 +127,12 @@ export const MODE_TOOLS = {
 
 // The coding tool set for a mode. `shell` stays the escape hatch (code mode only).
 // Opt-in extras keep the default surface minimal (pi's lesson): `subagents` adds
-// `task`, `hashline` adds read_lines/edit_lines, `completion` adds task_done.
-export function codingToolset(mode = 'code', { subagents = false, hashline = false, completion = false } = {}) {
+// `task`, `supervisor` adds `dispatch`/`review` (parallel isolated subagents),
+// `hashline` adds read_lines/edit_lines, `completion` adds task_done.
+export function codingToolset(mode = 'code', { subagents = false, supervisor = false, hashline = false, completion = false } = {}) {
   const all = [readTool(), editTool(), writeTool(), applyPatchTool(), todoTool(), shellTool()];
   if (subagents) all.push(taskTool());
+  if (supervisor) all.push(dispatchTool(), reviewTool());
   if (hashline) all.push(readLinesTool(), editLinesTool());
   if (completion) all.push(taskDoneTool());
   const allow = MODE_TOOLS[mode];
@@ -383,10 +389,14 @@ export function parseApplyPatch(patch) {
 }
 
 // ── the executor ────────────────────────────────────────────────────────
-export function makeToolExecutor({ shell, face, mode = 'code', infer = null, subagentDepth = 0 }) {
+export function makeToolExecutor({ shell, face, mode = 'code', infer = null, subagentDepth = 0, spawnIsolated = null }) {
   if (!face) throw new Error('makeToolExecutor requires a Rig agent face');
   const modeAllow = MODE_TOOLS[mode] || null; // null = all tools
   const subagentsOn = typeof infer === 'function' && subagentDepth < 1; // depth cap 1 (no recursion)
+  // The supervisor tools (dispatch/review) need an isolation factory from the app
+  // (a fresh executor over a copy-on-write overlay). Only at the top level — a
+  // subagent can't itself fan out (depth cap 1).
+  const supervisorOn = typeof spawnIsolated === 'function' && typeof infer === 'function' && subagentDepth < 1;
   const runShell = makeShellExecutor(shell);
   const cwd = () => (shell && typeof shell.cwd === 'string' ? shell.cwd : '');
   // Read-before-edit ledger (Claude Code): a file must be read (read tool, a
@@ -565,6 +575,69 @@ export function makeToolExecutor({ shell, face, mode = 'code', infer = null, sub
           maxSteps: 16,
         });
         return res.text || `(subagent finished: ${res.stop})`;
+      }
+
+      if (name === 'dispatch') {
+        if (!supervisorOn) return 'Error: dispatch (parallel subagents) is not available here.';
+        const norm = normalizeTasks(args?.tasks);
+        if (!norm.ok) return `Error: ${norm.error}`;
+        // Launch every sub-task concurrently, each in its own isolated overlay.
+        // `ok` is true ONLY when the subagent finished cleanly (stop 'done') — a
+        // subagent that errored or ran out of steps is held, its partial writes
+        // never committed to the real workspace.
+        const runs = await Promise.all(norm.tasks.map(async (t) => {
+          let iso;
+          try { iso = await spawnIsolated(); }
+          catch (e) { return { label: t.label, ok: false, stop: 'spawn-failed', text: `Failed to start subagent: ${String(e && e.message || e)}`, changes: { written: [], deleted: [] }, iso: null }; }
+          try {
+            const res = await runAgentLoop({
+              messages: [
+                { role: 'system', content: SUBAGENT_SYSTEM },
+                { role: 'user', content: t.prompt },
+              ],
+              tools: codingToolset('code'), // full tools, isolated; no nesting (depth cap)
+              infer,
+              executeTool: iso.executor,
+              maxSteps: SUBAGENT_MAX_STEPS,
+            });
+            return { label: t.label, ok: res.stop === 'done', stop: res.stop, text: res.text || `(stopped: ${res.stop})`, changes: iso.changes(), iso };
+          } catch (e) {
+            return { label: t.label, ok: false, stop: 'error', text: `Subagent error: ${String(e && e.message || e)}`, changes: iso.changes ? iso.changes() : { written: [], deleted: [] }, iso };
+          }
+        }));
+        // Merge plan: only cleanly-finished runs are eligible; a path clash holds
+        // just the clashers (a disjoint clean sibling still merges).
+        const plan = planMerge(runs);
+        for (const i of plan.apply) {
+          const r = runs[i];
+          if (r.iso && typeof r.iso.commit === 'function') {
+            try { await r.iso.commit(); }
+            catch (e) { r.text += `\n(merge failed: ${String(e && e.message || e)})`; plan.status[i] = 'merge-failed'; }
+          }
+        }
+        return formatDispatchDigest({ results: runs, status: plan.status, conflicts: plan.conflicts, dropped: norm.dropped });
+      }
+
+      if (name === 'review') {
+        if (!supervisorOn) return 'Error: review (reviewer subagent) is not available here.';
+        const prompt = String(args?.prompt ?? '').trim();
+        if (!prompt) return 'Error: review needs a prompt naming what to review.';
+        let iso;
+        try { iso = await spawnIsolated(); }
+        catch (e) { return `Failed to start reviewer: ${String(e && e.message || e)}`; }
+        // Reviewer is inspect-only (read/read_lines/shell/todo). It runs in an
+        // isolated overlay and its changeset is DISCARDED — a reviewer never writes.
+        const res = await runAgentLoop({
+          messages: [
+            { role: 'system', content: REVIEW_SYSTEM },
+            { role: 'user', content: prompt },
+          ],
+          tools: [readTool(), readLinesTool(), shellTool(), todoTool()],
+          infer,
+          executeTool: iso.executor,
+          maxSteps: SUBAGENT_MAX_STEPS,
+        });
+        return res.text || `(review finished: ${res.stop})`;
       }
 
       if (name === 'todowrite') {

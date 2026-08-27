@@ -201,6 +201,7 @@
 
 <script type="module">
   import { createFileops, MemoryBackend } from '../../sys/rig/fileops/index.mjs';
+  import { OverlayBackend } from '../../sys/rig/fileops/overlay-backend.mjs';
   import { FsaBackend } from '../../sys/rig/fileops/fsa-backend.mjs';
   import { createGitCore } from '../../sys/rig/git/git-core.mjs';
   import { buildRigRegistry } from '../../sys/rig/registry/index.mjs';
@@ -225,8 +226,9 @@
   // ── Rig workspace stack (lifted from Forge) — the agent's file substrate ──
   let backend, fs, git, registry, grant, opLog, face, shell, kilnRef=null;
   let workspaceLabel = 'memory · scratch';
+  let wsRoot = ''; // fileops root for the active mount (subagent overlays match it)
   function mountWorkspace(newBackend, label, root=''){
-    backend = newBackend; workspaceLabel = label;
+    backend = newBackend; workspaceLabel = label; wsRoot = root;
     fs = createFileops({ backend, root });
     git = createGitCore({ fs, dir:'/' });
     registry = buildRigRegistry({ fs, git });
@@ -769,7 +771,7 @@
     throw lastErr;
   }
 
-  const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate to a subagent), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. Work in small, verifiable steps; end with a one-line summary.';
+  const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate one bounded sub-task to a subagent), dispatch (fan out INDEPENDENT sub-tasks to subagents that run in parallel, each in an isolated copy of the workspace — their changes merge back when they touch different files), review (an independent read-only reviewer subagent for a second opinion), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. For work that splits into independent parts, use dispatch to parallelise; after a significant change, consider review before finishing. Work in small, verifiable steps; end with a one-line summary.';
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
@@ -796,7 +798,52 @@
     // Wrap the executor to snapshot each file's PRE-IMAGE just before a write/edit
     // applies — that's what powers the real before→after diff + revert (YOLO stays;
     // review is after-the-fact). Cheap: one extra read per mutating tool call.
-    const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
+    // Supervisor isolation factory: each parallel subagent (dispatch/review) gets
+    // a fresh executor over a copy-on-write OverlayBackend of the live workspace —
+    // a browser-native "worktree". Its writes stay private until the supervisor
+    // merges them; `commit` replays the overlay onto the real workspace through the
+    // app's own write path (capturing pre-images + change chips, so a subagent's
+    // merged edits are viewable/revertable like any other). Isolated subagents get
+    // no kiln (python) — that stays a top-level capability.
+    const toRel = (p)=> (wsRoot && p.startsWith(wsRoot+'/')) ? p.slice(wsRoot.length+1) : (wsRoot && p===wsRoot ? '' : p);
+    async function spawnIsolated(){
+      const overlay = new OverlayBackend(backend);
+      const ofs = createFileops({ backend: overlay, root: wsRoot });
+      const ogit = createGitCore({ fs: ofs, dir:'/' });
+      const oregistry = buildRigRegistry({ fs: ofs, git: ogit });
+      const ograph = createGrant({ prefixes:[''], scopes:['fs:read','fs:write','fs:remove','git:read','git:write'] });
+      const oopLog = createOpLog({ fs: createFileops({ backend:new MemoryBackend() }) });
+      const oface = createAgentFace({ registry: oregistry, grant: ograph, opLog: oopLog, actor:'agent' });
+      const oshell = createShell({ registry: oregistry, face: oface }); // no kiln in subagents
+      const executor = makeToolExecutor({ shell: oshell, face: oface, mode:'code', infer: inferViaHost, subagentDepth: 1 });
+      return {
+        executor,
+        changes: ()=> overlay.changes(),
+        commit: async ()=>{
+          const t = activeTask();
+          await overlay.commit({
+            write: async (p, bytes)=>{
+              const rel = toRel(p);
+              // Pre-image (for the diff/revert chip) — text-only; a binary file
+              // just yields no useful diff, same as any other binary write.
+              let pre=''; try{ const r=await fs.read(rel,{encoding:'utf-8'}); pre=(r&&r.ok)?r.data:''; }catch(_){ pre=''; }
+              preImages[rel]=pre;
+              // Write the EXACT bytes (fileops.toBytes takes a Uint8Array) — no
+              // lossy UTF-8 round-trip, so binary artifacts survive the merge.
+              await fs.write(rel, bytes);
+              if(t){ const preC=(pre!=null && String(pre).length<20000)?pre:null; (t.log=t.log||[]).push({ k:'change', file:rel, verb:'wrote', pre:preC }); }
+            },
+            remove: async (p)=>{
+              const rel = toRel(p);
+              try{ await fs.remove(rel); }catch(_){}
+              if(t) (t.log=t.log||[]).push({ k:'system', text:'subagent deleted '+rel });
+            },
+          });
+          save(); renderLog(); renderFiles();
+        },
+      };
+    }
+    const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost, spawnIsolated });
     const skillMap = {}; // skill name -> SKILL.md path, populated below
     const factMap = {};  // memory-fact name -> .md path, populated below
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
@@ -928,7 +975,7 @@
     // `remember` writes a fact file — code mode only (plan/ask are read-only).
     // `skill` and `recall` are read-only, offered in every mode when there's
     // something to load.
-    const tools = codingToolset(mode,{subagents:true, completion: !!verify});
+    const tools = codingToolset(mode,{subagents:true, supervisor: mode==='code', completion: !!verify});
     if(mode==='code') tools.push(rememberTool());
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());

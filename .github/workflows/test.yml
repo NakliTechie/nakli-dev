@@ -63,6 +63,15 @@ jobs:
       - name: Verify agent loop over the Rig shell
         run: node sys/ai/test/agent-loop.test.mjs
 
+      - name: Verify copy-on-write overlay backend (subagent isolation)
+        run: node sys/rig/fileops/test/overlay-backend.test.mjs
+
+      - name: Verify supervisor / parallel-subagent orchestration
+        run: node sys/ai/test/subagents.test.mjs
+
+      - name: Verify parallel subagents run isolated and merge conflict-safe
+        run: node sys/ai/test/subagents-integration.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
