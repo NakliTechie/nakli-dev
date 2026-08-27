@@ -112,6 +112,62 @@
           "bytes": 615965
         }
       ]
+    },
+    {
+      "id": "sheaf",
+      "repo": "NakliTechie/sheaf",
+      "requestedRef": "main",
+      "resolvedCommit": "e38555bf7ac2abc972edc21e40794c512755d6a7",
+      "files": [
+        {
+          "source": "index.html",
+          "destination": "index.html",
+          "sha256": "acc20c52f4760ef7706abf6dd5dce5c9a45ef2d8e2dba74815f6d0fca37c9171",
+          "bytes": 325852
+        },
+        {
+          "source": "engines/pdf-lib/2.9.1/pdf-lib.esm.js",
+          "destination": "engines/pdf-lib/2.9.1/pdf-lib.esm.js",
+          "sha256": "23a36609cf4633e10e486095c151dabb8d75a8a667402d092f47dbde7f7d52b5",
+          "bytes": 1517515
+        },
+        {
+          "source": "engines/pdfjs/6.2.108/pdf.min.mjs",
+          "destination": "engines/pdfjs/6.2.108/pdf.min.mjs",
+          "sha256": "e0be3863c23c8af2305b16548febd58e7f8874a460253317d7771cddbc1c0f6d",
+          "bytes": 454669
+        },
+        {
+          "source": "engines/pdfjs/6.2.108/pdf.worker.min.mjs",
+          "destination": "engines/pdfjs/6.2.108/pdf.worker.min.mjs",
+          "sha256": "0613f41490dd6aaceed7a93fbbd38c85e6d6aa60474b6588c6e7709cfbe18cb3",
+          "bytes": 1262398
+        },
+        {
+          "source": "engines/tesseract/7.0.0/eng.traineddata.gz",
+          "destination": "engines/tesseract/7.0.0/eng.traineddata.gz",
+          "sha256": "18c1ac52b75e35d44735fb6c2a60acfaf23033524653200738e98f0243edb75b",
+          "bytes": 1984273
+        },
+        {
+          "source": "engines/tesseract/7.0.0/tesseract-core-simd-lstm.wasm.js",
+          "destination": "engines/tesseract/7.0.0/tesseract-core-simd-lstm.wasm.js",
+          "sha256": "c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38",
+          "bytes": 3899472
+        },
+        {
+          "source": "engines/tesseract/7.0.0/tesseract.esm.min.js",
+          "destination": "engines/tesseract/7.0.0/tesseract.esm.min.js",
+          "sha256": "64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29",
+          "bytes": 63220
+        },
+        {
+          "source": "engines/tesseract/7.0.0/worker.min.js",
+          "destination": "engines/tesseract/7.0.0/worker.min.js",
+          "sha256": "576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d",
+          "bytes": 111307
+        }
+      ]
     }
   ]
 }
