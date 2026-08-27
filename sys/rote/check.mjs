@@ -28,27 +28,31 @@ export function roteCheck(runs, { failBudget = DEFAULT_FAIL_BUDGET } = {}) {
   const rate = t ? (last.failed || 0) / t : 0;
 
   // Clean green: reason-once/run-many fully achieved — no explore() and failures
-  // within the operator's budget.
+  // within the operator's budget. Judged on the latest run alone.
   if ((last.exploreCalls || 0) === 0 && rate <= failBudget) {
     return { exit: 0, reason: `clean — exploreCalls=0, fail rate ${(rate * 100).toFixed(2)}% ≤ ${(failBudget * 100).toFixed(2)}%` };
   }
 
-  // Wall: a dominant failure class that has not decreased across three runs. This
-  // is checked before "converged" so a genuinely stuck problem escalates to a
-  // human rather than being accepted as done.
-  if (R.length >= 3) {
-    const cls = topClass(last);
-    if (cls) {
-      const c0 = (last.failures || {})[cls] || 0;
-      const c2 = (R[2].failures || {})[cls] || 0;
-      if (c0 > 0 && c0 >= c2 && (last.failed || 0) >= (prev.failed || 0)) {
-        return { exit: 2, reason: `wall — failure class "${cls}" not decreasing over 3 runs (${c2} → ${(prev.failures || {})[cls] || 0} → ${c0})`, failureClass: cls };
-      }
+  // Below here we distinguish a genuine plateau (converged → green) from a
+  // dominant-class stall (wall → human). That distinction needs THREE runs, so
+  // never green-on-plateau with only two — otherwise a script that is stuck from
+  // the first pass would be accepted before the wall rule could ever fire. Gather
+  // a third run first.
+  if (R.length < 3) return { exit: 1, reason: `only ${R.length} runs — need a third to tell a plateau from a stall` };
+
+  // Wall: a dominant failure class that has not decreased across three runs.
+  // Checked before "converged" so a genuinely stuck problem escalates.
+  const cls = topClass(last);
+  if (cls) {
+    const c0 = (last.failures || {})[cls] || 0;
+    const c2 = (R[2].failures || {})[cls] || 0;
+    if (c0 > 0 && c0 >= c2 && (last.failed || 0) >= (prev.failed || 0)) {
+      return { exit: 2, reason: `wall — failure class "${cls}" not decreasing over 3 runs (${c2} → ${(prev.failures || {})[cls] || 0} → ${c0})`, failureClass: cls };
     }
   }
 
-  // Converged green: the last two runs stopped improving (neither metric
-  // decreased) and it is not walled — harden has extracted what it can.
+  // Converged green: neither metric decreased over the last two runs and it is
+  // not walled — harden has extracted what it can (residual edges stay fuzzy).
   if ((last.exploreCalls || 0) >= (prev.exploreCalls || 0) && (last.failed || 0) >= (prev.failed || 0)) {
     return { exit: 0, reason: `converged — exploreCalls ${prev.exploreCalls}→${last.exploreCalls}, failed ${prev.failed}→${last.failed} (no further improvement)` };
   }

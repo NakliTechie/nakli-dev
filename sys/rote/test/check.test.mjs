@@ -24,10 +24,16 @@ test('not clean when fail rate exceeds budget', () => {
   eq(roteCheck(runs).exit, 1, 'still improving');
 });
 
-test('converged green — last two runs stopped improving, not walled', () => {
-  const runs = [run({ exploreCalls: 8, ok: 950, failed: 50, failures: { a: 20, b: 30 } }),
-                run({ exploreCalls: 8, ok: 950, failed: 50, failures: { a: 20, b: 30 } })];
-  eq(roteCheck(runs).exit, 0, 'converged'); // only 2 runs → wall not evaluated
+test('converged green — plateaued with no stuck failure class (3 runs)', () => {
+  // explore plateaued at 8 > 0, failures ~0 → not clean, not walled (no failure
+  // class), converged → green. Needs 3 runs so wall can be ruled out first.
+  const flat = run({ exploreCalls: 8, ok: 1000, failed: 0, failures: {} });
+  eq(roteCheck([flat, flat, flat]).exit, 0, 'converged');
+});
+
+test('two runs never green on a plateau — gathers a third run first', () => {
+  const stuck = run({ exploreCalls: 3, ok: 60, failed: 40, failures: { captcha: 40 } });
+  eq(roteCheck([stuck, stuck]).exit, 1, 'a stuck-from-start pair keeps iterating, does not green');
 });
 
 test('wall — dominant failure class stuck across 3 runs → exit 2 (human)', () => {

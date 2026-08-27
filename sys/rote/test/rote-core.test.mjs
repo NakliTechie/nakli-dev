@@ -176,6 +176,55 @@ await test('runtime: bad inputs reject BEFORE any run record is written', async 
   assert(!listed.ok || !(listed.entries || []).some((e) => e.name === 'run.json'), 'no run.json written for a rejected run');
 });
 
+await test('security: an artifact name cannot traverse out of out/ (no run.json forgery)', async () => {
+  const script = { meta: { name: 'evil', version: 1 }, async default(ctx) { ctx.out.json('../run', { PLANTED: true, status: 'complete', ok: 9999 }); } };
+  const fs = mkfs();
+  const res = await runScript({ module: script, inputs: {}, fs, now: fixedNow, nonce: 'trav1', sha256 });
+  assert(res.ok, 'runScript still returns a record');
+  const rj = JSON.parse((await fs.read(res.runDir + 'run.json', { encoding: 'utf-8' })).data);
+  eq(rj.status, 'error', 'the traversal throws → run errors');
+  assert(rj.PLANTED === undefined && rj.ok !== 9999, 'run.json is the genuine record, not the forged object');
+  const listed = await fs.list('.rote/runs/evil', { recursive: true });
+  assert(!(listed.entries || []).some((e) => e.name === 'run.json' && !e.path.includes(res.runId)), 'no forged run.json elsewhere');
+});
+
+await test('security: a cross-run artifact path is rejected', async () => {
+  const script = { meta: { name: 'evil2', version: 1 }, async default(ctx) { ctx.out.text('../../victim/out/injected', 'x'); } };
+  const fs = mkfs();
+  const res = await runScript({ module: script, inputs: {}, fs, now: fixedNow, nonce: 'trav2', sha256 });
+  const rj = JSON.parse((await fs.read(res.runDir + 'run.json', { encoding: 'utf-8' })).data);
+  eq(rj.status, 'error', 'rejected → errored');
+  const victim = await fs.stat('.rote/runs/victim').catch(() => null);
+  assert(!victim || !victim.ok, 'no sibling run dir was created');
+});
+
+await test('security: out.file refuses bytes that contain a registered secret', async () => {
+  const CANARY = 'BINARY-CANARY-4d2e';
+  const script = { meta: { name: 'binleak', version: 1, grants: ['k'] }, async default(ctx) { const s = ctx.vault.get('k'); ctx.out.file('leak.bin', new TextEncoder().encode('prefix ' + s)); } };
+  const fs = mkfs();
+  const res = await runScript({ module: script, inputs: {}, fs, grants: { k: 'r' }, store: createMemoryVaultStore({ r: CANARY }), now: fixedNow, nonce: 'bin1', sha256 });
+  const rj = JSON.parse((await fs.read(res.runDir + 'run.json', { encoding: 'utf-8' })).data);
+  eq(rj.status, 'error', 'refused → errored');
+  const leak = await fs.stat(res.runDir + 'out/leak.bin').catch(() => null);
+  assert(!leak || !leak.ok, 'no leaking binary artifact was written');
+  const audit = await auditRedaction({ fs, runDir: res.runDir, redactor: res.redactor });
+  assert(audit.clean, 'no persisted file contains the secret');
+});
+
+await test('security: validateMeta rejects an unsafe meta.name', () => {
+  assert(!validateMeta({ name: '../etc', version: 1 }).ok, 'traversal name rejected');
+  assert(!validateMeta({ name: 'a/b', version: 1 }).ok, 'slash name rejected');
+  assert(!validateMeta({ name: '.hidden', version: 1 }).ok, 'leading dot rejected');
+  assert(validateMeta({ name: 'news_letters-2', version: 1 }).ok, 'normal name ok');
+});
+
+await test('runtime: parentRunId comes from the option, not inputs', async () => {
+  const fs = mkfs();
+  const res = await runScript({ module: detScript, inputs: { items: ['ok'] }, fs, parentRunId: 'r-parent-123', now: fixedNow, nonce: 'par1', sha256 });
+  const rj = JSON.parse((await fs.read(res.runDir + 'run.json', { encoding: 'utf-8' })).data);
+  eq(rj.parentRunId, 'r-parent-123', 're-run points at its parent');
+});
+
 await test('runtime: log.fail requires a failure class', async () => {
   const script = { meta: { name: 'noclass', version: 1 }, async default(ctx) { ctx.log.fail('', {}); } };
   const fs = mkfs();

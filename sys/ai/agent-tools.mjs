@@ -123,6 +123,12 @@ export const MODE_TOOLS = {
   code: null, // all
   plan: new Set(['read', 'todowrite']),
   ask: new Set(['read']),
+  // harden (Rote handoff §4.6): author + hardens a .rote.js — read/surgical-edit,
+  // fan-out to mine (dispatch) and critique (review), but NO shell (a script is
+  // not debugged by hand-running it) and NO free write (path-guarded to
+  // .rote/scripts/ by the app). The `rote_*` tools are added by Anvil when the
+  // Rote runtime is wired; the base allowlist here is what agent-tools owns.
+  harden: new Set(['read', 'edit', 'apply_patch', 'todowrite', 'dispatch', 'review']),
 };
 
 // The coding tool set for a mode. `shell` stays the escape hatch (code mode only).

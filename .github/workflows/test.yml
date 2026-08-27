@@ -78,6 +78,9 @@ jobs:
       - name: Verify Rote harden termination (rote check)
         run: node sys/rote/test/check.test.mjs
 
+      - name: Verify Rote harden loop control flow
+        run: node sys/rote/test/harden.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 

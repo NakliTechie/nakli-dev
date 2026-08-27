@@ -52,10 +52,17 @@ export function checkValue(spec, value) {
 }
 
 // Validate a script's meta (handoff §3.2). Returns { ok, errors[] }.
+// A safe single path segment — no separators, no traversal, no leading dot. Used
+// for meta.name (→ the run directory) and artifact names (→ files under out/), so
+// a script can never redirect its run path or forge/clobber another run's files.
+export const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export function isSafeSegment(s) { return typeof s === 'string' && s.length <= 128 && SAFE_SEGMENT.test(s) && !s.includes('..'); }
+
 export function validateMeta(meta) {
   const errors = [];
   if (!isPlainObject(meta)) return { ok: false, errors: ['meta must be an object'] };
   if (typeof meta.name !== 'string' || !meta.name.trim()) errors.push('meta.name must be a non-empty string');
+  else if (!isSafeSegment(meta.name)) errors.push('meta.name must be a safe segment (letters/digits/._- , no "/" or "..")');
   if (!Number.isInteger(meta.version) || meta.version < 1) errors.push('meta.version must be an integer ≥ 1');
   if (meta.inputs !== undefined) {
     if (!isPlainObject(meta.inputs)) errors.push('meta.inputs must be an object of field→type');

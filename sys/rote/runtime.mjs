@@ -10,7 +10,7 @@
 // `ctx.tools.<app>.<tool>()` fails loud ("no registry app") because the browsing
 // track is deferred; a script with zero explore() and zero tool calls runs fully.
 
-import { validateMeta, validateInputs, CTX_KEYS } from './contract.mjs';
+import { validateMeta, validateInputs, isSafeSegment, CTX_KEYS } from './contract.mjs';
 import { createRedactor, createVault } from './vault.mjs';
 
 export const ROTE_DIR = '.rote';
@@ -61,6 +61,9 @@ async function readJson(fs, path) {
 // Build the ctx + a shared mutable `state` the runner persists after execution.
 function buildContext({ meta, inputs, vault, redactor, explore, registry, fs, runsRoot, nowMs }) {
   const state = { exploreCalls: 0, ok: 0, failed: 0, failures: {}, logs: [], explores: [], artifacts: [] };
+  // Artifact names are files under out/ — they MUST be a single safe segment so a
+  // script can never escape out/ to forge run.json or write a sibling run's dir.
+  const safeName = (name) => { const s = String(name == null ? '' : name); if (!isSafeSegment(s)) throw new Error(`out artifact name "${s}" is invalid — must be a safe segment (no "/", "..", or leading ".")`); return s; };
   const ctx = {
     tools: makeToolsProxy(registry),
     async explore(prompt, extra) {
@@ -73,9 +76,18 @@ function buildContext({ meta, inputs, vault, redactor, explore, registry, fs, ru
     },
     vault: { get: (name) => vault.get(name) },
     out: {
-      json(name, data) { state.artifacts.push({ name: String(name), type: 'json', body: JSON.stringify(data, null, 2) }); },
-      text(name, str) { state.artifacts.push({ name: String(name), type: 'text', body: String(str == null ? '' : str) }); },
-      file(name, bytes) { state.artifacts.push({ name: String(name), type: 'file', bytes: bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes || []) }); },
+      json(name, data) { state.artifacts.push({ name: safeName(name), type: 'json', body: JSON.stringify(data, null, 2) }); },
+      text(name, str) { state.artifacts.push({ name: safeName(name), type: 'text', body: String(str == null ? '' : str) }); },
+      file(name, bytes) {
+        const nm = safeName(name);
+        const buf = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes || []);
+        // A binary artifact can't be redacted after the fact, so refuse it loudly
+        // if it contains a registered secret verbatim — the "no secret in ANY
+        // persisted file" invariant holds for raw placement. (Deliberate re-encoding
+        // exfiltration — base64/hex — is a malicious-actor threat outside redaction.)
+        if (redactor && redactor.contains(new TextDecoder().decode(buf))) throw new Error(`out.file("${nm}") refused: the bytes contain a registered secret`);
+        state.artifacts.push({ name: nm, type: 'file', bytes: buf });
+      },
     },
     log: {
       ok(data) { state.ok++; state.logs.push({ t: new Date(nowMs).toISOString(), level: 'ok', data: data ?? null }); },
@@ -110,6 +122,13 @@ function buildContext({ meta, inputs, vault, redactor, explore, registry, fs, ru
 // text is redacted; binary out files are written raw (can't redact bytes). run.json
 // is write-once — an existing one is refused (runs are immutable, §2.5).
 async function persistRun({ fs, runDir, state, redactor, run }) {
+  // Write-once over the whole run DIR, checked BEFORE any write — a runId
+  // collision must never clobber a prior run's log/explore/out either, not just
+  // its run.json. Runs are immutable (§2.5).
+  const existingDir = await fs.list(runDir, { recursive: false }).catch(() => null);
+  if (existingDir && existingDir.ok && (existingDir.entries || []).length) {
+    throw new Error(`run dir ${runDir} already exists — runs are immutable`);
+  }
   const w = async (path, data) => { const r = await fs.write(path, data, { createParents: true }); if (r && r.ok === false) throw new Error(`write ${path} failed: ${r.message || 'error'}`); };
   const ndjson = state.logs.map((l) => redactor.redact(JSON.stringify(l))).join('\n');
   await w(runDir + 'log.ndjson', ndjson ? ndjson + '\n' : '');
@@ -118,8 +137,6 @@ async function persistRun({ fs, runDir, state, redactor, run }) {
     if (a.type === 'file') await w(runDir + 'out/' + a.name, a.bytes);
     else await w(runDir + 'out/' + a.name + (a.type === 'json' ? '.json' : '.txt'), redactor.redact(a.body));
   }
-  const existing = await fs.stat(runDir + 'run.json').catch(() => null);
-  if (existing && existing.ok) throw new Error(`run.json already exists at ${runDir} — runs are immutable`);
   await w(runDir + 'run.json', redactor.redact(JSON.stringify(run, null, 2)));
 }
 
@@ -130,7 +147,7 @@ async function persistRun({ fs, runDir, state, redactor, run }) {
 export async function runScript({
   module, inputs = {}, fs, grants = {}, store = null, explore = null, registry = {},
   now = () => Date.now(), nonce = null, scriptSource = '', sha256 = null,
-  runtimeLabel = 'worker', startedBy = { actor: 'human', door: 'ui' },
+  runtimeLabel = 'worker', startedBy = { actor: 'human', door: 'ui' }, parentRunId = null,
 }) {
   if (!module || typeof module.default !== 'function') return { ok: false, code: 'bad-script', errors: ['script has no default export function'] };
   const meta = module.meta;
@@ -145,7 +162,9 @@ export async function runScript({
   catch (e) { return { ok: false, code: e.code || 'grant-unavailable', errors: [String(e && e.message || e)] }; }
 
   const startMs = now();
-  const runId = makeRunId(startMs, nonce || Math.random().toString(16).slice(2, 6));
+  // A high-entropy default nonce so two runs in the same millisecond don't collide
+  // on a run id (the immutability guard is a backstop, not the primary defence).
+  const runId = makeRunId(startMs, nonce || (Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 6)));
   const runsRoot = `${ROTE_DIR}/runs/${meta.name}`;
   const runDir = `${runsRoot}/${runId}/`;
   const { ctx, state } = buildContext({ meta, inputs: ic.value, vault, redactor, explore, registry, fs, runsRoot, nowMs: startMs });
@@ -158,7 +177,7 @@ export async function runScript({
   const hash = async (s) => (typeof sha256 === 'function' ? 'sha256:' + await sha256(s) : 'sha256:unknown');
   const run = {
     runId, script: meta.name, scriptVersion: meta.version,
-    scriptHash: await hash(scriptSource), parentRunId: (inputs && inputs.__parentRunId) || null,
+    scriptHash: await hash(scriptSource), parentRunId: parentRunId || null,
     startedBy, runtime: runtimeLabel, inputsHash: await hash(canonicalJSON(ic.value)),
     tags: (meta.tags && typeof meta.tags === 'object') ? meta.tags : {},
     exploreCalls: state.exploreCalls, ok: state.ok, failed: state.failed, failures: state.failures,
