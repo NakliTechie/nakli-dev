@@ -72,6 +72,12 @@ jobs:
       - name: Verify parallel subagents run isolated and merge conflict-safe
         run: node sys/ai/test/subagents-integration.test.mjs
 
+      - name: Verify Rote core (script contract, vault redaction, immutable runs)
+        run: node sys/rote/test/rote-core.test.mjs
+
+      - name: Verify Rote harden termination (rote check)
+        run: node sys/rote/test/check.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
