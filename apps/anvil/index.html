@@ -157,7 +157,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand" hidden>✨</button><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -209,6 +209,7 @@
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, appendMemory, countMemory, rememberTool } from '../../sys/ai/project-context.mjs';
+  import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -475,10 +476,39 @@
       } }catch(_){}
     }
   }
+  // Skills chip: visible when .anvil/skills/<name>/SKILL.md exists; clicking lists
+  // the skills (name + description) the agent can load on demand.
+  async function listSkills(){
+    const out=[];
+    try{
+      const dir = await fs.list(SKILLS_DIR, { recursive:false });
+      if(dir && dir.ok){
+        for(const e of (dir.entries||[])){
+          if(e.type!=='dir') continue;
+          try{ const r=await fs.read(e.path+'/SKILL.md',{encoding:'utf-8'}); if(r&&r.ok){ const sk=parseSkill(r.data); out.push({ name:sk.name||e.name, description:sk.description }); } }catch(_){}
+        }
+      }
+    }catch(_){}
+    return out;
+  }
+  async function updateSkillsChip(){
+    const b=$('skills-chip'); if(!b) return;
+    const skills=await listSkills();
+    b.hidden = skills.length===0;
+  }
+  async function openSkills(){
+    const skills=await listSkills();
+    const body = skills.length
+      ? skills.map(s=>'• '+s.name+(s.description?(' — '+s.description):'')).join('\n')
+      : 'No skills yet.\n\nAdd one at .anvil/skills/<name>/SKILL.md (frontmatter: name, description; then the instructions). The agent loads a skill on demand when a task matches it.';
+    globalPreview={ type:'text', file:'Project skills', content: 'Skills the agent can load on demand:\n\n'+body };
+    state.previewOpen=true; save(); renderPreview();
+  }
   async function renderFiles(){
     const box=$('files'); if(!box) return;
     updateScopeBtn();
     void updateMemChip();
+    void updateSkillsChip();
     const efs = explorerFs();
     const tag=$('ws-tag');
     if(tag) tag.textContent = filesScope==='all' ? 'all files' : ((workspaceLabel||'').split(' · ')[0]||'');
@@ -730,7 +760,22 @@
     // applies — that's what powers the real before→after diff + revert (YOLO stays;
     // review is after-the-fact). Cheap: one extra read per mutating tool call.
     const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
+    const skillMap = {}; // skill name -> SKILL.md path, populated below
     const executeTool = async (nm, ar, callObj)=>{
+      // Skills (progressive disclosure): load one skill's full body on demand.
+      if(nm==='skill'){
+        const name=String((ar&&ar.name)||'').trim();
+        // A skill name is a single safe segment — never a path. Guards the
+        // fallback path against traversal if the model invents a name.
+        if(!name || name.includes('/') || name.includes('\\') || name.includes('..')){
+          const names=Object.keys(skillMap);
+          return 'Invalid skill name.'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
+        }
+        const p = skillMap[name] || (SKILLS_DIR+'/'+name+'/SKILL.md');
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const sk=parseSkill(r.data); return 'Skill: '+(sk.name||name)+'\n\n'+sk.body; } }catch(_){}
+        const names=Object.keys(skillMap);
+        return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
+      }
       // Project memory: the agent records a durable learning into memory.md at
       // the workspace root (append-only), so future tasks here start with it.
       if(nm==='remember'){
@@ -766,13 +811,34 @@
         memory: mem&&mem.ok? mem.data : null,
       });
     }catch(_){}
+    // Skills (progressive disclosure): inject only the DESCRIPTIONS of the skills
+    // under .anvil/skills/<name>/SKILL.md; the agent loads a skill's full body on
+    // demand via the `skill` tool. Cheap + cache-safe.
+    let skillsIndex='';
+    try{
+      const dir = await fs.list(SKILLS_DIR, { recursive:false });
+      if(dir && dir.ok){
+        const metas=[];
+        for(const e of (dir.entries||[])){
+          if(e.type!=='dir') continue;
+          try{
+            const r=await fs.read(e.path+'/SKILL.md',{encoding:'utf-8'});
+            if(r&&r.ok){ const sk=parseSkill(r.data); const name=sk.name || e.name;
+              metas.push({ name, description: sk.description }); skillMap[name]=e.path+'/SKILL.md'; }
+          }catch(_){}
+        }
+        skillsIndex = buildSkillsIndex(metas);
+      }
+    }catch(_){}
     // `remember` writes memory.md, so it's offered only in code mode (plan/ask
-    // are read-only).
+    // are read-only). `skill` is read-only and offered in every mode when skills
+    // exist.
     const tools = codingToolset(mode,{subagents:true, completion: !!verify});
     if(mode==='code') tools.push(rememberTool());
+    if(skillsIndex) tools.push(skillTool());
     try{
       const result = await runAgentLoop({
-        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
+        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+skillsIndex+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
         tools,
         infer: inferViaHost,
         executeTool,
@@ -829,6 +895,7 @@
   $('stop').onclick=stopRun;
   $('refresh-files').onclick=renderFiles;
   $('mem-chip').onclick=openProjectMemory;
+  $('skills-chip').onclick=openSkills;
   $('files-scope').onclick=()=>{
     if(filesScope!=='all' && !sysFsAvailable()) return;
     filesScope = filesScope==='all' ? 'project' : 'all';
