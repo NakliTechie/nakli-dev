@@ -157,7 +157,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand" hidden>✨</button><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="hooks-chip" title="Project hooks — .anvil/hooks.json pre/post-tool commands (format, lint, guards)" hidden>⚓</button><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand" hidden>✨</button><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -211,6 +211,7 @@
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
   import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool } from '../../sys/ai/memory-store.mjs';
+  import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -522,11 +523,29 @@
     globalPreview={ type:'text', file:'Project skills', content: 'Skills the agent can load on demand:\n\n'+body };
     state.previewOpen=true; save(); renderPreview();
   }
+  async function readHooks(){
+    try{ const r=await fs.read(HOOKS_FILE,{encoding:'utf-8'}); if(r&&r.ok) return { raw:r.data, cfg:parseHooks(r.data) }; }catch(_){}
+    return null;
+  }
+  async function updateHooksChip(){
+    const b=$('hooks-chip'); if(!b) return;
+    const h=await readHooks();
+    b.hidden = !(h && ((h.cfg.preTool.length)||(h.cfg.postTool.length)));
+  }
+  async function openHooks(){
+    const h=await readHooks();
+    const content = h
+      ? 'Project hooks (.anvil/hooks.json):\n\n'+String(h.raw).slice(0,50000)
+      : 'No hooks yet.\n\nAdd .anvil/hooks.json to run commands around the agent\'s tool calls, e.g.:\n\n{\n  "postTool": [ { "on": "write|edit", "pathMatch": "*.py", "run": "python -m black {file}" } ],\n  "preTool":  [ { "on": "shell", "commandMatch": "rm -rf /", "block": "Refusing dangerous rm." } ]\n}';
+    globalPreview={ type:'text', file:'Project hooks', content };
+    state.previewOpen=true; save(); renderPreview();
+  }
   async function renderFiles(){
     const box=$('files'); if(!box) return;
     updateScopeBtn();
     void updateMemChip();
     void updateSkillsChip();
+    void updateHooksChip();
     const efs = explorerFs();
     const tag=$('ws-tag');
     if(tag) tag.textContent = filesScope==='all' ? 'all files' : ((workspaceLabel||'').split(' · ')[0]||'');
@@ -780,6 +799,7 @@
     const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
     const skillMap = {}; // skill name -> SKILL.md path, populated below
     const factMap = {};  // memory-fact name -> .md path, populated below
+    let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
     const executeTool = async (nm, ar, callObj)=>{
       // Skills (progressive disclosure): load one skill's full body on demand.
@@ -819,11 +839,30 @@
         factMap[slug]=path; renderFiles();
         return 'Recorded fact "'+slug+'" ('+f.type+') to project memory.';
       }
+      // Pre-tool hook guard (project policy): a matching preTool hook with a
+      // `block` message refuses the tool before it runs.
+      const dec = preToolDecision(hooksCfg, nm, ar);
+      if(dec.blocked) return '[blocked by a project hook] '+dec.message;
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
         try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }
       }
-      return baseExec(nm, ar, callObj);
+      const res = await baseExec(nm, ar, callObj);
+      // Post-tool hooks: run configured commands (auto-format / lint / verify)
+      // after the tool succeeds; their bounded output is fed back to the agent.
+      try{
+        const cmds = postToolCommands(hooksCfg, nm, ar);
+        if(cmds.length){
+          let extra='';
+          const hsh = createShell({ registry, face, kiln: kilnRef });
+          for(const cmd of cmds){
+            try{ const o=await hsh.feed(cmd); const out=String((o&&o.output)||'').trim().slice(0,2000); extra += '\n[hook] '+cmd+(out?('\n'+out):' (ok)'); }
+            catch(e){ extra += '\n[hook] '+cmd+' — error: '+(e&&e.message||e); }
+          }
+          if(extra){ renderFiles(); return String(res==null?'':res)+extra; }
+        }
+      }catch(_){}
+      return res;
     };
     // Verify gate (opt-in per task): the model can't declare done until this
     // command exits 0. A fresh shell over the SAME workspace (with Kiln, so
@@ -883,6 +922,9 @@
         memoryIndex = buildMemoryIndex(facts);
       }
     }catch(_){}
+    // Per-project tool hooks: pre-tool guards + post-tool commands from
+    // .anvil/hooks.json (loaded once per run; executeTool reads hooksCfg).
+    try{ const r=await fs.read(HOOKS_FILE,{encoding:'utf-8'}); if(r&&r.ok) hooksCfg=parseHooks(r.data); }catch(_){}
     // `remember` writes a fact file — code mode only (plan/ask are read-only).
     // `skill` and `recall` are read-only, offered in every mode when there's
     // something to load.
@@ -950,6 +992,7 @@
   $('refresh-files').onclick=renderFiles;
   $('mem-chip').onclick=openProjectMemory;
   $('skills-chip').onclick=openSkills;
+  $('hooks-chip').onclick=openHooks;
   $('files-scope').onclick=()=>{
     if(filesScope!=='all' && !sysFsAvailable()) return;
     filesScope = filesScope==='all' ? 'project' : 'all';
