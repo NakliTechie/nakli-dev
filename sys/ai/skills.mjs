@@ -11,9 +11,11 @@
 
 export const SKILLS_DIR = '.anvil/skills';
 
-// Parse a SKILL.md — frontmatter (name/description, quoted or bare) + body.
-// Tolerant: no frontmatter → whole text is the body, empty name/description.
-export function parseSkill(text){
+// Parse YAML-ish frontmatter (bare or quoted values, keys lowercased) + body.
+// Tolerant: no frontmatter → {meta:{}, body:<whole trimmed text>}. Shared by
+// skills and the structured memory store — they're the same progressive-
+// disclosure mechanism (description-index + on-demand load).
+export function parseFrontmatter(text){
   const s = String(text == null ? '' : text);
   const m = s.match(/^﻿?---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   const meta = {};
@@ -29,7 +31,13 @@ export function parseSkill(text){
       }
     }
   }
-  return { name: meta.name || '', description: meta.description || '', body: body.trim() };
+  return { meta, body: body.trim() };
+}
+
+// Parse a SKILL.md — frontmatter (name/description) + body.
+export function parseSkill(text){
+  const { meta, body } = parseFrontmatter(text);
+  return { name: meta.name || '', description: meta.description || '', body };
 }
 
 // Build the injected index from [{name, description}]. Descriptions only, one per

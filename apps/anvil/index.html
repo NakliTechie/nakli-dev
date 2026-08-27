@@ -208,8 +208,9 @@
   import { createShell } from '../../sys/rig/cli/shell.mjs';
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
-  import { buildProjectContext, appendMemory, countMemory, rememberTool } from '../../sys/ai/project-context.mjs';
+  import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
+  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool } from '../../sys/ai/memory-store.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -460,21 +461,38 @@
   }
   // Project memory chip: visible when the project workspace has AGENTS.md or
   // memory.md; clicking opens whichever exists (memory first) in the preview.
+  async function listFacts(){
+    const out=[];
+    try{
+      const dir=await fs.list(MEMORY_DIR,{recursive:false});
+      if(dir&&dir.ok){ for(const e of (dir.entries||[])){ if(e.type==='dir'||!e.name.endsWith('.md')) continue;
+        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type }); } }catch(_){} } }
+    }catch(_){}
+    return out;
+  }
   async function updateMemChip(){
     const b=$('mem-chip'); if(!b) return;
-    let has=false;
-    for(const f of ['memory.md','AGENTS.md']){
+    let has=(await listFacts()).length>0;
+    if(!has) for(const f of ['memory.md','AGENTS.md']){
       try{ const r=await fs.read(f,{encoding:'utf-8'}); if(r&&r.ok){ has=true; break; } }catch(_){}
     }
     b.hidden=!has;
   }
   async function openProjectMemory(){
-    for(const f of ['memory.md','AGENTS.md']){
+    const facts=await listFacts();
+    if(facts.length){
+      const body=facts.map(f=>'• '+f.name+' ('+(f.type||'project')+')'+(f.description?(' — '+f.description):'')).join('\n');
+      globalPreview={ type:'text', file:'Project memory', content:'Facts the agent recorded (loaded on demand via recall):\n\n'+body };
+      state.previewOpen=true; save(); renderPreview(); return;
+    }
+    for(const f of ['AGENTS.md','memory.md']){
       try{ const r=await fs.read(f,{encoding:'utf-8'}); if(r&&r.ok){
         globalPreview={ type:'text', file:f, content:String(r.data).slice(0,50000) };
         state.previewOpen=true; save(); renderPreview(); return;
       } }catch(_){}
     }
+    globalPreview={ type:'text', file:'Project memory', content:'No memory yet.\n\nThe agent records durable facts to .anvil/memory/<slug>.md via the remember tool; add AGENTS.md for always-on project instructions.' };
+    state.previewOpen=true; save(); renderPreview();
   }
   // Skills chip: visible when .anvil/skills/<name>/SKILL.md exists; clicking lists
   // the skills (name + description) the agent can load on demand.
@@ -761,13 +779,15 @@
     // review is after-the-fact). Cheap: one extra read per mutating tool call.
     const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost });
     const skillMap = {}; // skill name -> SKILL.md path, populated below
+    const factMap = {};  // memory-fact name -> .md path, populated below
+    const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
     const executeTool = async (nm, ar, callObj)=>{
       // Skills (progressive disclosure): load one skill's full body on demand.
       if(nm==='skill'){
         const name=String((ar&&ar.name)||'').trim();
         // A skill name is a single safe segment — never a path. Guards the
         // fallback path against traversal if the model invents a name.
-        if(!name || name.includes('/') || name.includes('\\') || name.includes('..')){
+        if(!safeSeg(name)){
           const names=Object.keys(skillMap);
           return 'Invalid skill name.'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
         }
@@ -776,15 +796,28 @@
         const names=Object.keys(skillMap);
         return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
       }
-      // Project memory: the agent records a durable learning into memory.md at
-      // the workspace root (append-only), so future tasks here start with it.
+      // Recall: load one memory fact's full detail on demand.
+      if(nm==='recall'){
+        const name=String((ar&&ar.name)||'').trim();
+        if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
+        const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); return 'Fact: '+(f.name||name)+'\n\n'+f.body; } }catch(_){}
+        const names=Object.keys(factMap);
+        return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.');
+      }
+      // Project memory: record ONE durable learning as a fact file under
+      // .anvil/memory/<slug>.md (structured, progressive — its index is injected
+      // on future tasks, full detail loads via `recall`).
       if(nm==='remember'){
         const note=String((ar&&ar.note)||'').trim();
         if(!note) return 'Nothing recorded (empty note).';
-        let cur=null; try{ const r=await fs.read('memory.md',{encoding:'utf-8'}); if(r&&r.ok) cur=r.data; }catch(_){}
-        const next=appendMemory(cur, note);
-        if(next!==cur){ await fs.write('memory.md', next); renderFiles(); }
-        return 'Recorded to memory.md ('+countMemory(next)+' note'+(countMemory(next)===1?'':'s')+').';
+        const f=noteToFact(note, ar&&ar.type);
+        let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
+        try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
+        const file=f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n');
+        await fs.write(path, file);
+        factMap[slug]=path; renderFiles();
+        return 'Recorded fact "'+slug+'" ('+f.type+') to project memory.';
       }
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
@@ -830,15 +863,36 @@
         skillsIndex = buildSkillsIndex(metas);
       }
     }catch(_){}
-    // `remember` writes memory.md, so it's offered only in code mode (plan/ask
-    // are read-only). `skill` is read-only and offered in every mode when skills
-    // exist.
+    // Structured project memory: inject only the fact INDEX (name/type/
+    // description) from .anvil/memory/<slug>.md; the agent loads a fact's full
+    // detail on demand via `recall`. Selective at scale, unlike the legacy flat
+    // memory.md (still injected above via buildProjectContext for back-compat).
+    let memoryIndex='';
+    try{
+      const dir = await fs.list(MEMORY_DIR, { recursive:false });
+      if(dir && dir.ok){
+        const facts=[];
+        for(const e of (dir.entries||[])){
+          if(e.type==='dir' || !e.name.endsWith('.md')) continue;
+          try{
+            const r=await fs.read(e.path,{encoding:'utf-8'});
+            if(r&&r.ok){ const f=parseFact(r.data); const name=f.name || e.name.replace(/\.md$/,'');
+              facts.push({ name, description:f.description, type:f.type }); factMap[name]=e.path; }
+          }catch(_){}
+        }
+        memoryIndex = buildMemoryIndex(facts);
+      }
+    }catch(_){}
+    // `remember` writes a fact file — code mode only (plan/ask are read-only).
+    // `skill` and `recall` are read-only, offered in every mode when there's
+    // something to load.
     const tools = codingToolset(mode,{subagents:true, completion: !!verify});
     if(mode==='code') tools.push(rememberTool());
     if(skillsIndex) tools.push(skillTool());
+    if(memoryIndex) tools.push(recallTool());
     try{
       const result = await runAgentLoop({
-        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+skillsIndex+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
+        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
         tools,
         infer: inferViaHost,
         executeTool,

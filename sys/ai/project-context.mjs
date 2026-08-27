@@ -51,20 +51,25 @@ export function countMemory(body) {
   return (String(body == null ? '' : body).match(/^- /gm) || []).length;
 }
 
-// OpenAI-style tool definition for the agent to record a durable learning.
+// OpenAI-style tool definition for the agent to record a durable learning. Each
+// call writes one fact file under the structured memory store (.anvil/memory/);
+// the index of facts is injected on future tasks and full detail loads via
+// `recall`. Use sparingly — facts that still matter next session, not per-step
+// notes.
 export function rememberTool() {
   return {
     type: 'function',
     function: {
       name: 'remember',
-      description: 'Record a durable learning about THIS project (a convention, ' +
-        'a gotcha, where something lives) to memory.md so future tasks in this ' +
-        'workspace start with it. Append-only. Use sparingly, for facts that will ' +
-        'still matter next session — not per-step notes.',
+      description: 'Record ONE durable learning about THIS project (a convention, ' +
+        'a gotcha, where something lives, a user preference) so future tasks in ' +
+        'this workspace start with it. Use sparingly, for facts that still matter ' +
+        'next session — not per-step notes.',
       parameters: {
         type: 'object',
         properties: {
-          note: { type: 'string', description: 'The learning, one concise sentence.' },
+          note: { type: 'string', description: 'The learning. First line is the summary shown in the memory index; add detail on following lines if useful.' },
+          type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'], description: 'Kind of fact (default: project).' },
         },
         required: ['note'],
       },
