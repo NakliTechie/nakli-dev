@@ -66,19 +66,13 @@
   try { inNakliOS = !!(window.parent && window.parent !== window); } catch (_) {}
   var naklFlag = false;
   try { naklFlag = new URLSearchParams(window.location.search).has('naklios'); } catch (_) {}
-  // Verify the embedding parent is actually NakliOS before trusting it — and derive
-  // a targetOrigin so we never postMessage app data to an untrusted framer (was '*').
-  // (Reference: Lorewell/Books, which pioneered this.) An unverifiable/foreign
-  // parent falls back to standalone. The host serves the referrer to its iframes.
+  // Targeted postMessage origin, LEARNED on first contact — the NakliOS shell embeds
+  // apps with referrerpolicy="no-referrer", so document.referrer is empty and can't
+  // be used to verify the parent (that path breaks hosted detection — it is the
+  // Lorewell iframe bug). Instead the first `naklios:*` message from window.parent
+  // locks trustedParentOrigin, and every later send targets that origin (not '*').
+  // The only pre-lock send is `ready`, which carries no app data.
   var trustedParentOrigin = null;
-  if (inNakliOS) {
-    try {
-      var refUrl = new URL(document.referrer);
-      if (refUrl.origin === 'https://naklios.dev' || refUrl.hostname === 'localhost' || refUrl.hostname === '127.0.0.1') {
-        trustedParentOrigin = refUrl.origin;
-      } else { inNakliOS = false; }
-    } catch (_) { inNakliOS = false; }
-  }
 
   var currentTheme = null;
   var themeListeners = new Set();
@@ -294,10 +288,14 @@
 
   window.addEventListener('message', function (e) {
     if (inNakliOS && e.source !== window.parent) return;
-    if (inNakliOS && trustedParentOrigin && e.origin !== trustedParentOrigin) return; // origin-verified inbound
-
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
+    // Lock the trusted parent origin on the first naklios:* message, then verify
+    // every later message against it (no-referrer-safe; see the detection note).
+    if (inNakliOS && typeof msg.type === 'string' && msg.type.indexOf('naklios:') === 0) {
+      if (!trustedParentOrigin) trustedParentOrigin = e.origin;
+      else if (e.origin !== trustedParentOrigin) return;
+    }
     if (msg.type === 'naklios:theme') {
       currentTheme = { id: msg.theme, colors: msg.colors, mood: msg.mood };
       themeListeners.forEach(function (cb) {
