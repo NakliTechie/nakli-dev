@@ -93,6 +93,9 @@ jobs:
       - name: Verify P0 Staging — envelope + commit authority
         run: node sys/staging/test/envelope.test.mjs
 
+      - name: Verify P0 enforcement — agent face capability check
+        run: node sys/rig/agent/test/agent-face-capability.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 

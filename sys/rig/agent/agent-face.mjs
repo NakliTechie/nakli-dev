@@ -18,13 +18,29 @@ const PATH_KEYS = new Set(['path', 'from', 'to', 'cwd', 'filepath']);
  * @param {string} [opts.actor='agent']   actor id recorded on the op-log
  * @param {string} [opts.caller=null]      caller id (session/subagent provenance)
  */
-export function createAgentFace({ registry, grant, opLog, actor = 'agent', caller = null }) {
+export function createAgentFace({ registry, grant, opLog, actor = 'agent', caller = null, capability = null }) {
   if (!registry) throw new Error('createAgentFace requires a registry');
   if (!grant) throw new Error('createAgentFace requires a grant');
   if (!opLog) throw new Error('createAgentFace requires an opLog');
 
   const staged = new Map(); // proposalId -> { name, input }
   let counter = 0;
+
+  // Optional agent capability grant (P0.1). ADDITIVE: when a caller presents a
+  // capability (a bound `verify(ctx) -> {ok, reason}` closure — the app wraps the
+  // macaroon grant + root key + revocation list), every invoke/accept is checked
+  // against it. When `capability` is null (today's callers), this is a no-op and
+  // behaviour is exactly as before. The Rig core stays decoupled from the crypto —
+  // the closure is injected, not imported.
+  async function capabilityCheck(command, input, name) {
+    if (!capability || typeof capability.verify !== 'function') return null;
+    const pathArgs = pathArgsOf(command, input);
+    let res;
+    try { res = await capability.verify({ tool: name, command, input, target: pathArgs[0] || (command && command.scope) || '' }); }
+    catch (e) { res = { ok: false, reason: String(e && e.message || e) }; }
+    if (!res || !res.ok) return { ok: false, code: 'ECAP', message: `capability denied: ${(res && res.reason) || 'no reason'}` };
+    return null;
+  }
 
   function pathArgsOf(command, input) {
     const keys = Array.isArray(command.pathParams)
@@ -63,6 +79,8 @@ export function createAgentFace({ registry, grant, opLog, actor = 'agent', calle
       await logAnd(name, input, 'unknown');
       return miss; // typed ENOCMD with suggestions — never a throw
     }
+    const capDenied = await capabilityCheck(command, input, name);
+    if (capDenied) { await logAnd(name, input, capDenied.code); return capDenied; }
     const denied = grantCheck(command, input);
     if (denied) { await logAnd(name, input, denied.code); return denied; }
     if (command.destructive) {
@@ -85,6 +103,8 @@ export function createAgentFace({ registry, grant, opLog, actor = 'agent', calle
     if (!p) return { ok: false, code: 'ENOPROPOSAL', message: `no staged proposal: ${proposalId}` };
     staged.delete(proposalId);
     const command = registry.describeCommand(p.name);
+    const capDenied = await capabilityCheck(command, p.input, p.name);
+    if (capDenied) { await logAnd(p.name, p.input, capDenied.code, by); return capDenied; }
     const denied = grantCheck(command, p.input);
     if (denied) { await logAnd(p.name, p.input, denied.code, by); return denied; }
     return runThroughRegistry(p.name, p.input, by);
