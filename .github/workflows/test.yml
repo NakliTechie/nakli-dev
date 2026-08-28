@@ -81,6 +81,12 @@ jobs:
       - name: Verify Rote harden loop control flow
         run: node sys/rote/test/harden.test.mjs
 
+      - name: Verify P0 Identity — machine principals
+        run: node sys/identity/test/principal.test.mjs
+
+      - name: Verify P0 Grant — capability tokens
+        run: node sys/identity/test/grant.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
