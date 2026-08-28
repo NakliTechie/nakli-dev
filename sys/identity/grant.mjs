@@ -25,12 +25,20 @@ export const caveat = {
   autoCommit: (reversibleOnly = true) => ({ type: 'auto-commit', value: reversibleOnly ? 'reversible' : 'any' }),
 };
 
-// Deterministic caveat bytes for the HMAC chain (stable key order per type).
+// Canonical JSON with sorted object keys — so serialization is INJECTIVE: two
+// caveats serialize identically iff they are structurally equal. A non-injective
+// form (e.g. tools joined by ',') would let tools:['a,b'] and tools:['a','b']
+// share a chain input, a widening-forgery vector.
+function stable(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+}
+// The caveat bytes for the HMAC chain — type and value as a canonical 2-tuple, so
+// no value or delimiter can be confused with a type or a sibling field.
 function serializeCaveat(c) {
-  if (!c || typeof c !== 'object') return 'invalid';
-  if (c.type === 'budget') { const v = c.value || {}; return `budget:${v.calls}|${v.tokens}|${v.spend}`; }
-  if (c.type === 'tools') return `tools:${[...c.value].join(',')}`;
-  return `${c.type}:${typeof c.value === 'object' ? JSON.stringify(c.value) : c.value}`;
+  if (!c || typeof c !== 'object') return stable(['invalid', c]);
+  return stable([c.type, c.value ?? null]);
 }
 
 async function chainSig(rootKey, identifier, caveats) {

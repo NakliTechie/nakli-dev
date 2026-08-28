@@ -39,6 +39,22 @@ await test('a tampered descriptor fails verification', async () => {
   assert(!(await verifyDescriptor(wrongId, personPub)), 'id tamper detected');
 });
 
+await test('attribution cannot be forged — a self-signed agent claiming mintedBy=victim fails', async () => {
+  const victim = await mintPrincipal(null, { kind: 'person', label: 'victim', now });
+  // attacker mints their OWN agent, then rewrites mintedBy to the victim and re-self-signs
+  const attacker = await mintPrincipal(null, { kind: 'person', now });
+  const agent = await mintPrincipal(attacker, { kind: 'agent', now }); // legit under attacker
+  const forged = { ...agent.descriptor, mintedBy: victim.descriptor.id };
+  // no minter key provided → must NOT fall back to self-verify
+  assert(!(await verifyDescriptor(forged)), 'minted claim without minter key fails closed');
+  // verifying against the victim's key also fails (attacker never got the victim to sign)
+  const victimPub = await exportRawPub(victim.keypair.publicKey);
+  assert(!(await verifyDescriptor(forged, victimPub)), 'victim did not sign it → fails');
+  // and a mismatched minter key (not the claimed minter) fails the id-binding
+  const attackerPub = await exportRawPub(attacker.keypair.publicKey);
+  assert(!(await verifyDescriptor(forged, attackerPub)), 'provided key must equal the claimed minter');
+});
+
 await test('unknown / external kinds handled', async () => {
   let threw = false; try { await mintPrincipal(null, { kind: 'robot' }); } catch (_) { threw = true; }
   assert(threw, 'unknown kind rejected');

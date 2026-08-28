@@ -77,6 +77,17 @@ await test('revocation: a revoked grant id is rejected', async () => {
   eq(r.ok, false, 'revoked'); eq(r.reason, 'revoked', 'reason');
 });
 
+await test('caveat serialization is injective — tools ["a","b"] ≠ ["a,b"] (no collision forgery)', async () => {
+  const root = newRootKey();
+  const g1 = await issueGrant(root, { identifier: 'g', caveats: [caveat.tools(['a', 'b'])] });
+  const g2 = await issueGrant(root, { identifier: 'g', caveats: [caveat.tools(['a,b'])] });
+  assert(g1.sig !== g2.sig, 'distinct tool sets must produce distinct chain sigs');
+  // and a scope value containing the delimiter cannot masquerade as another field
+  const s1 = await issueGrant(root, { identifier: 'g', caveats: [caveat.scope('reckon:sheet')] });
+  const s2 = await issueGrant(root, { identifier: 'g', caveats: [{ type: 'scope:reckon', value: 'sheet' }] });
+  assert(s1.sig !== s2.sig, 'value cannot be confused with type');
+});
+
 await test('unknown caveat type fails closed', async () => {
   const root = newRootKey();
   const g = await issueGrant(root, { identifier: 'g_weird', caveats: [{ type: 'weird', value: 1 }] });

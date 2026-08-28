@@ -47,9 +47,19 @@ export async function verifyDescriptor(descriptor, minterPubkey = null) {
   if (!descriptor || !descriptor.sig || !descriptor.pubkey) return false;
   const expectId = await principalId(descriptor.pubkey);
   if (descriptor.id !== expectId) return false;
-  const against = descriptor.mintedBy && minterPubkey ? minterPubkey : descriptor.pubkey; // self-signed when no minter
-  try { return await verify(against, descriptor.sig, descriptorPayload(descriptor)); }
-  catch (_) { return false; }
+  try {
+    if (descriptor.mintedBy) {
+      // A minted descriptor's attribution can ONLY be verified against the minter's
+      // key. Without it we cannot confirm the claim → fail closed (never fall back
+      // to the self-signature, or an attacker self-signs while claiming mintedBy=victim).
+      if (!minterPubkey) return false;
+      // The provided key must actually be the claimed minter (bind key → id).
+      if ((await principalId(minterPubkey)) !== descriptor.mintedBy) return false;
+      return await verify(minterPubkey, descriptor.sig, descriptorPayload(descriptor));
+    }
+    // Root / self-signed principal (mintedBy null).
+    return await verify(descriptor.pubkey, descriptor.sig, descriptorPayload(descriptor));
+  } catch (_) { return false; }
 }
 
 // Import an external principal (verify-only; may never act locally).
