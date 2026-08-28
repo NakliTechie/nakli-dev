@@ -26,6 +26,9 @@ function descriptorPayload(d) {
 export async function mintPrincipal(minter, { kind, label = '', now = () => Date.now() } = {}) {
   if (!PRINCIPAL_KINDS.includes(kind)) throw new Error(`unknown principal kind "${kind}"`);
   if (kind === 'external') throw new Error('external principals are imported (importExternal), not minted');
+  // An agent MUST be minted by a person/system — its attribution root. A
+  // self-rooted agent would be an unattributable actor.
+  if (kind === 'agent' && !(minter && minter.keypair)) throw new Error('an agent must be minted by a person (no self-rooted agents)');
   const keypair = await generateSigningKeypair();
   const rawPub = await exportRawPub(keypair.publicKey);
   const id = await principalId(rawPub);
@@ -45,9 +48,12 @@ export async function mintPrincipal(minter, { kind, label = '', now = () => Date
 // verified against its own pubkey. Also checks id === sha256(pubkey).
 export async function verifyDescriptor(descriptor, minterPubkey = null) {
   if (!descriptor || !descriptor.sig || !descriptor.pubkey) return false;
-  const expectId = await principalId(descriptor.pubkey);
-  if (descriptor.id !== expectId) return false;
+  // An agent is only valid if it is minted (has an attribution root); a self-rooted
+  // agent is rejected so a consumer can't be misled into treating it as human-rooted.
+  if (descriptor.kind === 'agent' && !descriptor.mintedBy) return false;
   try {
+    // Compute id inside the try — a malformed pubkey must fail closed, not throw.
+    if (descriptor.id !== (await principalId(descriptor.pubkey))) return false;
     if (descriptor.mintedBy) {
       // A minted descriptor's attribution can ONLY be verified against the minter's
       // key. Without it we cannot confirm the claim → fail closed (never fall back

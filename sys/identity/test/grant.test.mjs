@@ -71,6 +71,18 @@ await test('tamper: flipping the signature or dropping a caveat fails verificati
   assert(!(await verifyGrant(dropped, root, ctx())).ok, 'dropping a caveat breaks the chain');
 });
 
+await test('hardening: malformed sig fails closed (no throw); scope ".." rejected; budget is inclusive', async () => {
+  const root = newRootKey(); const g = await personGrant(root);
+  const bad = await verifyGrant({ ...g, sig: 'not!valid!base64!' }, root, ctx());
+  eq(bad.ok, false, 'malformed sig → ok:false, not a throw'); assert(/malformed/.test(bad.reason), bad.reason);
+  const trav = await verifyGrant(g, root, ctx({ target: 'reckon:sheet/budget/../salaries' }));
+  eq(trav.ok, false, 'a ".." target cannot escape scope');
+  const atCap = await verifyGrant(g, root, ctx({ usage: { calls: 50 } })); // budget calls:50
+  eq(atCap.ok, false, 'usage at the cap is exhausted (>=), not one-over');
+  const nan = await verifyGrant(g, root, ctx({ usage: { calls: NaN } }));
+  eq(nan.ok, false, 'a non-finite counter fails closed');
+});
+
 await test('revocation: a revoked grant id is rejected', async () => {
   const root = newRootKey(); const g = await personGrant(root);
   const r = await verifyGrant(g, root, ctx({ revocationList: new Set([g.identifier]) }));

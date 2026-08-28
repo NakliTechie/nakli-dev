@@ -65,11 +65,21 @@ function checkCaveat(c, ctx) {
   switch (c.type) {
     case 'principal': return ctx.principal === c.value ? null : `principal ${ctx.principal} ≠ ${c.value}`;
     case 'tools': return c.value.includes(ctx.tool) ? null : `tool "${ctx.tool}" not in [${c.value.join(', ')}]`;
-    case 'scope': { const t = String(ctx.target || ''); return (t === c.value || t.startsWith(c.value + '/')) ? null : `target "${t}" outside scope "${c.value}"`; }
-    case 'ttl': return (Number(ctx.now) <= c.value) ? null : `expired (ttl ${c.value} < now ${ctx.now})`;
+    case 'scope': {
+      const t = String(ctx.target || '');
+      if (t.split('/').includes('..')) return `target "${t}" contains a ".." segment`; // no traversal out of scope
+      return (t === c.value || t.startsWith(c.value + '/')) ? null : `target "${t}" outside scope "${c.value}"`;
+    }
+    case 'ttl': return (Number.isFinite(Number(ctx.now)) && Number(ctx.now) <= c.value) ? null : `expired (ttl ${c.value} < now ${ctx.now})`;
     case 'budget': {
       const u = ctx.usage || {}; const v = c.value || {};
-      for (const k of ['calls', 'tokens', 'spend']) if (v[k] != null && (u[k] || 0) > v[k]) return `budget ${k} exhausted (${u[k]} > ${v[k]})`;
+      // >= : the cap is inclusive of prior usage, so a call that would meet or
+      // exceed it is denied. A non-finite counter fails CLOSED (treated as exhausted).
+      for (const k of ['calls', 'tokens', 'spend']) {
+        if (v[k] == null) continue;
+        const used = (u[k] === undefined || u[k] === null) ? 0 : Number(u[k]); // don't let NaN||0 hide it
+        if (!Number.isFinite(used) || used >= v[k]) return `budget ${k} exhausted (${u[k]} ≥ ${v[k]})`;
+      }
       return null;
     }
     case 'issuer': return null;      // informational (attribution), no runtime predicate
@@ -84,16 +94,31 @@ function checkCaveat(c, ctx) {
 // then every caveat.
 export async function verifyGrant(grant, rootKey, ctx = {}) {
   if (!grant || !grant.identifier || !Array.isArray(grant.caveats) || !grant.sig) return { ok: false, reason: 'malformed grant' };
+  let presented;
+  try { presented = b64uDecode(grant.sig); } catch (_) { return { ok: false, reason: 'malformed signature' }; }
   const expected = await chainSig(rootKey, grant.identifier, grant.caveats);
-  if (!constantTimeEqual(expected, b64uDecode(grant.sig))) return { ok: false, reason: 'signature' };
+  if (!constantTimeEqual(expected, presented)) return { ok: false, reason: 'signature' };
   const revoked = ctx.revocationList && (ctx.revocationList.has ? ctx.revocationList.has(grant.identifier) : ctx.revocationList.includes(grant.identifier));
   if (revoked) return { ok: false, reason: 'revoked' };
   for (const c of grant.caveats) { const err = checkCaveat(c, ctx); if (err) return { ok: false, reason: err }; }
   return { ok: true, reason: '' };
 }
 
-// Read a caveat value out of a grant (e.g. the auto-commit flag for staging).
+// Read the FIRST caveat value of a type. For a type that can be ATTENUATED
+// (appended more restrictively, e.g. auto-commit), read all of them and combine —
+// see readCaveats — rather than trusting the issuer's first.
 export function readCaveat(grant, type) {
   const c = (grant && grant.caveats || []).find((x) => x.type === type);
   return c ? c.value : undefined;
 }
+// All values of a caveat type, issuer-first — so a consumer can apply the
+// most-restrictive across a delegation chain (attenuation only narrows).
+export function readCaveats(grant, type) {
+  return (grant && grant.caveats || []).filter((x) => x.type === type).map((x) => x.value);
+}
+
+// NOTE (enforcement-point contract): verifyGrant authorizes over TRUSTED ctx.
+// The caller MUST (a) bind ctx.principal to a verifyDescriptor-checked identity
+// with the correct minter key, (b) supply honest usage counters, and (c) ALWAYS
+// pass ctx.revocationList — an omitted list means "no revocations" and a revoked
+// grant would verify. Treat the list as a required input at every face call.

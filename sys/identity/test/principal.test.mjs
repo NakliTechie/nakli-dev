@@ -64,8 +64,22 @@ await test('unknown / external kinds handled', async () => {
   eq(ext.kind, 'external', 'external imported'); assert(ext.id.startsWith('prin_'), 'has id');
 });
 
+await test('an agent must be minted by a person (no self-rooted agents)', async () => {
+  let threw = false; try { await mintPrincipal(null, { kind: 'agent', now }); } catch (_) { threw = true; }
+  assert(threw, 'root agent minting refused');
+  // a hand-crafted self-rooted agent descriptor (kind agent, mintedBy null) fails verify
+  const person = await mintPrincipal(null, { kind: 'person', now });
+  const forgedRoot = { ...(await mintPrincipal(person, { kind: 'agent', now })).descriptor, mintedBy: null };
+  assert(!(await verifyDescriptor(forgedRoot)), 'self-rooted agent rejected');
+});
+
+await test('malformed input fails closed (returns false, does not throw)', async () => {
+  assert(!(await verifyDescriptor({ kind: 'person', pubkey: 'not!valid!b64', id: 'prin_x', sig: 'zzz', mintedBy: null })), 'bad pubkey → false, no throw');
+  assert(!(await verifyDescriptor(null)), 'null → false');
+});
+
 await test('keypair export/import round-trips (signs + verifies)', async () => {
-  const p = await mintPrincipal(null, { kind: 'agent', now });
+  const p = await mintPrincipal(null, { kind: 'person', now });
   const dump = await exportKeypair(p.keypair);
   const restored = await importKeypair(dump);
   const msg = new TextEncoder().encode('authority');

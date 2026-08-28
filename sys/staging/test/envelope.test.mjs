@@ -1,7 +1,7 @@
 // Conformance — P0.4 Staging (pure half): envelope, diff registry, commit authority.
 //   node sys/staging/test/envelope.test.mjs
 import { registerDiffType, getDiffType, clearRegistry, makeEnvelope, normalizeEnvelope, decideCommit, isExpired, newProposalId } from '../envelope.mjs';
-import { issueGrant, caveat, newRootKey } from '../../identity/grant.mjs';
+import { issueGrant, attenuate, caveat, newRootKey } from '../../identity/grant.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -41,6 +41,15 @@ await test('grant-scoped auto-commit allows an agent ONLY for reversible ops', a
   eq(decideCommit({ actor: 'agent', tool: 'reckon.commit', reversible: false, grant: g }).allowed, false, 'irreversible → still denied');
   const gAny = await issueGrant(root, { caveats: [caveat.autoCommit(false)] }); // 'any'
   eq(decideCommit({ actor: 'agent', tool: 'x', reversible: false, grant: gAny }).mode, 'auto', 'auto-commit:any allows either');
+});
+
+await test('auto-commit is most-restrictive across a delegation chain', async () => {
+  const root = newRootKey();
+  // issuer permits ANY auto-commit; a worker attenuates to reversible-only
+  let g = await issueGrant(root, { caveats: [caveat.autoCommit(false)] }); // 'any'
+  g = await attenuate(g, caveat.autoCommit(true)); // 'reversible' — tightens
+  eq(decideCommit({ actor: 'agent', tool: 'x', reversible: false, grant: g }).allowed, false, 'irreversible denied — worker tightening wins over issuer any');
+  eq(decideCommit({ actor: 'agent', tool: 'x', reversible: true, grant: g }).mode, 'auto', 'reversible still allowed');
 });
 
 await test('expiry + proposal id', () => {

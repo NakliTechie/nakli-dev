@@ -5,7 +5,7 @@
 // normalizer seam the reviewer UI consumes, and the commit-authority decision. The
 // DOM reviewer component and the live demo are parked (attended, /live-check-nt).
 
-import { readCaveat } from '../identity/grant.mjs';
+import { readCaveats } from '../identity/grant.mjs';
 
 // A diff-type registry: each app declares its native diff format + a pure
 // normalizer `(diff) -> {kind, ...}` that the one reviewer renders. Module-level
@@ -44,11 +44,17 @@ export function normalizeEnvelope(envelope) {
 // reversible, grant? }. Returns { allowed, mode:'person'|'auto'|'denied', reason }.
 export function decideCommit(ctx = {}) {
   if (ctx.actor === 'person') return { allowed: true, mode: 'person', reason: 'person commit' };
-  // An agent may commit only with a grant carrying auto-commit AND only a reversible op.
-  const flag = ctx.grant ? readCaveat(ctx.grant, 'auto-commit') : undefined;
-  if (flag === 'reversible' && ctx.reversible === true) return { allowed: true, mode: 'auto', reason: 'grant-scoped auto-commit (reversible)' };
-  if (flag === 'any') return { allowed: true, mode: 'auto', reason: 'grant-scoped auto-commit (any)' };
-  return { allowed: false, mode: 'denied', reason: 'commit is person-only (no auto-commit grant for this op)' };
+  // An agent may commit only with a grant carrying auto-commit AND only a reversible
+  // op. Attenuation only narrows, so EVERY auto-commit caveat in the chain must
+  // permit the op (most-restrictive wins) — reading just the issuer's first caveat
+  // would ignore a worker's tightening.
+  const flags = ctx.grant ? readCaveats(ctx.grant, 'auto-commit') : [];
+  if (!flags.length) return { allowed: false, mode: 'denied', reason: 'commit is person-only (no auto-commit grant)' };
+  const allAny = flags.every((f) => f === 'any');
+  const allReversibleOk = flags.every((f) => f === 'any' || f === 'reversible');
+  if (allAny) return { allowed: true, mode: 'auto', reason: 'grant-scoped auto-commit (any)' };
+  if (ctx.reversible === true && allReversibleOk) return { allowed: true, mode: 'auto', reason: 'grant-scoped auto-commit (reversible)' };
+  return { allowed: false, mode: 'denied', reason: 'commit is person-only (op not covered by auto-commit caveats)' };
 }
 
 // Has the proposal expired? (`now` ms.)
