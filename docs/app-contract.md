@@ -23,6 +23,52 @@ Standalone applications can vendor the same file or load the published copy.
 The SDK is a no-op outside an iframe; `naklios.capabilities.hosted` identifies
 the hosted case.
 
+## Detecting the host (`?naklios`)
+
+An app is *hosted* when it is embedded in a NakliOS window
+(`window.parent !== window`) **or** invoked with the `?naklios` URL flag. The host
+appends `?naklios` to embed URLs as an explicit signal, and it is also a deliberate
+opt-in for testing. Either way, read `naklios.capabilities.hosted`:
+
+```js
+if (naklios.capabilities.hosted) { /* route through NakliOS transports */ }
+```
+
+The transports themselves require a real host frame to talk to, so a bare
+`?naklios` top-level tab (no NakliOS around it) still falls back: `capabilities.fs`
+and `capabilities.ai` only become true after a real host handshake. Detect, attempt,
+fall back — always safe. `naklios.capabilities.flagged` reports the `?naklios` flag
+specifically (distinct from being embedded in some other iframe).
+
+## The transport-adapter pattern
+
+Do not scatter `naklios.*` calls through the app. Build **two thin adapters at
+init**, chosen once by capability, and call those everywhere so the rest of the app
+is transport-agnostic:
+
+```js
+// storage: the app's ONLY filesystem surface
+const store = (naklios.capabilities.hosted && naklios.capabilities.fs)
+  ? hostStore()     // → naklios.fs.{read,write,list,delete,subscribe,…}
+  : localStore();   // → showDirectoryPicker()/OPFS/localStorage (standalone)
+
+// inference: the app's ONLY AI surface
+const ai = (naklios.capabilities.hosted && naklios.capabilities.ai)
+  ? hostAi()        // → naklios.ai.chat.completions.create(…)  (agent:true for system apps)
+  : ownAi();        // → the app's configured endpoint / bundled runtime
+```
+
+Both adapters expose one interface. Re-pick on `naklios.onCapabilitiesChange`.
+
+## FSA inside an iframe
+
+`showDirectoryPicker()` is **blocked in a cross-origin iframe** — no sandbox flag
+unlocks it. A hosted app MUST NOT call it; instead its storage adapter uses
+`naklios.fs.*`, where the **host** owns the File System Access / Folder / Crate
+handle and serves file ops over postMessage. This works in any iframe and gives the
+app Folder/Crate roaming for free. Standalone (a real top-level tab), the adapter
+uses raw FSA as before.
+
 ## Lifecycle
 
 Call these after installing the app's listeners:

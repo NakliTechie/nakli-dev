@@ -55,15 +55,28 @@
  * License: MIT.
  */
 (function () {
+  // A real host FRAME is what the transports talk to (postMessage to parent), so
+  // it gates every send/rpc — `inNakliOS`. The `?naklios` URL flag is the host's
+  // EXPLICIT signal (it appends it to embed URLs) and a deliberate opt-in for
+  // testing; it sets capabilities.hosted so an app KNOWS to route through NakliOS,
+  // but it never fakes a channel that isn't there — a bare `?naklios` top-level tab
+  // has no host, so fs/ai capabilities stay false (no handshake) and the app's
+  // adapter falls back to its own APIs. No hang, no breakage.
   var inNakliOS = false;
   try { inNakliOS = !!(window.parent && window.parent !== window); } catch (_) {}
+  var naklFlag = false;
+  try { naklFlag = new URLSearchParams(window.location.search).has('naklios'); } catch (_) {}
 
   var currentTheme = null;
   var themeListeners = new Set();
   var capListeners = new Set();
   var beforeCloseCb = null;
   var capabilities = {
-    hosted: inNakliOS,
+    // hosted honours the ?naklios flag as well as a real embed, so an app can
+    // decide to route through NakliOS; the fs/ai flags below only flip true after
+    // a real host handshake, so the adapter still self-corrects with no channel.
+    hosted: inNakliOS || naklFlag,
+    flagged: naklFlag,
     version: 1,
     fs: false,
     fsBackends: [],
