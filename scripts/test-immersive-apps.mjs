@@ -19,7 +19,9 @@ for (const id of ['bofh']){
 // Cross-origin File-System-Access apps must open TOP-LEVEL (maxMode:'basic') —
 // showDirectoryPicker() is blocked in a cross-origin iframe, so they cannot run
 // embedded. Decision 2026-08-27: FSA apps top-level, non-FSA apps stay embedded.
-for (const id of ['books', 'vaultmind', 'kanzen', 'nakliposter', 'slate']){
+// KanZen/NakliPoster-style apps that only need app-scoped storage work embedded;
+// these open the user's EXISTING arbitrary folder, which needs a top-level tab.
+for (const id of ['books', 'vaultmind', 'nakliposter', 'slate']){
   const start = html.indexOf(`{ id:'${id}'`);
   const end = html.indexOf('\n  { id:', start + 1);
   assert.ok(start >= 0 && end > start, `${id} app entry exists`);
