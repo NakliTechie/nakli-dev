@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
-for (const id of ['slate', 'bofh']){
+// Non-FSA apps must EMBED (Immersive iframe window), never force a browser tab.
+for (const id of ['bofh']){
   const start = html.indexOf(`{ id:'${id}'`);
   const end = html.indexOf('\n  { id:', start + 1);
   assert.ok(start >= 0 && end > start, `${id} app entry exists`);
@@ -12,6 +13,21 @@ for (const id of ['slate', 'bofh']){
     entry,
     /maxMode:'basic'/,
     `${id} must use NakliOS's Immersive iframe window instead of forcing a browser tab`,
+  );
+}
+
+// Cross-origin File-System-Access apps must open TOP-LEVEL (maxMode:'basic') —
+// showDirectoryPicker() is blocked in a cross-origin iframe, so they cannot run
+// embedded. Decision 2026-08-27: FSA apps top-level, non-FSA apps stay embedded.
+for (const id of ['books', 'vaultmind', 'kanzen', 'nakliposter', 'slate']){
+  const start = html.indexOf(`{ id:'${id}'`);
+  const end = html.indexOf('\n  { id:', start + 1);
+  assert.ok(start >= 0 && end > start, `${id} app entry exists`);
+  const entry = html.slice(start, end);
+  assert.match(
+    entry,
+    /maxMode:'basic'/,
+    `${id} is a cross-origin FSA app — it must open top-level (maxMode:'basic'), not embedded`,
   );
 }
 
@@ -51,4 +67,4 @@ assert.match(
   'NakliOS-owned scroll areas use the active theme',
 );
 
-console.log('NakliOS Immersive Slate/BOFH launch contract: PASS');
+console.log('NakliOS Immersive BOFH-embed + FSA-apps-top-level contract: PASS');
