@@ -66,6 +66,19 @@
   try { inNakliOS = !!(window.parent && window.parent !== window); } catch (_) {}
   var naklFlag = false;
   try { naklFlag = new URLSearchParams(window.location.search).has('naklios'); } catch (_) {}
+  // Verify the embedding parent is actually NakliOS before trusting it — and derive
+  // a targetOrigin so we never postMessage app data to an untrusted framer (was '*').
+  // (Reference: Lorewell/Books, which pioneered this.) An unverifiable/foreign
+  // parent falls back to standalone. The host serves the referrer to its iframes.
+  var trustedParentOrigin = null;
+  if (inNakliOS) {
+    try {
+      var refUrl = new URL(document.referrer);
+      if (refUrl.origin === 'https://naklios.dev' || refUrl.hostname === 'localhost' || refUrl.hostname === '127.0.0.1') {
+        trustedParentOrigin = refUrl.origin;
+      } else { inNakliOS = false; }
+    } catch (_) { inNakliOS = false; }
+  }
 
   var currentTheme = null;
   var themeListeners = new Set();
@@ -116,7 +129,7 @@
     if (!inNakliOS) return;
     try {
       var msg = Object.assign({ type: type }, data || {});
-      window.parent.postMessage(msg, '*');
+      window.parent.postMessage(msg, trustedParentOrigin || '*');
     } catch (_) {}
   }
 
@@ -281,6 +294,8 @@
 
   window.addEventListener('message', function (e) {
     if (inNakliOS && e.source !== window.parent) return;
+    if (inNakliOS && trustedParentOrigin && e.origin !== trustedParentOrigin) return; // origin-verified inbound
+
     var msg = e.data;
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'naklios:theme') {
