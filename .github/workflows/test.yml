@@ -87,6 +87,9 @@ jobs:
       - name: Verify P0 Grant — capability tokens
         run: node sys/identity/test/grant.test.mjs
 
+      - name: Verify P0 History — tamper-evident ledger
+        run: node sys/history/test/ledger.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
