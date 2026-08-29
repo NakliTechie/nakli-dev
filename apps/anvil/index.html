@@ -583,7 +583,11 @@
         : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
       const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. The function must return quickly — NO unbounded loops or heavy computation. Output ONLY a ```python code block — no prose.';
       const user='Task: '+String(goal||'')+'\nExamples (JSON [{input,output}]): '+exJson+repair;
-      let res; try{ res=await inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }); }catch(_){ return null; }
+      // Bound the inference too — a hung model call must not stall the whole generation.
+      let res; try{ res=await Promise.race([
+        inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('gen timeout')), 45000)),
+      ]); }catch(_){ return null; }
       const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
     };
     const res=await evolve({ generate, score:(src)=>scoreSolver(src, examples), popSize:pop, maxGen:gens, target:1, onGen });
