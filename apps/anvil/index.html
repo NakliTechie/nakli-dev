@@ -569,6 +569,23 @@
         maxGen:{ type:'integer', description:'Max generations (default 3, max 4).' },
       }, required:['goal','examples'] } } };
   }
+  // The evolutionary synthesis run, shared by the `synthesize` tool + the test hook.
+  async function runSynthesize({ goal, examples, popSize=3, maxGen=3, onGen=null }){
+    const pop=Math.min(4, Math.max(1, popSize|0||3)); const gens=Math.min(4, Math.max(1, maxGen|0||3));
+    const exJson=JSON.stringify(examples).slice(0,12000);
+    const generate=async(ctx)=>{
+      const repair = ctx.best
+        ? ('\n\nThe current best (fitness '+ctx.bestScore.toFixed(2)+') FAILS example indices '+JSON.stringify((ctx.bestDetail&&ctx.bestDetail.failed)||[])+'. Repair it, or try a DIFFERENT rule:\n```python\n'+String(ctx.best).slice(0,4000)+'\n```')
+        : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
+      const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. Output ONLY a ```python code block — no prose.';
+      const user='Task: '+String(goal||'')+'\nExamples (JSON [{input,output}]): '+exJson+repair;
+      let res; try{ res=await inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }); }catch(_){ return null; }
+      const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
+    };
+    const res=await evolve({ generate, score:(src)=>scoreSolver(src, examples), popSize:pop, maxGen:gens, target:1, onGen });
+    if(res.best){ try{ await fs.write('solver.py', String(res.best)+'\n\n# synthesize: best '+res.bestScore.toFixed(3)+' over '+res.generations+' gen(s)'); renderFiles(); }catch(_){} }
+    return res;
+  }
 
   async function listFacts(){
     const out=[];
@@ -1165,21 +1182,9 @@
       if(nm==='synthesize'){
         const goal=String((ar&&ar.goal)||''); const examples=Array.isArray(ar&&ar.examples)?ar.examples:[];
         if(!examples.length) return 'synthesize needs a non-empty examples:[{input,output}] array.';
-        const popSize=Math.min(4, Math.max(1, (ar&&ar.popSize)||3)); const maxGen=Math.min(4, Math.max(1, (ar&&ar.maxGen)||3));
-        const exJson=JSON.stringify(examples).slice(0,12000);
-        const generate=async(ctx)=>{
-          const repair = ctx.best
-            ? ('\n\nThe current best (fitness '+ctx.bestScore.toFixed(2)+') FAILS example indices '+JSON.stringify((ctx.bestDetail&&ctx.bestDetail.failed)||[])+'. Repair it, or try a DIFFERENT rule:\n```python\n'+String(ctx.best).slice(0,4000)+'\n```')
-            : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
-          const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. Output ONLY a ```python code block — no prose.';
-          const user='Task: '+goal+'\nExamples (JSON [{input,output}]): '+exJson+repair;
-          let res; try{ res=await inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }); }catch(_){ return null; }
-          const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
-        };
-        const res=await evolve({ generate, score:(src)=>scoreSolver(src, examples), popSize, maxGen, target:1,
+        const res=await runSynthesize({ goal, examples, popSize:(ar&&ar.popSize)||3, maxGen:(ar&&ar.maxGen)||3,
           onGen:({gen,bestScore})=>{ if(t){ t.log.push({k:'system',text:'synthesize gen '+gen+': best fitness '+Number(bestScore).toFixed(3)}); renderLog(); } } });
-        if(res.best){ try{ await fs.write('solver.py', String(res.best)+'\n\n# synthesize: best '+res.bestScore.toFixed(3)+' over '+res.generations+' gen(s)'); renderFiles(); }catch(_){} }
-        return 'Synthesized: pop '+popSize+' × '+res.generations+' gen(s). Best fitness '+res.bestScore.toFixed(3)+'/1.0'+(res.solved?' — SOLVED all examples. ':' — best still fails indices '+JSON.stringify((res.bestDetail&&res.bestDetail.failed)||[])+'. ')+'Wrote solver.py; apply it to the real input.';
+        return 'Synthesized: '+res.generations+' gen(s). Best fitness '+res.bestScore.toFixed(3)+'/1.0'+(res.solved?' — SOLVED all examples. ':' — best still fails indices '+JSON.stringify((res.bestDetail&&res.bestDetail.failed)||[])+'. ')+'Wrote solver.py; apply it to the real input.';
       }
       // Pre-tool hook guard (project policy): a matching preTool hook with a
       // `block` message refuses the tool before it runs.
@@ -1390,6 +1395,7 @@
   window.__anvil = Object.assign(window.__anvil||{}, { test: Object.assign((window.__anvil&&window.__anvil.test)||{}, {
     demoCampaign:(g)=>startCampaign(g||'samtools view parity',{live:false}),
     liveCampaign:(g,maxIters)=>startCampaign(g||'samtools view parity',{live:true, maxIters:maxIters||8}),
+    synthesize:(goal, examples, popSize, maxGen)=>runSynthesize({goal, examples, popSize, maxGen}),
   }) });
 
   // ── boot ──
