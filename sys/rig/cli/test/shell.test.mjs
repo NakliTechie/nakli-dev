@@ -64,6 +64,40 @@ await test('echo, redirect (>), append (>>), and cat', async () => {
   eq(await run(shell, 'cat notes.txt'), 'line1\nline2', 'append keeps line separators');
 });
 
+await test('2>&1 and friends are no-ops, never a literal &1 file', async () => {
+  const { shell } = freshShell();
+  // `echo hi 2>&1` prints hi and writes NO `&1` file.
+  eq(await run(shell, 'echo hi 2>&1'), 'hi', '2>&1 leaves output intact');
+  const afterAmp1 = await run(shell, 'cat "&1"');
+  assert(/error|not|ENOENT|failed/i.test(afterAmp1), `no &1 file created: ${afterAmp1}`);
+  // The `2` fd is not leaked as an argument.
+  eq(await run(shell, 'echo start 2>&1'), 'start', 'fd prefix stripped, not echoed');
+  // Other merge forms are equally inert.
+  eq(await run(shell, 'echo a 1>&2'), 'a', '1>&2 no-op');
+  eq(await run(shell, 'echo b 2>&-'), 'b', '2>&- close-fd no-op');
+});
+
+await test('2>&1 pipes correctly into the next stage', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo xylophone > w.txt');
+  await run(shell, 'echo banana >> w.txt');
+  eq(await run(shell, 'cat w.txt 2>&1 | grep x'), 'xylophone', '2>&1 before a pipe still pipes');
+});
+
+await test('real > and >> redirects survive the merge-idiom handling', async () => {
+  const { shell } = freshShell();
+  await run(shell, 'echo one > out.txt');
+  eq(await run(shell, 'cat out.txt'), 'one', '> still writes');
+  await run(shell, 'echo two >> out.txt');
+  eq(await run(shell, 'cat out.txt'), 'one\ntwo', '>> still appends');
+  // `2>file` collapses to a merged redirect (fd stripped, no `2` argument).
+  await run(shell, 'echo merged 2> both.txt');
+  eq(await run(shell, 'cat both.txt'), 'merged', '2>file writes the merged stream');
+  // `&>file` redirects the combined stream too.
+  await run(shell, 'echo combo &> c.txt');
+  eq(await run(shell, 'cat c.txt'), 'combo', '&>file writes combined stream');
+});
+
 await test('ls lists names and respects cwd + relative paths', async () => {
   const { shell } = freshShell();
   await run(shell, 'mkdir -p proj');

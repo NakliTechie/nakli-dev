@@ -64,6 +64,13 @@ function parseLine(line) {
 // Tokenize while keeping the shell operators as their own tokens. Quotes
 // protect operators (so `echo "a|b"` is one token). Builds on `tokenize` by
 // pre-splitting unquoted operators with spaces.
+//
+// Stderr/stdout fd-merge idioms are normalized here because this shell already
+// combines stdout+stderr into one stream (see runStage's python branch and the
+// merged returns). So `2>&1` / `1>&2` / `2>&-` are pure no-ops — stripped
+// rather than parsed as a redirect to a literal `&1` file. `&>` / `&>>`
+// (redirect BOTH streams to a file) and fd-prefixed redirects `2>file` /
+// `2>>file` collapse to a plain `>` / `>>` of the already-merged stream.
 function tokenizeOps(line) {
   let out = '';
   let quote = null;
@@ -77,11 +84,35 @@ function tokenizeOps(line) {
       if (s[i + 1] === '|') { out += ' || '; i++; } else { out += ' | '; }
       continue;
     }
+    // fd-prefixed redirect: a lone `1`/`2` (token start) immediately before `>`.
+    // `2>&1`/`1>&2`/`2>&-` are no-ops; `2>file`/`2>>file` become a plain redirect.
+    if ((c === '1' || c === '2') && s[i + 1] === '>') {
+      const prevCh = out.length ? out[out.length - 1] : '';
+      if (prevCh === '' || prevCh === ' ') {
+        let j = i + 1;                                   // at the first '>'
+        let op = '>';
+        if (s[j + 1] === '>') { op = '>>'; j++; }        // '>>' operator
+        if (s[j + 1] === '&' && /[12-]/.test(s[j + 2] || '')) {
+          i = j + 2; continue;                           // N>&M / N>&- → strip
+        }
+        out += ` ${op} `; i = j; continue;               // N>file → merged redirect
+      }
+    }
     if (c === '>') {
       if (s[i + 1] === '>') { out += ' >> '; i++; } else { out += ' > '; }
       continue;
     }
-    if (c === '&' && s[i + 1] === '&') { out += ' && '; i++; continue; }
+    if (c === '&') {
+      if (s[i + 1] === '&') { out += ' && '; i++; continue; }
+      // `&>` / `&>>` — redirect both streams to a file. Already merged, so this
+      // is just a redirect of the combined stream.
+      if (s[i + 1] === '>') {
+        let j = i + 1; let op = '>';
+        if (s[j + 1] === '>') { op = '>>'; j++; }
+        out += ` ${op} `; i = j; continue;
+      }
+      out += c; continue;
+    }
     out += c;
   }
   return tokenize(out);
