@@ -1,0 +1,9 @@
+{
+  "name": "nakli-egress",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "vars": {
+    "ALLOW_ORIGINS": "https://naklios.dev",
+    "ALLOWLIST": "github.com,*.github.com,*.githubusercontent.com,gitlab.com"
+  }
+}

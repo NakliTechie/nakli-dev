@@ -458,7 +458,7 @@
         try { cb(grant); } catch (_) {}
       });
     } else if ((msg.type === 'naklios:fs:reply' || msg.type === 'naklios:file:reply' ||
-                msg.type === 'naklios:rag:reply') && msg.requestId) {
+                msg.type === 'naklios:rag:reply' || msg.type === 'naklios:net:reply') && msg.requestId) {
       var p = pendingRpc.get(msg.requestId);
       if (!p) return;
       pendingRpc.delete(msg.requestId);

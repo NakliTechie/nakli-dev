@@ -38,6 +38,7 @@ const expectedRules = [
   'apps/forge/*.md',
   'apps/forge/forge-mockup.html',
   'wrangler.jsonc',
+  'nakli-egress/',
 ];
 const rules = assetsIgnore.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 assert(JSON.stringify(rules) === JSON.stringify(expectedRules), `Unexpected asset exclusions: ${rules.join(', ')}`);

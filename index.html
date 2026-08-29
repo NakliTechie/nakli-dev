@@ -7198,6 +7198,39 @@ async function ragOpenResultInEditor(path){
 }
 
 
+// ── Egress (naklios.net): sign + relay a blocked cross-origin request through the
+// user's OWN nakli-egress Worker. Canonicalization mirrors nakli-egress/src/lib.js
+// EXACTLY (lowercased+sorted headers minus hop-by-hop; method\nurl\nheaders\n
+// bodySha256\nnonce\nts) so the Worker's HMAC verify passes. Settings + secret are
+// host-only (like the AI key); the app never sees them. ──
+const EGRESS_HOP_BY_HOP = new Set(['host','connection','content-length','keep-alive','transfer-encoding','upgrade','proxy-authorization','proxy-connection','te','trailer']);
+function egressSettings(){ try { return JSON.parse(localStorage.getItem('nakliOS.egressSettings.v1')||'null') || null; } catch(_) { return null; } }
+function egressConfigured(){ const s = egressSettings(); return !!(s && s.workerUrl && s.secret); }
+function egressBackendLabel(){ const s = egressSettings(); return (s && s.backend) ? s.backend : (egressConfigured() ? 'worker' : null); }
+function _egHex(u8){ let s=''; for(let i=0;i<u8.length;i++) s+=u8[i].toString(16).padStart(2,'0'); return s; }
+function _egCanonHeaders(h){ return Object.entries(h||{}).map(([k,v])=>[String(k).toLowerCase(),String(v)]).filter(([k])=>!EGRESS_HOP_BY_HOP.has(k)).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0).map(([k,v])=>k+':'+v).join('\n'); }
+function _egCanon({method,url,headers,bodySha256,nonce,ts}){ return [String(method||'GET').toUpperCase(),String(url||''),_egCanonHeaders(headers),String(bodySha256||''),String(nonce||''),String(ts||'')].join('\n'); }
+async function _egSha(bytes){ const b=await crypto.subtle.digest('SHA-256', bytes); return _egHex(new Uint8Array(b)); }
+async function _egHmac(secret,message){ const enc=new TextEncoder(); const key=await crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']); const sig=await crypto.subtle.sign('HMAC',key,enc.encode(message)); return _egHex(new Uint8Array(sig)); }
+function _egB64(u8){ let bin=''; for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]); return btoa(bin); }
+function _egUnb64(b64){ const bin=atob(b64); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i); return u8; }
+function _egBytes(body){ if(body==null) return new Uint8Array(0); if(body instanceof Uint8Array) return body; if(body instanceof ArrayBuffer) return new Uint8Array(body); return new TextEncoder().encode(String(body)); }
+async function egressFetch({url, method='GET', headers={}, body=null}){
+  const s = egressSettings();
+  if(!s || !s.workerUrl || !s.secret){ const e=new Error('No egress backend configured'); e.code='ENOEGRESS'; throw e; }
+  const bytes = _egBytes(body);
+  const bodyB64 = bytes.length ? _egB64(bytes) : null;
+  const bodySha256 = bytes.length ? await _egSha(bytes) : '';
+  const nonce = 'h'+Math.random().toString(36).slice(2)+Date.now().toString(36);
+  const ts = Date.now();
+  const sig = await _egHmac(s.secret, _egCanon({method,url,headers,bodySha256,nonce,ts}));
+  const envelope = { url:String(url), method:String(method||'GET'), headers:headers||{}, body:bodyB64, nonce, ts, sig };
+  const r = await fetch(s.workerUrl, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(envelope) });
+  const j = await r.json().catch(()=>({ ok:false, error:'bad worker response' }));
+  if(!j.ok){ const e=new Error('egress: '+(j.error||('http '+r.status))); e.code='EEGRESS'; throw e; }
+  return { status:j.status, statusText:j.statusText||'', headers:j.headers||{}, body: j.body ? _egUnb64(j.body) : new Uint8Array(0) };
+}
+
 function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
   // We don't pre-bind here — fsEnsurePermission runs on the first op call.
@@ -7239,6 +7272,10 @@ function capabilitySnapshot(appId){
     aiImageState:aiImageHost.state,
     aiSearch: ragCapabilityForApp(appId),
     aiSearchState:ragHost.state,
+    // Egress: a system app may reach blocked cross-origin hosts when the user has
+    // configured a backend. Third-party apps never get it (isSystem gate).
+    net: isSystem && egressConfigured(),
+    netBackend: (isSystem && egressConfigured()) ? egressBackendLabel() : null,
   };
 }
 
@@ -7664,6 +7701,21 @@ window.addEventListener('message', async e => {
     if (appId) void aiHostSubmitImage(e.source, msg, appId);
   } else if (msg.type === 'naklios:ai:cancel'){
     aiHostCancel(e.source, msg.requestId);
+  } else if (msg.type === 'naklios:net:info'){
+    const reply = { type:'naklios:net:reply', requestId: msg.requestId };
+    try { reply.result = egressConfigured() ? { backend: egressBackendLabel(), roams: egressBackendLabel()==='worker' } : null; }
+    catch(err){ reply.error = String(err?.message || err); }
+    if (msg.requestId) { try { e.source.postMessage(reply, '*'); } catch(_){} }
+  } else if (msg.type === 'naklios:net:fetch'){
+    const reply = { type:'naklios:net:reply', requestId: msg.requestId };
+    try {
+      const appId = getAppId();
+      if (!appId) throw new Error('Unknown app');
+      if (!aiAppIsSystem(appId)) throw new Error('Egress is a system-app capability');
+      if (!egressConfigured()) { const er = new Error('No egress backend configured'); er.code = 'ENOEGRESS'; throw er; }
+      reply.result = await egressFetch({ url: msg.url, method: msg.method, headers: msg.headers, body: msg.body });
+    } catch(err){ reply.error = String(err?.message || err); }
+    if (msg.requestId) { try { e.source.postMessage(reply, '*'); } catch(_){} }
   } else if (typeof msg.type === 'string' && msg.type.startsWith('naklios:fs:')){
     const reply = { type: 'naklios:fs:reply', requestId: msg.requestId };
     try {

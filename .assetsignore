@@ -10,3 +10,4 @@ test/
 apps/forge/*.md
 apps/forge/forge-mockup.html
 wrangler.jsonc
+nakli-egress/

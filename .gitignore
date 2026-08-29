@@ -25,6 +25,9 @@ plan/
 !.github/**
 !vendor/
 !vendor/**
+!nakli-egress/
+!nakli-egress/**
+nakli-egress/.dev.secret
 
 # wrangler files
 .wrangler

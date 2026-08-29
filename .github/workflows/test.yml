@@ -63,6 +63,9 @@ jobs:
       - name: Verify naklios.net egress SDK seam (ENOEGRESS until a backend is advertised)
         run: node scripts/test-net-seam.mjs
 
+      - name: Verify nakli-egress Worker security core (sign/allowlist/SSRF/replay)
+        run: node nakli-egress/test/lib.test.mjs
+
       - name: Verify project memory store (facts, index, recall)
         run: node sys/ai/test/memory-store.test.mjs
 
