@@ -1456,6 +1456,9 @@
     synthesize:(goal, examples, popSize, maxGen)=>runSynthesize({goal, examples, popSize, maxGen}),
     score:(src, examples)=>scoreSolver(src, examples),
     infer:async(prompt, maxTokens)=>{ try{ const r=await inferViaHost({ messages:[{role:'user',content:String(prompt||'Say OK.')}], tools:[], maxTokens }); return { ok:true, contentLen:(r&&r.content||'').length, content:(r&&r.content||'').slice(0,400), finishReason:r&&r.finishReason, toolCalls:(r&&r.toolCalls||[]).length }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
+    // Remote git through the egress transport (probe). References the live `git` binding.
+    gitClone:async(url, opts)=>{ try{ const r=await git.clone(Object.assign({ url, singleBranch:true, depth:1 }, opts||{})); return { ok:true, branch:r&&r.branch, hasOid: !!(r&&r.oid) }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
+    gitLsRemote:async(url)=>{ try{ const r=await git.listServerRefs({ url }); return { ok:true, refCount: r&&r.refs?Object.keys(r.refs).length:0 }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
   }) });
 
   // ── boot ──
