@@ -169,7 +169,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="hooks-chip" title="Project hooks — .anvil/hooks.json pre/post-tool commands (format, lint, guards)" hidden>⚓</button><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand" hidden>✨</button><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Where these files are stored"></span><span class="spacer"></span><button class="icon" id="hooks-chip" title="Project hooks — .anvil/hooks.json pre/post-tool commands (format, lint, guards)" hidden>⚓</button><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand" hidden>✨</button><button class="icon" id="mem-chip" title="Project memory — AGENTS.md / memory.md the agent reads and records" hidden>🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="learn-btn" title="Learn this project — a read-only pass surveys the repo and records durable facts into project memory, so future tasks (and weaker models) start informed">🎓</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -489,6 +489,46 @@
   }
   // Project memory chip: visible when the project workspace has AGENTS.md or
   // memory.md; clicking opens whichever exists (memory first) in the preview.
+  // Write one durable memory fact (belief-revision: default hypothesis). Returns the
+  // slug, or null. Shared by the `remember` tool and the Prime flow.
+  async function recordFact(note, type, status='hypothesis'){
+    const clean=String(note==null?'':note).trim(); if(!clean) return null;
+    const f=noteToFact(clean, type, status);
+    let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
+    try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
+    await fs.write(path, f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n'));
+    renderFiles();
+    return slug;
+  }
+  // #2 Prime ("Learn this project") — the Agno seeding move: one read-only pass writes
+  // a starter manual so LATER tasks (esp. on a weaker BYO endpoint) start informed.
+  // Facts land as hypotheses; the agent promotes/retracts them as it works.
+  let priming=false;
+  async function primeProject(){
+    if(!(nak && nak.capabilities && nak.capabilities.ai)){ pushSystem('“Learn project” needs the NakliOS AI — open Anvil inside NakliOS with an endpoint set (Settings → AI).'); return; }
+    if(priming||running){ return; }
+    priming=true; const t=activeTask();
+    const logn=(txt)=>{ if(t){ (t.log=t.log||[]).push({k:'system',text:txt}); save(); renderLog(); } };
+    logn('🎓 Learning this project — surveying files and recording durable facts…');
+    const codeExec = makeToolExecutor({ shell, face, mode:'ask', infer: inferViaHost }); // read-only survey
+    let recorded=0;
+    const execTool=async(nm,ar,call)=>{
+      if(nm==='remember'){ const slug=await recordFact(String((ar&&ar.note)||''), ar&&ar.type, 'hypothesis'); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
+      return await codeExec(nm,ar,call);
+    };
+    const sys='You are PRIMING this project\'s memory so future tasks start informed. Survey the project — read the README, explore the file tree (shell: ls / find / grep), skim key source files, and note the build/test/run setup. Then record 5–10 short, high-signal DURABLE facts with the `remember` tool: where major things live, naming/style conventions, how to build/test/run, and any gotchas. One or two specific sentences each. Do NOT edit any files. Stop once you have recorded the key facts.';
+    try{
+      await runAgentLoop({
+        messages:[{role:'system',content:sys},{role:'user',content:'Survey this project and record its key facts with `remember`, then stop.'}],
+        tools:codingToolset('ask',{}).concat(rememberTool()), infer:inferViaHost, executeTool:execTool,
+        maxSteps:18, budget:{tokens:90000, wallClockMs:180000},
+      });
+    }catch(e){ logn('Priming error: '+(e&&e.message||e)); }
+    priming=false;
+    logn('🎓 Learned '+recorded+' fact(s) — see project memory (🧠). They start as hypotheses; the agent promotes or retracts them as it works.');
+    updateMemChip(); renderFiles();
+  }
+
   async function listFacts(){
     const out=[];
     try{
@@ -1062,13 +1102,9 @@
         if(!note) return 'Nothing recorded (empty note).';
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
-        const f=noteToFact(note, ar&&ar.type, 'hypothesis');
-        let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
-        try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
-        const file=f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n');
-        await fs.write(path, file);
-        factMap[slug]=path; renderFiles();
-        return 'Recorded fact "'+slug+'" ('+f.type+', hypothesis) — promote or retract it with `revise` as evidence arrives.';
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis');
+        if(slug) factMap[slug]=MEMORY_DIR+'/'+slug+'.md';
+        return slug?('Recorded fact "'+slug+'" (hypothesis) — promote or retract it with `revise` as evidence arrives.'):'Nothing recorded.';
       }
       // Belief revision: promote a corroborated hypothesis to verified, or retract one
       // an observation disproved (so it stops re-asserting a wrong note).
@@ -1199,6 +1235,14 @@
       });
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
       if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text});
+      // #5 plan→manual: a finished PLAN becomes a durable "plan of record" in project
+      // memory (a hypothesis), so the follow-up CODE task starts from it (the memory
+      // index is injected at task start) — Agno's explore-then-exploit, made durable.
+      if(mode==='plan' && finalAssistant && String(finalAssistant.text||'').trim().length>200){
+        try{ const slug=await recordFact('Plan — '+t.title+'\n\n'+finalAssistant.text, 'project', 'hypothesis');
+          if(slug){ factMap[slug]=MEMORY_DIR+'/'+slug+'.md'; t.log.push({k:'system',text:'Saved this plan to project memory ("'+slug+'") — code tasks start from it; retract it with `revise` once done.'}); }
+        }catch(_){}
+      }
       t.status = result.stop==='done'?'done':(result.stop==='error'?'error':'idle');
       const stopLabel = result.stop==='aborted' ? 'stopped'
         : result.stop==='budget' ? ('hit budget ('+(result.budgetAxis||'')+')')
@@ -1234,6 +1278,7 @@
   $('send').onclick=submit;
   $('stop').onclick=stopRun;
   $('refresh-files').onclick=renderFiles;
+  $('learn-btn').onclick=primeProject;
   $('mem-chip').onclick=openProjectMemory;
   $('skills-chip').onclick=openSkills;
   $('hooks-chip').onclick=openHooks;

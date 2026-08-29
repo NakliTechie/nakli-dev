@@ -31,7 +31,10 @@ export const REVIEW_SYSTEM =
   'task. Report concrete, actionable findings only: correctness bugs, security issues, ' +
   'missed edge cases, and clear regressions — each as "file:line — problem". If the ' +
   'work is sound, say so plainly and briefly. Do not restate the code or praise it. Do ' +
-  'not modify anything.';
+  'not modify anything.\n' +
+  'If a project memory exists (.anvil/memory/*.md), also check it against the current ' +
+  'code: name any fact the code now CONTRADICTS as "stale memory: <fact-name> — why", ' +
+  'so it can be retracted. You cannot write; just flag them.';
 
 export function dispatchTool() {
   return { type: 'function', function: {
