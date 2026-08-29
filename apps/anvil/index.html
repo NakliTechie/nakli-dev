@@ -551,7 +551,12 @@
         '__run()\n';
       await fs.write('.anvil/_synth.py', prog);
       const sh = createShell({ registry, face, kiln: kilnRef });
-      const o = await sh.feed('python3 .anvil/_synth.py');
+      // Generated candidates are untrusted — one can infinite-loop and hang the run.
+      // Bound each score with a wall-clock race; a timeout scores the candidate 0.
+      const o = await Promise.race([
+        sh.feed('python3 .anvil/_synth.py'),
+        new Promise((res)=>setTimeout(()=>res({ output:'SCORE 0 '+examples.length+' []  # timeout' }), 8000)),
+      ]);
       const out = String((o&&o.output)||'');
       const m = out.match(/SCORE (\d+) (\d+) (\[.*\])/);
       if(!m) return { score:0, detail:{ raw: out.slice(0,300) } };
@@ -577,7 +582,7 @@
       const repair = ctx.best
         ? ('\n\nThe current best (fitness '+ctx.bestScore.toFixed(2)+') FAILS example indices '+JSON.stringify((ctx.bestDetail&&ctx.bestDetail.failed)||[])+'. Repair it, or try a DIFFERENT rule:\n```python\n'+String(ctx.best).slice(0,4000)+'\n```')
         : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
-      const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. Output ONLY a ```python code block — no prose.';
+      const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. The function must return quickly — NO unbounded loops or heavy computation. Output ONLY a ```python code block — no prose.';
       const user='Task: '+String(goal||'')+'\nExamples (JSON [{input,output}]): '+exJson+repair;
       let res; try{ res=await inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }); }catch(_){ return null; }
       const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
