@@ -699,41 +699,37 @@
   async function runRole({ role, action, round, instructions, emitSpec, view, goal }){
     if(!(nak && nak.ai)) return null;
     let emitted=null;
-    const emitTool={type:'function',function:{name:'emit',description:'Emit your role result as one JSON object with the required fields.',parameters:{type:'object',properties:{result:{type:'object'}},required:['result']}}};
+    const emitTool={type:'function',function:{name:'emit',description:'Emit your role result as one JSON object with the required fields. This is how you FINISH — you are not done until you call it.',parameters:{type:'object',properties:{result:{type:'object'}},required:['result']}}};
     const sysBase = instructions
       + '\n\nGoal: '+goal+'\nRound: '+round
       + '\nRole-scoped context — this is ALL you may see (the wall):\n'+JSON.stringify(view).slice(0,6000);
-    // The IMPLEMENTER does real work: it gets the full coding toolset over the live
-    // workspace (read/write/edit/apply_patch/shell), builds toward the directive, runs
-    // its own tests, then emits the candidate. Its files change on disk like any task.
+    // Assemble tools + executor + system per role. The IMPLEMENTER does real work: the
+    // full coding toolset over the live workspace (its files change on disk like any
+    // task). ASSAYER / FOREMAN reason over their role-scoped view (read + emit).
+    let tools, execTool, sys, maxSteps, budget, kick;
     if(role==='implementer'){
       const codeExec = makeToolExecutor({ shell, face, mode:'code', infer: inferViaHost });
-      const execTool=async(nm,ar,call)=>{ if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded. Stop now.'; } return await codeExec(nm,ar,call); };
-      const sys = sysBase + '\n\nUse the coding tools to build the candidate toward the directive, then run your own tests. When finished, call `emit` exactly once. '+emitSpec;
-      try{
-        await runAgentLoop({
-          messages:[{role:'system',content:sys},{role:'user',content:'Implement the current directive (or, for c0, a first candidate for the goal), then emit your candidate.'}],
-          tools:codingToolset('code',{}).concat(emitTool), infer:inferViaHost, executeTool:execTool,
-          maxSteps:20, budget:{tokens:120000, wallClockMs:240000},
-        });
-      }catch(_){}
-      return emitted;
+      execTool=async(nm,ar,call)=>{ if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded — you are done.'; } return await codeExec(nm,ar,call); };
+      tools=codingToolset('code',{}).concat(emitTool);
+      sys=sysBase + '\n\nUse the coding tools to build the candidate toward the directive, then run your own tests. You FINISH by calling `emit` exactly once — nothing is recorded until you do. '+emitSpec;
+      kick='Implement the current directive (or, for c0, a first candidate for the goal), then call `emit` with your candidate.';
+      maxSteps=20; budget={tokens:120000, wallClockMs:240000};
+    } else {
+      const readTool={type:'function',function:{name:'read',description:'Read a workspace file (returns its text).',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}};
+      execTool=async(nm,ar)=>{ if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded — you are done.'; } if(nm==='read'){ try{ const r=await fs.read(String((ar&&ar.path)||''),{encoding:'utf-8'}); return (r&&r.ok)? String(r.data).slice(0,8000):'(not found)'; }catch(_){ return '(error)'; } } return '(no such tool)'; };
+      tools=[readTool,emitTool];
+      sys=sysBase + '\n\nUse `read` to inspect workspace files if useful. You FINISH by calling `emit` exactly once — nothing is recorded until you do. '+emitSpec;
+      kick='Perform action "'+action+'" as the '+role+', then call `emit`.';
+      maxSteps=10; budget={tokens:60000, wallClockMs:120000};
     }
-    // ASSAYER / FOREMAN reason over their role-scoped view (read for context + emit).
-    const readTool={type:'function',function:{name:'read',description:'Read a workspace file (returns its text).',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}};
-    const execTool=async(nm,ar)=>{
-      if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded. Stop now.'; }
-      if(nm==='read'){ try{ const r=await fs.read(String((ar&&ar.path)||''),{encoding:'utf-8'}); return (r&&r.ok)? String(r.data).slice(0,8000):'(not found)'; }catch(_){ return '(error)'; } }
-      return '(no such tool)';
-    };
-    const sys = sysBase + '\n\nUse `read` to inspect workspace files if useful. When finished, call `emit` exactly once. '+emitSpec;
-    try{
-      await runAgentLoop({
-        messages:[{role:'system',content:sys},{role:'user',content:'Perform action "'+action+'" as the '+role+', then call emit.'}],
-        tools:[readTool,emitTool], infer:inferViaHost, executeTool:execTool,
-        maxSteps:10, budget:{tokens:60000, wallClockMs:120000},
-      });
-    }catch(_){}
+    // Run; if the loop ends WITHOUT emitting (a real model sometimes stops with a prose
+    // "done" instead of the tool call), nudge once and give it a few more steps. This
+    // is what turns a paused "executor declined" into a recorded block.
+    const convo=[{role:'system',content:sys},{role:'user',content:kick}];
+    for(let attempt=0; attempt<2 && emitted==null; attempt++){
+      if(attempt>0) convo.push({role:'user',content:'You have not called `emit` yet, so nothing was recorded. Call the `emit` tool now with your result JSON and nothing else.'});
+      try{ await runAgentLoop({ messages:convo, tools, infer:inferViaHost, executeTool:execTool, maxSteps: attempt===0?maxSteps:4, budget }); }catch(_){}
+    }
     return emitted;
   }
   async function startCampaign(goal, opts={}){
