@@ -1213,26 +1213,32 @@
     if(memoryIndex) tools.push(recallTool());
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
     try{
-      const result = await runAgentLoop({
-        messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],
-        tools,
-        infer: inferViaHost,
-        executeTool,
-        maxSteps:24,
-        signal: abortController.signal,
-        budget: { tokens: 120000, wallClockMs: 240000 }, // stop runaway loops with a named reason
-        verify,
-        maxVerifyRounds: 3,
-        onEvent:(e)=>{
-          if(e.type==='tool-call'){ const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
+      let toolCalls=0;
+      const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
+      const onLoopEvent=(e)=>{
+          if(e.type==='tool-call'){ toolCalls++; const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
           else if(e.type==='tool-result'){ if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); noteChange(t,liveTool.name,liveTool.args); liveTool=null; } renderLog(); }
           else if(e.type==='tool-error'){ if(liveTool){ liveTool.error=String(e.error); liveTool=null; } renderLog(); }
           else if(e.type==='assistant' && e.content){ t.log.push({k:'assistant',text:e.content}); renderLog(); }
           else if(e.type==='verify-pass'){ t.log.push({k:'system',text:'✓ gate passed — `'+verifyCmd+'` exit 0'}); renderLog(); }
           else if(e.type==='verify-fail'){ t.log.push({k:'system',text:'✗ gate failed (round '+(e.round||1)+') — `'+verifyCmd+'` exit '+((e.verdict&&e.verdict.exit)!=null?e.verdict.exit:'?')+'; agent retrying'}); renderLog(); }
           else if(e.type==='error'){ t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
-        },
+      };
+      let result = await runAgentLoop({
+        messages:[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo],
+        tools, infer: inferViaHost, executeTool, maxSteps:24, signal: abortController.signal,
+        budget: { tokens: 120000, wallClockMs: 240000 }, verify, maxVerifyRounds: 3, onEvent:onLoopEvent,
       });
+      // Act-or-nudge: a CODE-mode run that produced ONLY prose (0 tool calls) gets one
+      // firm nudge to actually use the tools — weak endpoints often "answer" instead of
+      // doing the work (this stalled ARC tasks 2–3 on the flash model). plan/ask untouched.
+      if(mode==='code' && toolCalls===0 && result.stop==='done' && !(abortController && abortController.signal.aborted)){
+        const prose=[...t.log].reverse().find(x=>x.k==='assistant');
+        t.log.push({k:'system',text:'No tools were used — nudging the agent to make the change, not just describe it.'}); renderLog();
+        if(prose) convo.push({role:'assistant', content:prose.text});
+        convo.push({role:'user', content:'You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
+        result = await runAgentLoop({ messages:[sysMsg(''), ...convo], tools, infer: inferViaHost, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:onLoopEvent });
+      }
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
       if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text});
       // #5 plan→manual: a finished PLAN becomes a durable "plan of record" in project
