@@ -82,6 +82,16 @@
   .gatebtn.on{color:var(--ok);border-color:var(--ok)}
   .gatebtn.beta{opacity:.55;border-style:dashed;font-size:10px}
   .gatebtn.beta:hover{opacity:1}
+  .es-lead{color:var(--fg-2);max-width:520px;margin:6px auto 0;line-height:1.5}
+  .es-banner{margin:14px auto 0;max-width:520px;padding:9px 12px;border:1px solid var(--accent);border-radius:6px;color:var(--fg);background:rgba(217,138,40,.08);font-size:12px;text-align:left}
+  .es-egs{margin:18px auto 0;max-width:580px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+  .es-egs>span{color:var(--fg-2);font-size:12px}
+  .es-chip{font:inherit;font-size:12px;color:var(--fg-2);background:transparent;border:1px solid var(--rule);border-radius:14px;padding:5px 12px;cursor:pointer}
+  .es-chip:hover{border-color:var(--accent);color:var(--accent)}
+  .advwrap{position:relative;flex:0 0 auto;display:inline-flex}
+  .advmenu{position:absolute;right:0;top:calc(100% + 5px);background:#161b23;border:1px solid var(--rule);border-radius:7px;padding:5px;z-index:60;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+  .advitem{display:block;width:max-content;max-width:320px;text-align:left;background:transparent;border:0;color:var(--fg-2);font:inherit;font-size:11.5px;padding:7px 11px;border-radius:5px;cursor:pointer;white-space:nowrap}
+  .advitem:hover{background:var(--rule);color:var(--fg)}
   #log{flex:1;overflow:auto;padding:16px 0}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .msg{margin:0 0 14px}
@@ -170,7 +180,7 @@
       <span class="ttl" id="tb-title">No task</span>
       <span class="spacer"></span>
       <button id="gate-btn" class="gatebtn" title="Set a verify command — the agent isn't 'done' until it exits 0">✓ gate</button>
-      <button id="campaign-btn" class="gatebtn beta" title="Experimental — an independently-checked build: one agent writes the test/standard first, another writes the code without seeing it, a third referees. Guards against the agent grading its own work.">⚑ Proof build · beta</button>
+      <span class="advwrap"><button id="adv-btn" class="gatebtn" title="Advanced / experimental features" aria-haspopup="true" aria-expanded="false">Advanced ▾</button><div id="adv-menu" class="advmenu" hidden role="menu"><button id="campaign-btn" class="advitem" role="menuitem" title="Experimental — an independently-checked build: one agent writes the test/standard first, another writes the code without seeing it, a third referees. Guards against the agent grading its own work.">⚑ Proof build · beta</button></div></span>
       <button id="stop" class="stopbtn" hidden>◼ Stop</button>
       <span class="meta" id="tb-meta"></span>
     </div>
@@ -182,7 +192,7 @@
           <button id="send">Send</button>
         </div>
         <div class="hint">
-          <button class="mode" id="mode-btn" title="Cycle mode">mode: code</button>
+          <button class="mode" id="mode-btn" title="Switch mode — code (edits files) · plan (read-only, proposes a plan) · ask (answers only)">Mode: code ▾</button>
           <span>↵ send · ⇧↵ newline · queues while running</span>
         </div>
       </div>
@@ -311,10 +321,10 @@
         await fs.remove('.anvil-probe').catch(()=>{});
         if(!(rd && rd.ok && rd.data==='ok')) throw new Error('host fs probe failed');
       } else {
-        mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+name);
+        mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'Browser · '+name);
       }
     }catch(_){
-      try{ mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'opfs · '+name); }
+      try{ mountWorkspace(await createOpfsBackend({ path:'anvil/ws/'+projectId }), 'Browser · '+name); }
       catch(__){ mountWorkspace(new MemoryBackend(), 'memory · scratch'); }
     }
     mountedProject = projectId;
@@ -352,14 +362,14 @@
   // ── State: projects → tasks. Persisted to localStorage (minus the live stack) ──
   const LS='anvil-state-v1';
   let state = load() || seedState();
+  // Clean start (UX decision 2026-08-29): one empty task, no cryptic demo work — the
+  // empty-state (renderLog) carries the orientation + example prompts.
   function seedState(){
-    const pid=id(), t1=id(), t2=id();
+    const pid=id(), t1=id();
     return {
       activeProject:pid, activeTask:t1, previewOpen:false,
-      projects:[{ id:pid, name:'naklios', open:true, tasks:[
-        { id:t1, title:'Wire the agent transport', status:'idle', mode:'code', convo:[], log:[], preview:null },
-        { id:t2, title:'Preview pane demo', status:'done', mode:'code', convo:[], preview:{type:'html', file:'hello.html', content:'<!doctype html><body style="font-family:system-ui;display:grid;place-items:center;height:90vh;margin:0;background:#0E1012;color:#D98A28"><div style="text-align:center"><h1>◆</h1><p>Preview renders agent HTML output here.</p></div></body>'},
-          log:[ {k:'user',text:'Show me what the preview pane looks like.'}, {k:'assistant',text:'The preview pane on the right renders showable output — a written HTML file, a diff, or command output. It opens on its own when a task produces something to look at, and collapses when there is nothing.'} ] },
+      projects:[{ id:pid, name:'My project', open:true, tasks:[
+        { id:t1, title:'Untitled task', status:'idle', mode:'code', convo:[], log:[], preview:null },
       ]}],
     };
   }
@@ -387,6 +397,9 @@
   const activeProject = ()=> proj(state.activeProject) || state.projects[0];
   function activeTask(){ for(const p of state.projects){ const t=(p.tasks||[]).find(t=>t.id===state.activeTask); if(t) return t; } return null; }
 
+  // Make a clickable div behave like a button for keyboard + screen-reader users.
+  function clickable(el, handler, label){ el.setAttribute('role','button'); el.tabIndex=0; if(label) el.setAttribute('aria-label',label); el.onclick=handler; el.onkeydown=(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); handler(e); } }; return el; }
+
   // ── Left pane render ──
   function renderProjects(){
     const box=$('projects'); box.innerHTML='';
@@ -394,12 +407,12 @@
       const pd=document.createElement('div'); pd.className='proj';
       const prow=document.createElement('div'); prow.className='prow';
       prow.innerHTML=`<span class="tw">${p.open?'▾':'▸'}</span><span class="pname">${esc(p.name)}</span><span class="pcount">${(p.tasks||[]).length}</span>`;
-      prow.onclick=()=>{ p.open=!p.open; save(); renderProjects(); };
+      clickable(prow, ()=>{ p.open=!p.open; save(); renderProjects(); }, (p.open?'Collapse':'Expand')+' project '+p.name);
       pd.appendChild(prow);
       if(p.open) for(const t of (p.tasks||[])){
         const td=document.createElement('div'); td.className='task'+(t.id===state.activeTask?' active':'');
         td.innerHTML=`<span class="dot ${t.status||'idle'}"></span><span class="ttitle">${esc(t.title)}</span>`;
-        td.onclick=()=>selectTask(t.id);
+        clickable(td, ()=>selectTask(t.id), 'Open task '+t.title);
         pd.appendChild(td);
       }
       box.appendChild(pd);
@@ -581,8 +594,8 @@
       d.style.paddingLeft=(10+r.depth*12)+'px';
       const tw = r.type==='dir' ? (expandedDirs.has(r.path)?'▾':'▸') : '·';
       d.innerHTML=`<span class="ftw">${tw}</span><span class="fname">${esc(r.name)}</span>`;
-      if(r.type==='dir') d.onclick=()=>{ expandedDirs.has(r.path)?expandedDirs.delete(r.path):expandedDirs.add(r.path); renderFiles(); };
-      else d.onclick=()=> filesScope==='all' ? openSysFile(r.path) : openChange(r.path);
+      if(r.type==='dir') clickable(d, ()=>{ expandedDirs.has(r.path)?expandedDirs.delete(r.path):expandedDirs.add(r.path); renderFiles(); }, (expandedDirs.has(r.path)?'Collapse':'Expand')+' folder '+r.name);
+      else clickable(d, ()=> filesScope==='all' ? openSysFile(r.path) : openChange(r.path), 'Open file '+r.name);
       box.appendChild(d);
     }
   }
@@ -598,7 +611,20 @@
   function renderLog(){
     const box=$('log'); const t=activeTask();
     if(!t){ box.innerHTML='<div class="empty"><h2>No task selected</h2>Pick a task on the left, or make a new one.</div>'; return; }
-    if(!t.log||!t.log.length){ box.innerHTML=`<div class="empty"><h2>${esc(t.title)}</h2>Describe what you want the agent to do. It works over the current workspace (<b>${esc(workspaceLabel)}</b>) with read / write / edit / shell tools.</div>`; return; }
+    if(!t.log||!t.log.length){
+      const aiReady = !!(nak && nak.capabilities && nak.capabilities.ai);
+      const wl = esc((workspaceLabel||'').split(' · ')[0] || workspaceLabel);
+      const examples = ['Create a README for this project','Add a .gitignore for a Node project','Write a hello() in hello.js that returns "hello"'];
+      const banner = aiReady ? '' : '<div class="es-banner">Anvil runs its agent through NakliOS. Open it at <b>naklios.dev</b> and set an AI endpoint under <b>Settings → AI</b> to run tasks.</div>';
+      box.innerHTML = '<div class="empty">'
+        + '<h2>Anvil — on-device coding agent</h2>'
+        + '<p class="es-lead">Describe what to build; the agent edits files in your workspace (<b>'+wl+'</b>) with read / write / edit / shell tools.</p>'
+        + banner
+        + '<div class="es-egs"><span>Try:</span>'+examples.map((x,i)=>'<button class="es-chip" data-i="'+i+'">'+esc(x)+'</button>').join('')+'</div>'
+        + '</div>';
+      box.querySelectorAll('.es-chip').forEach(b=>{ b.onclick=()=>{ const ta=$('prompt'); if(ta){ ta.value=examples[+b.dataset.i]; ta.focus(); autoGrow(); } }; });
+      return;
+    }
     const w=document.createElement('div'); w.className='wrap';
     for(const e of t.log){
       if(e.k==='user'||e.k==='system'){
@@ -1230,12 +1256,15 @@
     if(v===null) return; t.verifyCmd=v.trim(); save(); renderTaskbar();
   };
   const MODES=['code','plan','ask'];
-  $('mode-btn').onclick=()=>{ const t=activeTask(); if(!t) return; const i=MODES.indexOf(t.mode||'code'); t.mode=MODES[(i+1)%3]; $('mode-btn').textContent='mode: '+t.mode; $('mode-btn').classList.toggle('on',t.mode!=='code'); save(); };
+  $('mode-btn').onclick=()=>{ const t=activeTask(); if(!t) return; const i=MODES.indexOf(t.mode||'code'); t.mode=MODES[(i+1)%3]; $('mode-btn').textContent='Mode: '+t.mode+' ▾'; $('mode-btn').classList.toggle('on',t.mode!=='code'); save(); };
 
   // ── Preview toggle ──
   $('toggle-preview').onclick=()=>{ state.previewOpen=!state.previewOpen; save(); renderPreview(); };
   $('pv-close').onclick=()=>{ state.previewOpen=false; save(); renderPreview(); };
+  $('adv-btn').onclick=(e)=>{ e.stopPropagation(); const m=$('adv-menu'); const willOpen=m.hidden; m.hidden=!willOpen; $('adv-btn').setAttribute('aria-expanded', String(willOpen)); };
+  document.addEventListener('click',(e)=>{ const m=$('adv-menu'); if(m && !m.hidden && !(e.target.closest && e.target.closest('.advwrap'))){ m.hidden=true; $('adv-btn').setAttribute('aria-expanded','false'); } });
   $('campaign-btn').onclick=async ()=>{
+    $('adv-menu').hidden=true; $('adv-btn').setAttribute('aria-expanded','false');
     const canLive=!!(nak && nak.ai);
     const g=prompt(canLive
       ? 'Proof build (beta) — what should the agents build? A Checker writes the test/standard first, a Builder writes the code without seeing it, a Lead referees:'
@@ -1249,7 +1278,7 @@
   }) });
 
   // ── boot ──
-  function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='mode: '+m; $('mode-btn').classList.toggle('on',m!=='code'); }
+  function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='Mode: '+m+' ▾'; $('mode-btn').classList.toggle('on',m!=='code'); }
   // Signal ready first so the host reports connected storage, then mount:
   // a remembered disk folder if still granted, else the host Folder/Crate, else OPFS.
   if(nak && nak.ready) nak.ready();
