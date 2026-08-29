@@ -121,6 +121,11 @@
     aiImageState: 'idle',
     aiSearchState: 'idle',
     aiSearch: false,
+    // net: a sovereign egress backend (the user's own Worker or local bridge) is
+    // configured + permitted, so naklios.net.fetch can reach cross-origin hosts the
+    // browser blocks. Stays false until a host advertises one — the SDK seam.
+    net: false,
+    netBackend: null,
   };
 
   // Request/reply correlation for fs RPCs
@@ -155,6 +160,15 @@
         }
       }, timeoutMs || 30000);
     });
+  }
+
+  // Typed egress error so an app can branch (fall back / prompt to connect) rather
+  // than parse a message. code is 'ENOEGRESS' (no backend / not hosted) or 'EINVAL'.
+  function mkEgressErr(code, message) {
+    var e = new Error(message);
+    e.code = code;
+    e.egress = true;
+    return e;
   }
 
   // Bind each operation to the backend visible when it was issued. The host
@@ -349,6 +363,8 @@
         ? msg.aiSearchState
         : 'idle';
       capabilities.aiSearch = msg.aiSearch === true;
+      capabilities.net = msg.net === true;
+      capabilities.netBackend = typeof msg.netBackend === 'string' ? msg.netBackend : null;
       capListeners.forEach(function (cb) {
         try { cb(capabilities); } catch (_) {}
       });
@@ -631,6 +647,39 @@
         aiImageRequests.forEach(function (_, requestId) {
           send('naklios:ai:cancel', { requestId: requestId });
         });
+      },
+    },
+
+    // Sovereign egress — a cross-origin HTTP request the browser's Same-Origin
+    // Policy blocks (git push, arbitrary-host fetch, no-CORS APIs). The host routes
+    // it to the user-configured backend (their own Worker or the local bridge); it
+    // is NEVER a naklios-hosted proxy. Grant-gated + History-logged host-side.
+    // This is the SDK seam: until a host advertises a backend (capabilities.net),
+    // every call fails fast with a typed ENOEGRESS — no 30s RPC timeout.
+    net: {
+      // Synchronous check an app can gate its UI on.
+      available: function () { return capabilities.net === true; },
+      // { backend: 'worker'|'bridge', roams } — no secrets; null when unavailable.
+      info: function () {
+        if (!inNakliOS || !capabilities.net) return Promise.resolve(null);
+        return rpc('naklios:net:info', {});
+      },
+      // fetch({ url, method, headers, body }) -> { status, statusText, headers, body }.
+      // Binary bodies as ArrayBuffer/Uint8Array; text as string. Buffered in v1.
+      fetch: function (req) {
+        req = req || {};
+        if (!req.url) return Promise.reject(mkEgressErr('EINVAL', 'net.fetch requires a url'));
+        if (!inNakliOS || !capabilities.net) {
+          return Promise.reject(mkEgressErr('ENOEGRESS', inNakliOS
+            ? 'No egress backend configured — connect one in NakliOS settings'
+            : 'Not hosted — naklios.net unavailable standalone'));
+        }
+        return rpc('naklios:net:fetch', {
+          url: String(req.url),
+          method: req.method || 'GET',
+          headers: req.headers || {},
+          body: req.body != null ? req.body : null,
+        }, req.timeoutMs);
       },
     },
   };

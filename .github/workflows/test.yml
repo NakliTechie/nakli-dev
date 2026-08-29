@@ -60,6 +60,9 @@ jobs:
       - name: Verify SDK-vendoring canonical invariants and splicer round-trip
         run: node scripts/test-vendored-sdk.mjs
 
+      - name: Verify naklios.net egress SDK seam (ENOEGRESS until a backend is advertised)
+        run: node scripts/test-net-seam.mjs
+
       - name: Verify project memory store (facts, index, recall)
         run: node sys/ai/test/memory-store.test.mjs
 
