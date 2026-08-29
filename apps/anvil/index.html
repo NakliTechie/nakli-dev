@@ -1405,6 +1405,7 @@
     liveCampaign:(g,maxIters)=>startCampaign(g||'samtools view parity',{live:true, maxIters:maxIters||8}),
     synthesize:(goal, examples, popSize, maxGen)=>runSynthesize({goal, examples, popSize, maxGen}),
     score:(src, examples)=>scoreSolver(src, examples),
+    infer:async(prompt)=>{ try{ const r=await inferViaHost({ messages:[{role:'user',content:String(prompt||'Say OK.')}], tools:[] }); return { ok:true, contentLen:(r&&r.content||'').length, content:(r&&r.content||'').slice(0,400), finishReason:r&&r.finishReason, toolCalls:(r&&r.toolCalls||[]).length }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
   }) });
 
   // ── boot ──
