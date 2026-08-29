@@ -23,6 +23,41 @@ Standalone applications can vendor the same file or load the published copy.
 The SDK is a no-op outside an iframe; `naklios.capabilities.hosted` identifies
 the hosted case.
 
+## Vendoring the SDK (keeping the inlined copy fresh)
+
+Cross-origin and single-file apps can't `<script src>` the canonical SDK, so they
+inline it. An inlined copy silently rots when the canonical hardens — a v1 copy
+posts to `'*'` and skips inbound-origin checks. The fix is a machine-managed splice,
+never a hand-edit:
+
+1. **Mark the block.** The vendored SDK lives between two JS-comment markers inside
+   its `<script>`, so it works whether the SDK is its own `<script>` or shares one
+   with app code:
+
+   ```js
+   /* naklios-sdk:begin ver=2 sha256=… — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
+   (function () { /* …the SDK… */ })();
+   /* naklios-sdk:end */
+   ```
+
+2. **Vendor the tool.** Copy `scripts/vendor-naklios-sdk.mjs` (from the nakliOS repo)
+   into the app. First time, run `node scripts/vendor-naklios-sdk.mjs --adopt` to
+   place the markers around the existing inlined SDK; thereafter a plain run
+   re-splices the canonical between them and stamps `ver`/`sha256`. `--check` fails
+   (exit 1) on drift.
+
+3. **Automate it (app-side re-splice).** Copy `docs/vendor-sdk.workflow.yml` to
+   `.github/workflows/vendor-sdk.yml`. It re-splices from
+   `https://naklios.dev/sdk/naklios.js` on a daily cron (or manual dispatch) and
+   opens a PR when the canonical changed. The app **pulls**; naklios never pushes, so
+   no cross-repo tokens — freshness lands within a day, not on the same push.
+
+The nakliOS repo runs `scripts/check-vendored-sdk.mjs` as a fleet drift report across
+every vendoring app. An app that keeps its **own** protocol-compatible SDK (not the
+canonical file) shows as `BESPOKE` there until it's converted to vendor canonical.
+
+Full record and rollout status: `plan/sdk-vendoring.md`.
+
 ## Detecting the host (`?naklios`)
 
 An app is *hosted* when it is embedded in a NakliOS window

@@ -1,0 +1,43 @@
+# Template — copy to an app repo as .github/workflows/vendor-sdk.yml alongside
+# scripts/vendor-naklios-sdk.mjs. Keeps the app's INLINED naklios.js SDK fresh
+# against the canonical at https://naklios.dev/sdk/naklios.js by re-splicing it
+# between the naklios-sdk markers and opening a PR when it changed.
+#
+# App-side re-splice: this repo PULLS the canonical; naklios never pushes, so no
+# cross-repo tokens are needed. Freshness lands within a day (cron) or on demand
+# (workflow_dispatch) — naklios has no push trigger into app repos by design.
+name: Vendor naklios SDK
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * *' # daily; canonical changes are rare
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Re-splice canonical SDK into index.html
+        run: node scripts/vendor-naklios-sdk.mjs --file index.html
+      - name: Open a PR if the vendored SDK changed
+        uses: peter-evans/create-pull-request@v8
+        with:
+          title: 'chore: refresh vendored naklios SDK'
+          branch: chore/vendor-naklios-sdk
+          commit-message: 'chore: refresh vendored naklios SDK from canonical'
+          body: |
+            Automated re-splice of the canonical naklios.js SDK
+            (https://naklios.dev/sdk/naklios.js) into the inlined block between
+            the `naklios-sdk:begin` / `naklios-sdk:end` markers.
+
+            The SDK is the single source of truth; this only updates the vendored
+            copy. Review and merge — the app redeploys on push.
+          delete-branch: true

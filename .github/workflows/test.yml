@@ -57,6 +57,9 @@ jobs:
       - name: Verify shared local AI broker and SDK contracts
         run: node scripts/test-local-ai.mjs
 
+      - name: Verify SDK-vendoring canonical invariants and splicer round-trip
+        run: node scripts/test-vendored-sdk.mjs
+
       - name: Verify agent-tier inference protocol core
         run: node sys/ai/test/agent-protocol.test.mjs
 

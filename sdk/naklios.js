@@ -50,8 +50,22 @@
  * Paths in fs methods are relative to apps/<your-app-id>/ on the selected backend.
  * Traversal (../) is blocked at the host.
  *
- * Single source of truth: /Users/chiragpatnaik/Code/naklios-universe/naklOS/sdk/naklios.js
+ * Single source of truth: https://naklios.dev/sdk/naklios.js
+ *   (repo: NakliTechie/nakliOS → sdk/naklios.js)
  * Vendor it inline in each app to keep the no-network-dependency ethos.
+ *
+ * @naklios-sdk-version 2
+ *   Vendored copies are spliced between two HTML comment markers and kept fresh
+ *   by each app's own CI — never hand-edited. See docs/app-contract.md "Vendoring
+ *   the SDK" and plan/sdk-vendoring.md. In the app's HTML, an "naklios-sdk:begin"
+ *   comment (carrying ver= and sha256=) and an "naklios-sdk:end" comment bracket
+ *   the inlined <script>; scripts/vendor-naklios-sdk.mjs rewrites everything
+ *   between them (escaping this file's closing script tags). The literal marker
+ *   syntax is only shown in the docs — never here, so it can't be mistaken for a
+ *   real marker once this header is itself inlined.
+ *
+ *   v2 = learn-on-contact origin + ?naklios flag (no-referrer-safe). v1 (pre-2026-08)
+ *   posted to '*' and skipped inbound-origin checks — a v1 copy is a drift bug.
  * License: MIT.
  */
 (function () {
