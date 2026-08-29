@@ -67,6 +67,13 @@ await test('a person-only gate that declines pauses for the human', async () => 
   eq(L.ofType('assay.ship', C).length, 0, 'no ship recorded without the human');
 });
 
+await test('an executor that throws surfaces as status error, not a crash', async () => {
+  const L = createAssayLedger();
+  const ex = executors(); ex['build-instrument'] = () => { throw new Error('bad emission'); };
+  const res = await runCampaign({ ledger: L, campaign: C, executors: ex, config: { weight_floor: 5, epsilon: 0.01 } });
+  eq(res.status, 'error', 'a thrown executor pauses the campaign as error'); assert(/bad emission/.test(res.reason), 'the reason is surfaced');
+});
+
 await test('maxIters bounds a runaway driver', async () => {
   const L = createAssayLedger();
   const res = await runCampaign({ ledger: L, campaign: C, executors: executors(), config: { weight_floor: 5, epsilon: 0.01 }, maxIters: 2 });

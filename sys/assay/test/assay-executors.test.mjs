@@ -66,12 +66,14 @@ await test('a full LIVE-harness campaign runs start → ship and passes every ve
   assert((await L.verifyIntegrity()).ok, 'chain intact');
 });
 
-await test('an invalid emission is rejected, not silently written', async () => {
-  const bad = (ctx) => (ctx.action === 'measure' ? { pass_mass: 0.5, clusters: [] } : scriptedRunRole(ctx)); // empty clusters → invalid finding
-  const ex = executors(bad);
-  let threw = false;
-  try { await ex.measure({ round: 0, ledger: createAssayLedger() }); } catch (e) { threw = /invalid assay\.finding/.test(e.message); }
-  assert(threw, 'the executor throws on an invalid emitted block');
+await test('a clean measurement (no failure clusters) emits only a measure, no finding', async () => {
+  // A real Assayer legitimately reports zero clusters when the candidate passed —
+  // that must produce a valid measure, not an invalid empty finding (live-test bug).
+  const clean = (ctx) => (ctx.action === 'measure' ? { pass_mass: 1.0, clusters: [] } : scriptedRunRole(ctx));
+  const ex = executors(clean);
+  const blocks = await ex.measure({ round: 0, ledger: createAssayLedger() });
+  eq(blocks.length, 1, 'only the measure block'); eq(blocks[0].type, 'assay.measure', 'a measure');
+  eq(blocks[0].cluster_count, 0, 'zero clusters recorded, no finding emitted');
 });
 
 await test('a role that emits nothing pauses the campaign', async () => {

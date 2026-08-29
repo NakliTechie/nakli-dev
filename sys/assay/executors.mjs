@@ -42,11 +42,15 @@ const ACTIONS = {
   },
   measure: {
     role: 'assayer',
-    emit: 'Provide {pass_mass:0..1, clusters:[{id,area,weight,representative_symptom,repro_hint}]}. NEVER include case ids or raw output.',
-    build: (a, ctx) => ([
-      { type: 'assay.measure', round: ctx.round, pass_mass: Number(a.pass_mass) || 0, cluster_count: (a.clusters || []).length },
-      { type: 'assay.finding.v1', round: ctx.round, clusters: a.clusters || [] },
-    ]),
+    emit: 'Provide {pass_mass:0..1, clusters:[{id,area,weight,representative_symptom,repro_hint}]}. clusters is the set of failure groups — an empty list means the candidate passed with nothing to report. NEVER include case ids or raw output.',
+    // Always a measure; a finding block only when there ARE failure clusters (a clean
+    // measurement has none — the candidate passed, so there is no finding to record).
+    build: (a, ctx) => {
+      const clusters = Array.isArray(a.clusters) ? a.clusters : [];
+      const blocks = [{ type: 'assay.measure', round: ctx.round, pass_mass: Number(a.pass_mass) || 0, cluster_count: clusters.length }];
+      if (clusters.length) blocks.push({ type: 'assay.finding.v1', round: ctx.round, clusters });
+      return blocks;
+    },
   },
   adjudicate: {
     role: 'foreman',

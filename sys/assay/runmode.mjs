@@ -25,12 +25,25 @@ export async function runCampaign({ ledger, campaign, executors = {}, config = {
     const action = step.next && step.next.action;
     const exec = action ? executors[action] : null;
 
+    // Run an executor, surfacing a throw (e.g. a role emitted an invalid block) as a
+    // clean 'error' status rather than rejecting the whole campaign — a real model
+    // sometimes emits bad output, and one bad leg must not crash the run.
+    const runExec = async () => {
+      let produced;
+      try { produced = await exec({ ...step.next, phase: step.phase, ledger, campaign }); }
+      catch (e) { return { throw: String((e && e.message) || e) }; }
+      if (produced == null) return { produced: null };
+      try { for (const b of [].concat(produced)) await ledger.append(b); }
+      catch (e) { return { throw: String((e && e.message) || e) }; }
+      return { produced: [].concat(produced) };
+    };
+
     // An exit: run its (person-only) executor if provided, append, and stop.
     if (step.exit) {
       if (exec) {
-        const produced = await exec({ ...step.next, phase: step.phase, ledger, campaign });
-        if (produced == null) return { status: 'paused', reason: 'awaiting-human', exit: step.exit, step, iters };
-        for (const b of [].concat(produced)) await ledger.append(b);
+        const r = await runExec();
+        if (r.throw) return { status: 'error', reason: r.throw, exit: step.exit, step, iters };
+        if (r.produced == null) return { status: 'paused', reason: 'awaiting-human', exit: step.exit, step, iters };
       }
       return { status: step.exit, round: step.round, step, iters };
     }
@@ -38,13 +51,13 @@ export async function runCampaign({ ledger, campaign, executors = {}, config = {
     // A normal step with no executor wired → pause (e.g. the Owner must start it).
     if (!exec) return { status: 'paused', reason: `no executor for "${action}"`, step, iters };
 
-    const produced = await exec({ ...step.next, phase: step.phase, ledger, campaign });
+    const r = await runExec();
+    if (r.throw) return { status: 'error', reason: r.throw, step, iters };
     // A person-only step whose executor declines (returns null) pauses for the human.
-    if (produced == null) {
+    if (r.produced == null) {
       return { status: 'paused', reason: PERSON_ONLY_ACTIONS.has(action) ? 'awaiting-human' : `executor declined "${action}"`, step, iters };
     }
-    for (const b of [].concat(produced)) await ledger.append(b);
-    if (onStep) onStep({ step, blocks: [].concat(produced) });
+    if (onStep) onStep({ step, blocks: r.produced });
   }
   return { status: 'max-iters', iters };
 }
