@@ -226,6 +226,7 @@
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
   import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, reviseTool } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
+  import { evolve } from '../../sys/ai/evolve.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
   import { generateRigModule } from '../../sys/kiln/rig-bindings.mjs';
@@ -527,6 +528,46 @@
     priming=false;
     logn('🎓 Learned '+recorded+' fact(s) — see project memory (🧠). They start as hypotheses; the agent promotes or retracts them as it works.');
     updateMemChip(); renderFiles();
+  }
+
+  // Grade one candidate solver: run its Python against the example pairs and return
+  // {score: matched/total, detail:{ok,total,failed[]}} — the fitness function the
+  // evolutionary `synthesize` loop selects on. Examples are base64'd so any content
+  // (grids, strings) survives the embed.
+  async function scoreSolver(src, examples){
+    try{
+      const exB64 = btoa(unescape(encodeURIComponent(JSON.stringify(examples))));
+      const prog = String(src||'') + '\n\n' +
+        'def __run():\n' +
+        '    import json, base64\n' +
+        '    _ex = json.loads(base64.b64decode("'+exB64+'").decode())\n' +
+        '    _fail=[]; _ok=0\n' +
+        '    for _i,_e in enumerate(_ex):\n' +
+        '        try:\n' +
+        '            if solve(_e["input"])==_e["output"]: _ok+=1\n' +
+        '            else: _fail.append(_i)\n' +
+        '        except Exception: _fail.append(_i)\n' +
+        '    print("SCORE", _ok, len(_ex), json.dumps(_fail))\n' +
+        '__run()\n';
+      await fs.write('.anvil/_synth.py', prog);
+      const sh = createShell({ registry, face, kiln: kilnRef });
+      const o = await sh.feed('python3 .anvil/_synth.py');
+      const out = String((o&&o.output)||'');
+      const m = out.match(/SCORE (\d+) (\d+) (\[.*\])/);
+      if(!m) return { score:0, detail:{ raw: out.slice(0,300) } };
+      const ok=+m[1], total=+m[2]; let failed=[]; try{ failed=JSON.parse(m[3]); }catch(_){}
+      return { score: total? ok/total : 0, detail:{ ok, total, failed } };
+    }catch(e){ return { score:-1, detail:{ error:String(e&&e.message||e) } }; }
+  }
+  function synthesizeTool(){
+    return { type:'function', function:{ name:'synthesize',
+      description:'Evolve a Python solve(x) for an EXAMPLE-BASED task (a puzzle defined by input→output pairs). Runs several generations of candidate programs, scoring each by how many example pairs it reproduces and repairing the best — then writes solver.py and reports the best fitness. Prefer this over writing one solver by hand when the task is defined by examples.',
+      parameters:{ type:'object', properties:{
+        goal:{ type:'string', description:'One line describing the task.' },
+        examples:{ type:'array', description:'The input→output pairs: [{input, output}, …].', items:{ type:'object' } },
+        popSize:{ type:'integer', description:'Candidates per generation (default 3, max 4).' },
+        maxGen:{ type:'integer', description:'Max generations (default 3, max 4).' },
+      }, required:['goal','examples'] } } };
   }
 
   async function listFacts(){
@@ -993,7 +1034,7 @@
     throw lastErr;
   }
 
-  const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate one bounded sub-task to a subagent), dispatch (fan out INDEPENDENT sub-tasks to subagents that run in parallel, each in an isolated copy of the workspace — their changes merge back when they touch different files), review (an independent read-only reviewer subagent for a second opinion), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. For work that splits into independent parts, use dispatch to parallelise; after a significant change, consider review before finishing. Work in small, verifiable steps; end with a one-line summary.';
+  const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate one bounded sub-task to a subagent), dispatch (fan out INDEPENDENT sub-tasks to subagents that run in parallel, each in an isolated copy of the workspace — their changes merge back when they touch different files), review (an independent read-only reviewer subagent for a second opinion), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. For work that splits into independent parts, use dispatch to parallelise; after a significant change, consider review before finishing. For a task defined by input→output EXAMPLES (a puzzle), prefer the `synthesize` tool — it evolves and tests candidate solve() programs across generations and writes the best solver.py — over hand-writing one solver. Work in small, verifiable steps; end with a one-line summary.';
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
@@ -1118,6 +1159,28 @@
         const names=Object.keys(factMap);
         return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':'');
       }
+      // synthesize (AVO crib): a generational evolutionary loop for example-based tasks.
+      // Each candidate = one model call (the variation operator) writing a solve(x);
+      // fitness = pairs reproduced; keep+repair the best across generations.
+      if(nm==='synthesize'){
+        const goal=String((ar&&ar.goal)||''); const examples=Array.isArray(ar&&ar.examples)?ar.examples:[];
+        if(!examples.length) return 'synthesize needs a non-empty examples:[{input,output}] array.';
+        const popSize=Math.min(4, Math.max(1, (ar&&ar.popSize)||3)); const maxGen=Math.min(4, Math.max(1, (ar&&ar.maxGen)||3));
+        const exJson=JSON.stringify(examples).slice(0,12000);
+        const generate=async(ctx)=>{
+          const repair = ctx.best
+            ? ('\n\nThe current best (fitness '+ctx.bestScore.toFixed(2)+') FAILS example indices '+JSON.stringify((ctx.bestDetail&&ctx.bestDetail.failed)||[])+'. Repair it, or try a DIFFERENT rule:\n```python\n'+String(ctx.best).slice(0,4000)+'\n```')
+            : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
+          const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. Output ONLY a ```python code block — no prose.';
+          const user='Task: '+goal+'\nExamples (JSON [{input,output}]): '+exJson+repair;
+          let res; try{ res=await inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }); }catch(_){ return null; }
+          const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
+        };
+        const res=await evolve({ generate, score:(src)=>scoreSolver(src, examples), popSize, maxGen, target:1,
+          onGen:({gen,bestScore})=>{ if(t){ t.log.push({k:'system',text:'synthesize gen '+gen+': best fitness '+Number(bestScore).toFixed(3)}); renderLog(); } } });
+        if(res.best){ try{ await fs.write('solver.py', String(res.best)+'\n\n# synthesize: best '+res.bestScore.toFixed(3)+' over '+res.generations+' gen(s)'); renderFiles(); }catch(_){} }
+        return 'Synthesized: pop '+popSize+' × '+res.generations+' gen(s). Best fitness '+res.bestScore.toFixed(3)+'/1.0'+(res.solved?' — SOLVED all examples. ':' — best still fails indices '+JSON.stringify((res.bestDetail&&res.bestDetail.failed)||[])+'. ')+'Wrote solver.py; apply it to the real input.';
+      }
       // Pre-tool hook guard (project policy): a matching preTool hook with a
       // `block` message refuses the tool before it runs.
       const dec = preToolDecision(hooksCfg, nm, ar);
@@ -1209,6 +1272,7 @@
     // something to load.
     const tools = codingToolset(mode,{subagents:true, supervisor: mode==='code', completion: !!verify});
     if(mode==='code') tools.push(rememberTool());
+    if(mode==='code') tools.push(synthesizeTool());
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts

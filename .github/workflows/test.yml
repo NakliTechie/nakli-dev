@@ -69,6 +69,9 @@ jobs:
       - name: Verify belief-revising memory (hypothesis→verified/retracted)
         run: node sys/ai/test/memory-belief.test.mjs
 
+      - name: Verify generational evolutionary loop (AVO crib)
+        run: node sys/ai/test/evolve.test.mjs
+
       - name: Verify agent-tier inference protocol core
         run: node sys/ai/test/agent-protocol.test.mjs
 
