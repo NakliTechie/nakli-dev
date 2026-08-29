@@ -1,0 +1,89 @@
+// Conformance — Assay live role executors (the harness that runs a role as an agent
+// and turns its emitted output into a validated ledger block). Uses a SCRIPTED model
+// (runRole) so the plumbing — prompt/view assembly, emit capture, stamping, validation,
+// and the wall-at-the-view — is proven without a live LLM.
+//   node sys/assay/test/assay-executors.test.mjs
+import { createAssayLedger } from '../ledger.mjs';
+import { runCampaign } from '../runmode.mjs';
+import { makeCampaignExecutors, viewFor, ROLE_INSTRUCTIONS } from '../executors.mjs';
+import { verifyWall, verifyTests, replay } from '../verify.mjs';
+
+let passed = 0; const failures = [];
+async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function eq(a, b, m) { if (a !== b) throw new Error(`${m || 'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); }
+
+const C = 'camp-x';
+const PM = (r) => [0.6, 0.8, 0.86, 0.865][r] ?? 0.87;
+const WT = (r) => [10, 8, 4, 3][r] ?? 2;
+
+// A scripted "model": returns what each role would emit via its `emit` tool. It reads
+// only the role-scoped `view` it is handed — the same wall a real agent would see.
+function scriptedRunRole({ action, round, view }) {
+  switch (action) {
+    case 'build-instrument': return { version: 1, ratchet_sha: 'sha256:x', areas: [{ id: 'view', description: 'view cmd', weight: 3 }], case_count: 12 };
+    case 'build-candidate': {
+      const d = (view.directives || []).slice(-1)[0];
+      return { git_ref: 'c' + round, test_count: 5 + round, deleted: 0, from_directive: d ? d.id : '' };
+    }
+    case 'measure': return { pass_mass: PM(round), clusters: [{ id: 'cl' + round, area: 'view', weight: WT(round), representative_symptom: '-H header missing', repro_hint: 'view -H on a BAM' }] };
+    case 'adjudicate': {
+      const ids = (view.findings || []).filter((x) => x.round === round).flatMap((x) => (x.clusters || []).map((c) => c.id));
+      return { id: 'd' + round, from_findings: ids.length ? ids : ['cl' + round], items: [{ area: 'view', weight: 3, instruction: 'address round ' + round }] };
+    }
+    case 'propose-ship': return { candidate_ref: 'c' + round, rationale: 'converged over bar' };
+    default: return {};
+  }
+}
+const executors = (runRole = scriptedRunRole) => makeCampaignExecutors({ campaign: C, goal: 'samtools view parity', ship_bar: 0.85, runRole, clock: (() => { let t = 0; return () => ++t; })() });
+
+await test('role instructions carry the load-bearing constraints', () => {
+  assert(/never see the instrument/i.test(ROLE_INSTRUCTIONS.implementer), 'implementer is told it never sees the instrument');
+  assert(/never naming a case|never a case|never name/i.test(ROLE_INSTRUCTIONS.foreman), 'foreman is told never to name a case');
+  assert(/never weaken/i.test(ROLE_INSTRUCTIONS.assayer), 'assayer is told never to weaken the instrument');
+});
+
+await test('the wall lives in the view: implementer sees no findings/instrument; foreman sees only summaries', async () => {
+  const L = createAssayLedger();
+  await L.append({ type: 'assay.instrument.v1', campaign: C, actor: 'actor:agent:assayer:camp-x', ts: 1, version: 1, ratchet_sha: 'sha256:a' });
+  await L.append({ type: 'assay.finding.v1', campaign: C, actor: 'actor:agent:assayer:camp-x', ts: 2, round: 0, clusters: [{ id: 'cl0', area: 'view', weight: 3, representative_symptom: 'raw', repro_hint: 'raw' }] });
+  const iv = viewFor('implementer', L, C);
+  assert(!('findings' in iv) && !('instrument' in iv) && !('measures' in iv), 'implementer view excludes findings/instrument/measures');
+  const fv = viewFor('foreman', L, C);
+  assert(Array.isArray(fv.findings) && !('instrument' in fv), 'foreman gets finding summaries, not the instrument');
+  const cl = fv.findings[0].clusters[0];
+  assert(cl.id && cl.weight != null && !('representative_symptom' in cl) && !('repro_hint' in cl), 'foreman finding summary carries no raw symptom/repro');
+});
+
+await test('a full LIVE-harness campaign runs start → ship and passes every verifier', async () => {
+  const L = createAssayLedger();
+  const res = await runCampaign({ ledger: L, campaign: C, executors: executors(), config: { weight_floor: 5, epsilon: 0.01 } });
+  eq(res.status, 'ship', 'campaign ships');
+  eq(L.ofType('assay.ship', C).length, 1, 'a ship block was proposed');
+  eq(verifyWall(L, { campaign: C }).code, 0, 'wall clean');
+  eq(verifyTests(L, { campaign: C }).code, 0, 'tests monotone');
+  eq(replay(L, { campaign: C }).code, 0, 'lineage intact (candidate.from_directive resolved from the emitted directive ids)');
+  assert((await L.verifyIntegrity()).ok, 'chain intact');
+});
+
+await test('an invalid emission is rejected, not silently written', async () => {
+  const bad = (ctx) => (ctx.action === 'measure' ? { pass_mass: 0.5, clusters: [] } : scriptedRunRole(ctx)); // empty clusters → invalid finding
+  const ex = executors(bad);
+  let threw = false;
+  try { await ex.measure({ round: 0, ledger: createAssayLedger() }); } catch (e) { threw = /invalid assay\.finding/.test(e.message); }
+  assert(threw, 'the executor throws on an invalid emitted block');
+});
+
+await test('a role that emits nothing pauses the campaign', async () => {
+  const silent = (ctx) => (ctx.action === 'build-instrument' ? null : scriptedRunRole(ctx));
+  const res = await runCampaign({ ledger: createAssayLedger(), campaign: C, executors: executors(silent), config: { weight_floor: 5, epsilon: 0.01 } });
+  eq(res.status, 'paused', 'a non-emitting role pauses');
+  assert(/build-instrument/.test(res.reason), 'paused on the role that produced nothing');
+});
+
+if (failures.length) {
+  console.error(`Assay executors: ${passed} passed, ${failures.length} FAILED`);
+  for (const f of failures) console.error(`  ✗ ${f.n}: ${f.message}`);
+  process.exit(1);
+}
+console.log(`Assay executors: ${passed} passed — role agents emit → validated blocks; the wall lives in the role-scoped view; a live-harness campaign runs start→ship and passes wall|tests|replay.`);

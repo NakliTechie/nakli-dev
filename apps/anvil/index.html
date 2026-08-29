@@ -227,6 +227,7 @@
   import { mintRole } from '../../sys/assay/roles.mjs';
   import { createAssayLedger } from '../../sys/assay/ledger.mjs';
   import { runCampaign } from '../../sys/assay/runmode.mjs';
+  import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
 
   const $ = (id) => document.getElementById(id);
@@ -691,6 +692,33 @@
       'propose-ship': ({round})=>({type:'assay.ship',campaign:C,actor:FM,ts:900,round,candidate_ref:'c'+round,foreman_rationale:'pass-mass over bar, converged'}),
     };
   }
+  // Live role executor: run one role as an agent (host AI tier), handing it ONLY its
+  // role-scoped view (the wall), and capture the block it emits. Returns the emitted
+  // args, or null (no endpoint / emitted nothing → the driver pauses). The executor
+  // harness (sys/assay/executors) stamps + validates + splits into ledger blocks.
+  async function runRole({ role, action, round, instructions, emitSpec, view, goal }){
+    if(!(nak && nak.ai)) return null;
+    let emitted=null;
+    const sys = instructions
+      + '\n\nGoal: '+goal+'\nRound: '+round
+      + '\nRole-scoped context — this is ALL you may see (the wall):\n'+JSON.stringify(view).slice(0,6000)
+      + '\n\nUse `read` to inspect workspace files if useful. When finished, call `emit` exactly once. '+emitSpec;
+    const emitTool={type:'function',function:{name:'emit',description:'Emit your role result as one JSON object with the required fields.',parameters:{type:'object',properties:{result:{type:'object'}},required:['result']}}};
+    const readTool={type:'function',function:{name:'read',description:'Read a workspace file (returns its text).',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}};
+    const execTool=async(nm,ar)=>{
+      if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded. Stop now.'; }
+      if(nm==='read'){ try{ const r=await fs.read(String((ar&&ar.path)||''),{encoding:'utf-8'}); return (r&&r.ok)? String(r.data).slice(0,8000):'(not found)'; }catch(_){ return '(error)'; } }
+      return '(no such tool)';
+    };
+    try{
+      await runAgentLoop({
+        messages:[{role:'system',content:sys},{role:'user',content:'Perform action "'+action+'" as the '+role+', then call emit.'}],
+        tools:[readTool,emitTool], infer:inferViaHost, executeTool:execTool,
+        maxSteps:10, budget:{tokens:60000, wallClockMs:120000},
+      });
+    }catch(_){}
+    return emitted;
+  }
   async function startCampaign(goal, opts={}){
     const C='camp-'+id();
     const rk=newRootKey();
@@ -700,9 +728,13 @@
       roleSets[role]=await mintRole(rk,{campaign:C,role,principal:'actor:agent:'+role+':'+C,now:0,ttlMs:3600000});
     }
     const L=createAssayLedger();
-    const executors = opts.demo!==false ? demoExecutors(C, goal) : demoExecutors(C, goal); // live roleExecutors: next iteration
-    const result = await runCampaign({ ledger:L, campaign:C, executors, config:{weight_floor:5, epsilon:0.01} });
-    campaignRun = { C, L, result, goal, roleSets, rk };
+    const live = !!(opts.live && nak && nak.ai);
+    const executors = live
+      ? makeCampaignExecutors({ campaign:C, goal, ship_bar:0.85, runRole })
+      : demoExecutors(C, goal);
+    campaignRun = { C, L, result:{status:'running'}, goal, roleSets, rk, live }; renderCampaign();
+    const result = await runCampaign({ ledger:L, campaign:C, executors, config:{weight_floor:5, epsilon:0.01}, onStep:()=>{ campaignRun.result={status:'running'}; renderCampaign(); } });
+    campaignRun = { C, L, result, goal, roleSets, rk, live };
     renderCampaign();
     return campaignRun;
   }
@@ -1173,9 +1205,18 @@
   // ── Preview toggle ──
   $('toggle-preview').onclick=()=>{ state.previewOpen=!state.previewOpen; save(); renderPreview(); };
   $('pv-close').onclick=()=>{ state.previewOpen=false; save(); renderPreview(); };
-  $('campaign-btn').onclick=async ()=>{ const g=prompt('Assay campaign goal (preview — runs a demo campaign that drives the real wall, ledger, and verifiers):','samtools view parity'); if(g) await startCampaign(g,{demo:true}); };
-  // Test hook: drive a deterministic campaign headlessly (offline, no endpoint).
-  window.__anvil = Object.assign(window.__anvil||{}, { test: Object.assign((window.__anvil&&window.__anvil.test)||{}, { demoCampaign:(g)=>startCampaign(g||'samtools view parity',{demo:true}) }) });
+  $('campaign-btn').onclick=async ()=>{
+    const canLive=!!(nak && nak.ai);
+    const g=prompt(canLive
+      ? 'Assay campaign goal — runs live role-agents (Assayer/Implementer/Foreman) through the Grant wall:'
+      : 'Assay campaign goal — demo run (open Anvil in NakliOS with an AI endpoint for a live campaign):', 'samtools view parity');
+    if(g) await startCampaign(g,{live:canLive});
+  };
+  // Test hooks: a deterministic demo (offline) and a live run (needs a host endpoint).
+  window.__anvil = Object.assign(window.__anvil||{}, { test: Object.assign((window.__anvil&&window.__anvil.test)||{}, {
+    demoCampaign:(g)=>startCampaign(g||'samtools view parity',{live:false}),
+    liveCampaign:(g)=>startCampaign(g||'samtools view parity',{live:true}),
+  }) });
 
   // ── boot ──
   function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='mode: '+m; $('mode-btn').classList.toggle('on',m!=='code'); }
