@@ -116,6 +116,30 @@ async function run() {
     ok('unavailable carries a message', /no network/.test(r.message || ''));
   }
 
+  // ── 7. .git/ is never round-tripped through MEMFS (protects the shell's git repo) ──
+  // Regression: the snapshot handles files as UTF-8; git's binary index/objects were
+  // corrupted (index → 0 bytes) when .git/ was copied in and written back, breaking
+  // the shell's git. .git/ must be skipped in BOTH directions.
+  {
+    const fs = createFileops({ backend: new MemoryBackend() });
+    await fs.write('.git/index', 'DIRC-real-index-bytes');   // the shell-managed repo
+    await fs.write('app.py', 'print(1)\n');
+    const fake = makeFakePyodide();
+    const kiln = createMainThreadKiln({ fs, mount: 'work', loadPyodide: async () => fake });
+    let sawGit = 'not-checked';
+    fake._onRun = ({ FS }) => {
+      try { FS.readFile('/work/.git/index'); sawGit = 'present'; } catch (_) { sawGit = 'absent'; }
+      try { FS.writeFile('/work/.git/index', ''); } catch (_) {}  // python clobbers its MEMFS copy
+      FS.writeFile('/work/app.py', 'print(2)\n');                  // and edits a real source file
+    };
+    await kiln.exec('shell', 'noop');
+    const idx = await fs.read('.git/index', { encoding: 'utf-8' });
+    const app = await fs.read('app.py', { encoding: 'utf-8' });
+    ok('.git/ not copied into MEMFS (syncIn skip)', sawGit === 'absent');
+    ok('.git/index preserved in the workspace (syncOut skip)', idx.ok && idx.data === 'DIRC-real-index-bytes');
+    ok('normal source edits still sync back', app.ok && app.data === 'print(2)\n');
+  }
+
   console.log(`sys/kiln/main-thread-runtime conformance: ${pass}/${pass + fail} passed`);
   if (fail) process.exit(1);
 }

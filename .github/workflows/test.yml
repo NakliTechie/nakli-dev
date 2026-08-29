@@ -72,6 +72,9 @@ jobs:
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 
+      - name: Verify main-thread Kiln snapshot never corrupts the shell's .git repo
+        run: node sys/kiln/test/main-thread-runtime.test.mjs
+
       - name: Verify agent-tier inference protocol core
         run: node sys/ai/test/agent-protocol.test.mjs
 

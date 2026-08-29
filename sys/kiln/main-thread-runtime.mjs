@@ -26,8 +26,15 @@ async function defaultLoadPyodide() {
   return mod.loadPyodide({ indexURL: PYODIDE_INDEX_URL });
 }
 
-// Files Pyodide/Python generate that must never be written back to the workspace.
-const SKIP_BACK = /(^|\/)(__pycache__)(\/|$)|\.pyc$/;
+// Paths the python MEMFS snapshot must not touch, in EITHER direction.
+//  - __pycache__/.pyc: Pyodide-generated, never belong in the workspace.
+//  - .git/: the git repo is the SHELL's domain (git runs over the workspace
+//    fileops, not MEMFS). Its index + objects are BINARY; this snapshot reads and
+//    writes every file as UTF-8, so round-tripping .git/ through MEMFS corrupts the
+//    index (observed: `.git/index` truncated to 0 bytes after a python run, breaking
+//    the shell's `git add`/`commit`). Excluding it in both directions keeps a
+//    python run from ever mutating the repo the shell manages.
+const SKIP_BACK = /(^|\/)(__pycache__|\.git)(\/|$)|\.pyc$/;
 
 export function createMainThreadKiln({ fs, mount = 'work', loadPyodide = defaultLoadPyodide } = {}) {
   if (!fs) throw new Error('createMainThreadKiln requires a Rig fileops instance (fs)');
@@ -58,6 +65,7 @@ export function createMainThreadKiln({ fs, mount = 'work', loadPyodide = default
     if (!res || !res.ok) return seen;
     for (const e of res.entries) {
       if (e.type !== 'file') continue;
+      if (SKIP_BACK.test(e.path)) continue; // never pull .git/ or caches into MEMFS
       const rd = await fs.read(e.path, { encoding: 'utf-8' });
       if (!rd || !rd.ok) continue;
       const d = dirOf(e.path); if (d) mkdirp(d);
