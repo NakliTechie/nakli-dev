@@ -581,14 +581,18 @@
       const repair = ctx.best
         ? ('\n\nThe current best (fitness '+ctx.bestScore.toFixed(2)+') FAILS example indices '+JSON.stringify((ctx.bestDetail&&ctx.bestDetail.failed)||[])+'. Repair it, or try a DIFFERENT rule:\n```python\n'+String(ctx.best).slice(0,4000)+'\n```')
         : (ctx.index ? '\n\n(Try a different rule than the other candidates.)' : '');
-      const sys='You are a program-synthesis variation operator. Write ONE Python function `solve(x)` mapping each example input to its output; deduce the rule from ALL examples. The function must return quickly — NO unbounded loops or heavy computation. Output ONLY a ```python code block — no prose.';
+      // Softened prompt: brief reasoning is allowed (a hard "code only" made weak
+      // models over-reason into the token cap and return empty). We extract the LAST
+      // ```python block, so any lead-in prose is harmless.
+      const sys='You are a program-synthesis variation operator. Deduce the transformation rule from ALL examples, then write ONE Python function `solve(x)` mapping each example input to its output. Keep reasoning to a sentence or two, then give the function. It must return quickly — NO unbounded loops. End with a ```python fenced code block containing the function.';
       const user='Task: '+String(goal||'')+'\nExamples (JSON [{input,output}]): '+exJson+repair;
       // Bound the inference too — a hung model call must not stall the whole generation.
+      // maxTokens raised so a reasoning-heavy weak model still reaches the code block.
       let res; try{ res=await Promise.race([
-        inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[] }),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('gen timeout')), 45000)),
+        inferViaHost({ messages:[{role:'system',content:sys},{role:'user',content:user}], tools:[], maxTokens:8192 }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('gen timeout')), 90000)),
       ]); }catch(_){ return null; }
-      const txt=String((res&&res.content)||''); const m=txt.match(/```(?:python)?\s*\n([\s\S]*?)```/); return m?m[1]:txt;
+      const txt=String((res&&res.content)||''); const all=[...txt.matchAll(/```(?:python|py)?\s*\n([\s\S]*?)```/g)]; return all.length?all[all.length-1][1]:txt;
     };
     const res=await evolve({ generate, score:(src)=>scoreSolver(src, examples), popSize:pop, maxGen:gens, target:1, onGen });
     if(res.best){ try{ await fs.write('solver.py', String(res.best)+'\n\n# synthesize: best '+res.bestScore.toFixed(3)+' over '+res.generations+' gen(s)'); renderFiles(); }catch(_){} }
@@ -1045,13 +1049,17 @@
   }
 
   // ── The model side — identical transport to Forge (host agent tier) ──
-  async function inferViaHost({ messages, tools }){
+  async function inferViaHost({ messages, tools, maxTokens }){
     const ai = nak && nak.ai;
     if(!ai) throw new Error('Agent needs the NakliOS host — open Anvil inside NakliOS (naklios.dev), and set a model in Settings → AI.');
     let lastErr;
     for(let a=0;a<3;a++){
       try{
-        const r = await ai.chat.completions.create({ agent:true, messages, tools, tool_choice:'auto', stream:false });
+        // max_tokens is opt-in: a weak model that puts everything in reasoning tokens
+        // can hit the default output cap and return empty (finishReason "length").
+        const req = { agent:true, messages, tools, tool_choice:'auto', stream:false };
+        if(maxTokens){ req.max_tokens = maxTokens; }
+        const r = await ai.chat.completions.create(req);
         const ch=r&&r.choices&&r.choices[0]; const m=(ch&&ch.message)||{};
         return { content: typeof m.content==='string'?m.content:'', toolCalls: Array.isArray(m.tool_calls)?m.tool_calls:[], finishReason:(ch&&ch.finish_reason)||'stop' };
       }catch(e){ lastErr=e; const s=String(e&&e.message||e); if((/\b(405|408|409|425|429|5\d\d)\b/.test(s)||/timeout|network|temporarily|fetch/i.test(s))&&a<2){ await new Promise(r=>setTimeout(r,400*(a+1))); continue; } throw e; }
@@ -1405,7 +1413,7 @@
     liveCampaign:(g,maxIters)=>startCampaign(g||'samtools view parity',{live:true, maxIters:maxIters||8}),
     synthesize:(goal, examples, popSize, maxGen)=>runSynthesize({goal, examples, popSize, maxGen}),
     score:(src, examples)=>scoreSolver(src, examples),
-    infer:async(prompt)=>{ try{ const r=await inferViaHost({ messages:[{role:'user',content:String(prompt||'Say OK.')}], tools:[] }); return { ok:true, contentLen:(r&&r.content||'').length, content:(r&&r.content||'').slice(0,400), finishReason:r&&r.finishReason, toolCalls:(r&&r.toolCalls||[]).length }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
+    infer:async(prompt, maxTokens)=>{ try{ const r=await inferViaHost({ messages:[{role:'user',content:String(prompt||'Say OK.')}], tools:[], maxTokens }); return { ok:true, contentLen:(r&&r.content||'').length, content:(r&&r.content||'').slice(0,400), finishReason:r&&r.finishReason, toolCalls:(r&&r.toolCalls||[]).length }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
   }) });
 
   // ── boot ──
