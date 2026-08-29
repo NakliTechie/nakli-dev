@@ -36,8 +36,8 @@ const APPS = [
   { id: 'books',       local: 'Books/index.html',       remote: 'https://naklitechie.github.io/Books/' },
   { id: 'vaultmind',   local: 'VaultMind/index.html',   remote: 'https://naklitechie.github.io/VaultMind/' },
   { id: 'tijori',      local: 'Tijori/index.html',      remote: 'https://naklitechie.github.io/Tijori/' },
-  { id: 'kanzen',      local: 'KanZen/index.html',      remote: 'https://naklitechie.github.io/KanZen/',      variant: true },
-  { id: 'nakliposter', local: 'NakliPoster/index.html', remote: 'https://naklitechie.github.io/NakliPoster/', variant: true },
+  { id: 'kanzen',      local: 'KanZen/index.html',      remote: 'https://naklitechie.github.io/KanZen/' },
+  { id: 'nakliposter', local: 'NakliPoster/index.html', remote: 'https://naklitechie.github.io/NakliPoster/' },
 ];
 
 const BEGIN_RE = /\/\*\s*naklios-sdk:begin\b([^*]*)\*\//;
