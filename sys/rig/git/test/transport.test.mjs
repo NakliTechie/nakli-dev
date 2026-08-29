@@ -9,7 +9,7 @@
 
 import { createFileops, MemoryBackend } from '../../fileops/index.mjs';
 import { createGitCore } from '../git-core.mjs';
-import { FakeTransport } from '../transport.mjs';
+import { FakeTransport, naklHttp, HttpTransport } from '../transport.mjs';
 
 // ── tiny harness ──────────────────────────────────────────────────────────
 let passed = 0;
@@ -82,6 +82,34 @@ await test('push: a new branch and its objects round-trip back to the server', a
   eq((await src.git.resolveRef({ ref: 'topic' })).oid, tc.oid, 'source resolves topic to the pushed oid');
   const rc = await src.git.readCommit({ oid: tc.oid });
   assert(/topic work/.test(rc.commit.message), 'source holds the pushed commit object');
+});
+
+// ── HttpTransport adapter (naklHttp): the net.fetch ↔ isomorphic-git glue ──
+await test('naklHttp collects a streamed request body into one net.fetch call', async () => {
+  let seen = null;
+  const http = naklHttp(async (req) => { seen = req; return { status: 200, statusText: 'OK', headers: { 'content-type': 'application/x-git-upload-pack-advertisement' }, body: new Uint8Array([1, 2, 3]) }; });
+  async function* body() { yield new Uint8Array([9, 9]); yield new Uint8Array([8]); }
+  const res = await http.request({ url: 'https://h/x', method: 'POST', headers: { Authorization: 'Basic z' }, body: body() });
+  assert(seen && seen.body && seen.body.length === 3, 'streamed chunks concatenated to net.fetch body');
+  eq(seen.headers.Authorization, 'Basic z', 'Authorization forwarded verbatim');
+  eq(res.statusCode, 200, 'statusCode mapped from status');
+  const out = []; for (const c of res.body) out.push(...c);
+  eq(out.join(''), '123', 'response body wrapped as a single-chunk iterable');
+});
+await test('naklHttp handles a null body (GET) and requires a fetch fn', async () => {
+  let seen = null;
+  const http = naklHttp(async (req) => { seen = req; return { status: 200, headers: {}, body: new Uint8Array(0) }; });
+  await http.request({ url: 'https://h/x', method: 'GET', headers: {} });
+  eq(seen.body, null, 'no body → net.fetch body is null');
+  let threw = false; try { naklHttp(null); } catch (_) { threw = true; }
+  assert(threw, 'naklHttp(non-function) is refused');
+});
+await test('HttpTransport requires an http plugin; push/clone validate inputs', async () => {
+  let threw = false; try { new HttpTransport({}); } catch (_) { threw = true; }
+  assert(threw, 'HttpTransport without http is refused');
+  const tp = new HttpTransport({ http: naklHttp(async () => ({ status: 200, headers: {}, body: new Uint8Array(0) })) });
+  eq((await tp.clone({ git: {}, base: {} })).code, 'EINVAL', 'clone without url → EINVAL');
+  eq((await tp.push({ git: {}, base: {}, url: 'https://h/r' })).code, 'EINVAL', 'push without ref → EINVAL');
 });
 
 // ── report ──────────────────────────────────────────────────────────────

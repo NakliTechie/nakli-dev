@@ -220,6 +220,7 @@
   import { OverlayBackend } from '../../sys/rig/fileops/overlay-backend.mjs';
   import { FsaBackend } from '../../sys/rig/fileops/fsa-backend.mjs';
   import { createGitCore } from '../../sys/rig/git/git-core.mjs';
+  import { naklHttp, HttpTransport } from '../../sys/rig/git/transport.mjs';
   import { buildRigRegistry } from '../../sys/rig/registry/index.mjs';
   import { createGrant, createOpLog, createAgentFace } from '../../sys/rig/agent/index.mjs';
   import { createShell } from '../../sys/rig/cli/shell.mjs';
@@ -256,7 +257,15 @@
   function mountWorkspace(newBackend, label, root=''){
     backend = newBackend; workspaceLabel = label; wsRoot = root;
     fs = createFileops({ backend, root });
-    git = createGitCore({ fs, dir:'/' });
+    // Remote git (clone/fetch/push) routes ALL network through the sovereign egress
+    // (naklios.net → nakli-egress / local bridge). Only wired when a host egress
+    // backend is present; else git.clone/push report "needs a Transport". Public
+    // reads need no auth; push auth (a host-held PAT injected at the egress) is the
+    // attended step. onAuth is omitted here so no token ever lives in the app.
+    const gitTransport = (nak && nak.net && typeof nak.net.fetch === 'function')
+      ? new HttpTransport({ http: naklHttp((req) => nak.net.fetch(req)) })
+      : null;
+    git = createGitCore({ fs, dir:'/', transport: gitTransport });
     registry = buildRigRegistry({ fs, git });
     grant = createGrant({ prefixes:[''], scopes:['fs:read','fs:write','fs:remove','git:read','git:write'] });
     opLog = createOpLog({ fs: createFileops({ backend:new MemoryBackend() }) });

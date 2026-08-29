@@ -132,5 +132,32 @@ export function buildGitCommands(git) {
       destructive: false, scope: 'git:read', annotations: RO,
       run: (i) => git.resolveRef(i),
     },
+    // ── Remote (Layer 2): all network I/O flows through the sovereign egress
+    // transport injected into git-core. Without a configured egress backend +
+    // transport, these fail with a clear "needs a Transport" error. ──
+    {
+      name: 'git.clone',
+      summary: 'Clone a remote repository over HTTP.',
+      description: 'Clone a git repo from a URL into the worktree. Network goes through the sovereign egress (nakli-egress / local bridge); needs a configured backend, and auth for a private repo.',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' }, ref: { type: 'string' }, singleBranch: { type: 'boolean' }, depth: { type: 'number' } }, required: ['url'], additionalProperties: false },
+      returnSchema: OK, destructive: true, scope: 'git:write', annotations: RW,
+      run: (i) => git.clone(i),
+    },
+    {
+      name: 'git.fetch',
+      summary: 'Fetch refs/objects from a remote over HTTP.',
+      description: 'Fetch from a remote URL without touching the worktree. Network goes through the sovereign egress.',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' }, ref: { type: 'string' } }, required: ['url'], additionalProperties: false },
+      returnSchema: OK, destructive: false, scope: 'git:read', annotations: RO,
+      run: (i) => git.fetch(i),
+    },
+    {
+      name: 'git.push',
+      summary: 'Push a branch to a remote over HTTP.',
+      description: 'Push refs/objects to a remote URL. Network goes through the sovereign egress; requires a configured backend and auth (a Personal Access Token, supplied host-side).',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' }, ref: { type: 'string' }, remoteRef: { type: 'string' }, force: { type: 'boolean' } }, required: ['url', 'ref'], additionalProperties: false },
+      returnSchema: OK, destructive: true, scope: 'git:write', annotations: RW,
+      run: (i) => git.push(i),
+    },
   ];
 }

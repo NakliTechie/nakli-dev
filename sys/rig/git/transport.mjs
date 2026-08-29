@@ -100,3 +100,67 @@ export class FakeTransport {
     return { ok: true, oid, ref: name };
   }
 }
+
+// Adapt a naklios.net.fetch-style function into isomorphic-git's `http` plugin.
+// isomorphic-git streams the request body (async iterable of Uint8Array) — the
+// web client buffers it anyway, so we collect it and hand net.fetch one body; the
+// response comes back as a single-chunk iterable. `netFetch` MUST be the sovereign
+// egress relay (never a raw fetch — github/gitlab won't CORS a browser directly).
+export function naklHttp(netFetch) {
+  if (typeof netFetch !== 'function') throw new Error('naklHttp requires a net.fetch function');
+  return {
+    async request({ url, method = 'GET', headers = {}, body }) {
+      let bodyBytes = null;
+      if (body) {
+        const chunks = [];
+        for await (const chunk of body) chunks.push(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+        let len = 0; for (const c of chunks) len += c.length;
+        bodyBytes = new Uint8Array(len); let off = 0;
+        for (const c of chunks) { bodyBytes.set(c, off); off += c.length; }
+      }
+      const res = await netFetch({ url, method, headers, body: bodyBytes });
+      return {
+        url, method,
+        statusCode: res.status,
+        statusMessage: res.statusText || '',
+        headers: res.headers || {},
+        body: [res.body instanceof Uint8Array ? res.body : new Uint8Array(res.body || 0)],
+      };
+    },
+  };
+}
+
+// The real remote transport: git clone/fetch/push over HTTP via isomorphic-git,
+// with ALL network I/O going through the injected `http` (→ the sovereign egress).
+// `onAuth` supplies credentials (a PAT) for private repos; omit for public reads.
+export class HttpTransport {
+  constructor({ http, onAuth = undefined, corsProxy = undefined } = {}) {
+    if (!http) throw new Error('HttpTransport requires an http plugin (see naklHttp)');
+    this.http = http; this.onAuth = onAuth; this.corsProxy = corsProxy;
+  }
+  _net() { return { http: this.http, onAuth: this.onAuth, corsProxy: this.corsProxy }; }
+
+  async clone({ git, base, url, ref, singleBranch = false, depth }) {
+    if (!url) return { ok: false, code: 'EINVAL', message: 'clone requires a url' };
+    await git.clone({ ...base, ...this._net(), url, ref, singleBranch, depth });
+    const oid = await git.resolveRef({ ...base, ref: 'HEAD' });
+    let branch = null; try { branch = await git.currentBranch({ ...base, fullname: false }); } catch (_) {}
+    return { ok: true, oid, branch };
+  }
+  async fetch({ git, base, url, ref }) {
+    if (!url) return { ok: false, code: 'EINVAL', message: 'fetch requires a url' };
+    const r = await git.fetch({ ...base, ...this._net(), url, ref, singleBranch: !!ref });
+    return { ok: true, oid: r && r.fetchHead, ref: r && r.fetchHeadDescription };
+  }
+  async push({ git, base, url, ref, remoteRef, force = false }) {
+    if (!url) return { ok: false, code: 'EINVAL', message: 'push requires a url' };
+    if (!ref) return { ok: false, code: 'EINVAL', message: 'push requires a ref' };
+    const r = await git.push({ ...base, ...this._net(), url, ref, remoteRef, force });
+    return { ok: !r?.error, ...r };
+  }
+  async listServerRefs({ git, url }) {
+    if (!url) return { ok: false, code: 'EINVAL', message: 'listServerRefs requires a url' };
+    const refs = await git.listServerRefs({ ...this._net(), url });
+    return { ok: true, refs };
+  }
+}
