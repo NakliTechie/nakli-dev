@@ -102,6 +102,9 @@ jobs:
       - name: Verify Assay core — Grant wall, assay.* ledger on History, verifiers
         run: node sys/assay/test/assay-core.test.mjs
 
+      - name: Verify Assay Run-Mode loop — campaign reducer over History, resume-by-replay
+        run: node sys/assay/test/assay-loop.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
