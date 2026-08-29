@@ -212,7 +212,7 @@
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
-  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool } from '../../sys/ai/memory-store.mjs';
+  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, reviseTool } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
@@ -699,17 +699,34 @@
   async function runRole({ role, action, round, instructions, emitSpec, view, goal }){
     if(!(nak && nak.ai)) return null;
     let emitted=null;
-    const sys = instructions
-      + '\n\nGoal: '+goal+'\nRound: '+round
-      + '\nRole-scoped context — this is ALL you may see (the wall):\n'+JSON.stringify(view).slice(0,6000)
-      + '\n\nUse `read` to inspect workspace files if useful. When finished, call `emit` exactly once. '+emitSpec;
     const emitTool={type:'function',function:{name:'emit',description:'Emit your role result as one JSON object with the required fields.',parameters:{type:'object',properties:{result:{type:'object'}},required:['result']}}};
+    const sysBase = instructions
+      + '\n\nGoal: '+goal+'\nRound: '+round
+      + '\nRole-scoped context — this is ALL you may see (the wall):\n'+JSON.stringify(view).slice(0,6000);
+    // The IMPLEMENTER does real work: it gets the full coding toolset over the live
+    // workspace (read/write/edit/apply_patch/shell), builds toward the directive, runs
+    // its own tests, then emits the candidate. Its files change on disk like any task.
+    if(role==='implementer'){
+      const codeExec = makeToolExecutor({ shell, face, mode:'code', infer: inferViaHost });
+      const execTool=async(nm,ar,call)=>{ if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded. Stop now.'; } return await codeExec(nm,ar,call); };
+      const sys = sysBase + '\n\nUse the coding tools to build the candidate toward the directive, then run your own tests. When finished, call `emit` exactly once. '+emitSpec;
+      try{
+        await runAgentLoop({
+          messages:[{role:'system',content:sys},{role:'user',content:'Implement the current directive (or, for c0, a first candidate for the goal), then emit your candidate.'}],
+          tools:codingToolset('code',{}).concat(emitTool), infer:inferViaHost, executeTool:execTool,
+          maxSteps:20, budget:{tokens:120000, wallClockMs:240000},
+        });
+      }catch(_){}
+      return emitted;
+    }
+    // ASSAYER / FOREMAN reason over their role-scoped view (read for context + emit).
     const readTool={type:'function',function:{name:'read',description:'Read a workspace file (returns its text).',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}};
     const execTool=async(nm,ar)=>{
       if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded. Stop now.'; }
       if(nm==='read'){ try{ const r=await fs.read(String((ar&&ar.path)||''),{encoding:'utf-8'}); return (r&&r.ok)? String(r.data).slice(0,8000):'(not found)'; }catch(_){ return '(error)'; } }
       return '(no such tool)';
     };
+    const sys = sysBase + '\n\nUse `read` to inspect workspace files if useful. When finished, call `emit` exactly once. '+emitSpec;
     try{
       await runAgentLoop({
         messages:[{role:'system',content:sys},{role:'user',content:'Perform action "'+action+'" as the '+role+', then call emit.'}],
@@ -1019,13 +1036,27 @@
       if(nm==='remember'){
         const note=String((ar&&ar.note)||'').trim();
         if(!note) return 'Nothing recorded (empty note).';
-        const f=noteToFact(note, ar&&ar.type);
+        // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
+        // check corroborates it (promote with `revise`) or an observation disproves it.
+        const f=noteToFact(note, ar&&ar.type, 'hypothesis');
         let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
         try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
         const file=f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n');
         await fs.write(path, file);
         factMap[slug]=path; renderFiles();
-        return 'Recorded fact "'+slug+'" ('+f.type+') to project memory.';
+        return 'Recorded fact "'+slug+'" ('+f.type+', hypothesis) — promote or retract it with `revise` as evidence arrives.';
+      }
+      // Belief revision: promote a corroborated hypothesis to verified, or retract one
+      // an observation disproved (so it stops re-asserting a wrong note).
+      if(nm==='revise'){
+        const name=String((ar&&ar.name)||'').trim();
+        const status=String((ar&&ar.status)||'').trim();
+        if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
+        if(status!=='verified' && status!=='retracted') return 'status must be "verified" or "retracted".';
+        const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ await fs.write(p, applyRevision(r.data, { status, reason: ar&&ar.reason })); renderFiles(); return 'Revised "'+name+'" → '+status+(ar&&ar.reason?(' ('+String(ar.reason).slice(0,80)+')'):'')+'.'; } }catch(_){}
+        const names=Object.keys(factMap);
+        return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':'');
       }
       // Pre-tool hook guard (project policy): a matching preTool hook with a
       // `block` message refuses the tool before it runs.
@@ -1120,6 +1151,7 @@
     if(mode==='code') tools.push(rememberTool());
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());
+    if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
     try{
       const result = await runAgentLoop({
         messages:[{role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'')}, ...convo],

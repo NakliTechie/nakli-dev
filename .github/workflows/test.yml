@@ -60,6 +60,15 @@ jobs:
       - name: Verify SDK-vendoring canonical invariants and splicer round-trip
         run: node scripts/test-vendored-sdk.mjs
 
+      - name: Verify project memory store (facts, index, recall)
+        run: node sys/ai/test/memory-store.test.mjs
+
+      - name: Verify project memory integration (remember/recall over fs)
+        run: node sys/ai/test/memory-store-integration.test.mjs
+
+      - name: Verify belief-revising memory (hypothesis→verified/retracted)
+        run: node sys/ai/test/memory-belief.test.mjs
+
       - name: Verify agent-tier inference protocol core
         run: node sys/ai/test/agent-protocol.test.mjs
 
