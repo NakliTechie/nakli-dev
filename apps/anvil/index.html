@@ -549,15 +549,14 @@
         '        except Exception: _fail.append(_i)\n' +
         '    print("SCORE", _ok, len(_ex), json.dumps(_fail))\n' +
         '__run()\n';
-      await fs.write('.anvil/_synth.py', prog);
-      const sh = createShell({ registry, face, kiln: kilnRef });
-      // Generated candidates are untrusted — one can infinite-loop and hang the run.
-      // Bound each score with a wall-clock race; a timeout scores the candidate 0.
-      const o = await Promise.race([
-        sh.feed('python3 .anvil/_synth.py'),
-        new Promise((res)=>setTimeout(()=>res({ output:'SCORE 0 '+examples.length+' []  # timeout' }), 8000)),
-      ]);
-      const out = String((o&&o.output)||'');
+      // Run in kiln's INTERRUPTIBLE exec: a runaway candidate is interrupted at the
+      // timeout via the SAB interrupt buffer (sys/kiln/kernel-core), so a bad solver
+      // scores 0 instead of hanging the loop — no shell, no stuck worker.
+      if(!kilnRef){ return { score:-1, detail:{ error:'python runtime unavailable' } }; }
+      try{ await kilnRef.ensureReady(); }catch(_){}
+      const r = await kilnRef.exec('synth-score', prog, { timeoutMs: 6000 });
+      if(r && (r.status==='timeout' || r.status==='interrupted')) return { score:0, detail:{ timeout:true } };
+      const out = String((r&&r.stdout)||'') + String((r&&r.stderr)||'');
       const m = out.match(/SCORE (\d+) (\d+) (\[.*\])/);
       if(!m) return { score:0, detail:{ raw: out.slice(0,300) } };
       const ok=+m[1], total=+m[2]; let failed=[]; try{ failed=JSON.parse(m[3]); }catch(_){}
