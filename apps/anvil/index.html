@@ -750,7 +750,7 @@
       ? makeCampaignExecutors({ campaign:C, goal, ship_bar:0.85, runRole })
       : demoExecutors(C, goal);
     campaignRun = { C, L, result:{status:'running'}, goal, roleSets, rk, live }; renderCampaign();
-    const result = await runCampaign({ ledger:L, campaign:C, executors, config:{weight_floor:5, epsilon:0.01}, onStep:()=>{ campaignRun.result={status:'running'}; renderCampaign(); } });
+    const result = await runCampaign({ ledger:L, campaign:C, executors, config:{weight_floor:5, epsilon:0.01}, maxIters: opts.maxIters||undefined, onStep:()=>{ campaignRun.result={status:'running'}; renderCampaign(); } });
     campaignRun = { C, L, result, goal, roleSets, rk, live };
     renderCampaign();
     return campaignRun;
@@ -1247,7 +1247,7 @@
   // Test hooks: a deterministic demo (offline) and a live run (needs a host endpoint).
   window.__anvil = Object.assign(window.__anvil||{}, { test: Object.assign((window.__anvil&&window.__anvil.test)||{}, {
     demoCampaign:(g)=>startCampaign(g||'samtools view parity',{live:false}),
-    liveCampaign:(g)=>startCampaign(g||'samtools view parity',{live:true}),
+    liveCampaign:(g,maxIters)=>startCampaign(g||'samtools view parity',{live:true, maxIters:maxIters||8}),
   }) });
 
   // ── boot ──
