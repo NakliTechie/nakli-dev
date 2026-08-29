@@ -516,7 +516,7 @@
       if(nm==='remember'){ const slug=await recordFact(String((ar&&ar.note)||''), ar&&ar.type, 'hypothesis'); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
       return await codeExec(nm,ar,call);
     };
-    const sys='You are PRIMING this project\'s memory so future tasks start informed. Survey the project — read the README, explore the file tree (shell: ls / find / grep), skim key source files, and note the build/test/run setup. Then record 5–10 short, high-signal DURABLE facts with the `remember` tool: where major things live, naming/style conventions, how to build/test/run, and any gotchas. One or two specific sentences each. Do NOT edit any files. Stop once you have recorded the key facts.';
+    const sys='You are PRIMING this project\'s memory so future tasks start informed. FIRST run `ls`/`find` to see the ACTUAL files and directory layout — record only what you OBSERVE, and do NOT trust the README\'s claims about the workspace over what the files show (a README can be stale). Then explore: skim key source files, note the build/test/run setup and conventions. Record 5–10 short, high-signal DURABLE facts with the `remember` tool: where major things live, naming/style conventions, how to build/test/run, and any gotchas — each grounded in something you actually inspected. One or two specific sentences each. Do NOT edit any files. Stop once you have recorded the key facts.';
     try{
       await runAgentLoop({
         messages:[{role:'system',content:sys},{role:'user',content:'Survey this project and record its key facts with `remember`, then stop.'}],
