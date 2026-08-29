@@ -12,7 +12,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 function eq(a, b, m) { if (a !== b) throw new Error(`${m || 'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); }
 
 const C = 'c1';
-const OWNER = 'actor:human:owner1', ASSAYER = 'actor:agent:assayer:c1', IMPL = 'actor:agent:implementer:c1', FOREMAN = 'actor:agent:foreman:c1';
+const OWNER = 'actor:human:owner1', CHECKER = 'actor:agent:checker:c1', IMPL = 'actor:agent:builder:c1', LEAD = 'actor:agent:lead:c1';
 
 // A deterministic campaign that converges to ship: pass-mass climbs and settles,
 // finding weights fall below the floor. Each executor emits the block(s) its role
@@ -23,14 +23,14 @@ const WEIGHT = (r) => [10, 8, 4, 3][r] ?? 2;
 function executors() {
   return {
     'campaign.start': () => ({ type: 'assay.campaign', campaign: C, actor: OWNER, ts: 1, goal: 'samtools', ship_bar: 0.85 }),
-    'build-instrument': () => ({ type: 'assay.instrument.v1', campaign: C, actor: ASSAYER, ts: 2, version: 1, ratchet_sha: 'sha256:a' }),
-    'build-candidate': ({ round }) => ({ type: 'assay.candidate', campaign: C, actor: IMPL, ts: 100 + round, round, git_ref: 'c' + round, from_directive: round >= 1 ? 'd' + (round - 1) : null, implementer_tests: { count: 5 + round, deleted: 0 } }),
+    'build-instrument': () => ({ type: 'assay.instrument.v1', campaign: C, actor: CHECKER, ts: 2, version: 1, ratchet_sha: 'sha256:a' }),
+    'build-candidate': ({ round }) => ({ type: 'assay.candidate', campaign: C, actor: IMPL, ts: 100 + round, round, git_ref: 'c' + round, from_directive: round >= 1 ? 'd' + (round - 1) : null, builder_tests: { count: 5 + round, deleted: 0 } }),
     measure: ({ round }) => ([
-      { type: 'assay.measure', campaign: C, actor: ASSAYER, ts: 200 + round, round, pass_mass: PM(round), cluster_count: 1 },
-      { type: 'assay.finding.v1', campaign: C, actor: ASSAYER, ts: 250 + round, round, clusters: [{ id: 'cl' + round, area: 'view', weight: WEIGHT(round) }] },
+      { type: 'assay.measure', campaign: C, actor: CHECKER, ts: 200 + round, round, pass_mass: PM(round), cluster_count: 1 },
+      { type: 'assay.finding.v1', campaign: C, actor: CHECKER, ts: 250 + round, round, clusters: [{ id: 'cl' + round, area: 'view', weight: WEIGHT(round) }] },
     ]),
-    adjudicate: ({ round }) => ({ type: 'assay.directive.v1', campaign: C, actor: FOREMAN, ts: 300 + round, round, id: 'd' + round, from_findings: ['cl' + round], items: [{ area: 'view', weight: 3, instruction: 'fix-' + round }] }),
-    'propose-ship': ({ round }) => ({ type: 'assay.ship', campaign: C, actor: FOREMAN, ts: 900, round, candidate_ref: 'c' + round, foreman_rationale: 'pass-mass over bar, converged' }),
+    adjudicate: ({ round }) => ({ type: 'assay.directive.v1', campaign: C, actor: LEAD, ts: 300 + round, round, id: 'd' + round, from_findings: ['cl' + round], items: [{ area: 'view', weight: 3, instruction: 'fix-' + round }] }),
+    'propose-ship': ({ round }) => ({ type: 'assay.ship', campaign: C, actor: LEAD, ts: 900, round, candidate_ref: 'c' + round, lead_rationale: 'pass-mass over bar, converged' }),
   };
 }
 

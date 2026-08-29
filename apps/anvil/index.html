@@ -734,7 +734,9 @@
     $('tb-dot').className='dot '+((t&&t.status)||'idle');
     $('tb-title').textContent=t?t.title:'No task';
     $('tb-meta').textContent='';  // storage moved to the single header chip; taskbar stays uncluttered
-    const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ Must-pass'; g.classList.toggle('on', !!vc); }
+    const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ Must-pass'; g.classList.toggle('on', !!vc);
+      // Reveal Must-pass after the first successful task (or whenever a gate is already set).
+      g.hidden = !(state.proven || vc); }
   }
   function renderLog(){
     const box=$('log'); const t=activeTask();
@@ -843,18 +845,18 @@
   // Demo role executors: the canonical converge-to-ship campaign (same shape a real
   // role-subagent would append), so the driver visibly runs start→ship.
   function demoExecutors(C, goal){
-    const OWNER='actor:human:owner', AS='actor:agent:assayer:'+C, IM='actor:agent:implementer:'+C, FM='actor:agent:foreman:'+C;
+    const OWNER='actor:human:owner', AS='actor:agent:checker:'+C, IM='actor:agent:builder:'+C, FM='actor:agent:lead:'+C;
     const PM=(r)=>[0.6,0.8,0.86,0.865][r] ?? 0.87, WT=(r)=>[10,8,4,3][r] ?? 2;
     return {
       'campaign.start': ()=>({type:'assay.campaign',campaign:C,actor:OWNER,ts:1,goal,ship_bar:0.85}),
       'build-instrument': ()=>({type:'assay.instrument.v1',campaign:C,actor:AS,ts:2,version:1,ratchet_sha:'sha256:demo'}),
-      'build-candidate': ({round})=>({type:'assay.candidate',campaign:C,actor:IM,ts:100+round,round,git_ref:'c'+round,from_directive:round>=1?'d'+(round-1):null,implementer_tests:{count:5+round,deleted:0}}),
+      'build-candidate': ({round})=>({type:'assay.candidate',campaign:C,actor:IM,ts:100+round,round,git_ref:'c'+round,from_directive:round>=1?'d'+(round-1):null,builder_tests:{count:5+round,deleted:0}}),
       measure: ({round})=>([
         {type:'assay.measure',campaign:C,actor:AS,ts:200+round,round,pass_mass:PM(round),cluster_count:1},
         {type:'assay.finding.v1',campaign:C,actor:AS,ts:250+round,round,clusters:[{id:'cl'+round,area:'view',weight:WT(round)}]},
       ]),
       adjudicate: ({round})=>({type:'assay.directive.v1',campaign:C,actor:FM,ts:300+round,round,id:'d'+round,from_findings:['cl'+round],items:[{area:'view',weight:3,instruction:'address round '+round}]}),
-      'propose-ship': ({round})=>({type:'assay.ship',campaign:C,actor:FM,ts:900,round,candidate_ref:'c'+round,foreman_rationale:'pass-mass over bar, converged'}),
+      'propose-ship': ({round})=>({type:'assay.ship',campaign:C,actor:FM,ts:900,round,candidate_ref:'c'+round,lead_rationale:'pass-mass over bar, converged'}),
     };
   }
   // Live role executor: run one role as an agent (host AI tier), handing it ONLY its
@@ -868,11 +870,11 @@
     const sysBase = instructions
       + '\n\nGoal: '+goal+'\nRound: '+round
       + '\nRole-scoped context — this is ALL you may see (the wall):\n'+JSON.stringify(view).slice(0,6000);
-    // Assemble tools + executor + system per role. The IMPLEMENTER does real work: the
+    // Assemble tools + executor + system per role. The BUILDER does real work: the
     // full coding toolset over the live workspace (its files change on disk like any
-    // task). ASSAYER / FOREMAN reason over their role-scoped view (read + emit).
+    // task). CHECKER / LEAD reason over their role-scoped view (read + emit).
     let tools, execTool, sys, maxSteps, budget, kick;
-    if(role==='implementer'){
+    if(role==='builder'){
       const codeExec = makeToolExecutor({ shell, face, mode:'code', infer: inferViaHost });
       execTool=async(nm,ar,call)=>{ if(nm==='emit'){ emitted=ar&&ar.result; return 'Recorded — you are done.'; } return await codeExec(nm,ar,call); };
       tools=codingToolset('code',{}).concat(emitTool);
@@ -902,7 +904,7 @@
     const rk=newRootKey();
     // Mint the three role grant sets (the wall lives in which scopes each omits).
     const roleSets={};
-    for(const role of ['assayer','implementer','foreman']){
+    for(const role of ['checker','builder','lead']){
       roleSets[role]=await mintRole(rk,{campaign:C,role,principal:'actor:agent:'+role+':'+C,now:0,ttlMs:3600000});
     }
     const L=createAssayLedger();
@@ -939,7 +941,7 @@
     const strip = rounds.map(r=>{
       const f=finds.find(x=>x.round===r), d=dirs.find(x=>x.round===r), c=cands.find(x=>x.round===r);
       const topW=f?Math.max(0,...(f.clusters||[]).map(x=>Number(x.weight)||0)):0;
-      return `<tr><td>r${r}</td><td>${f?((f.clusters||[]).length+' cl · w'+topW):'—'}</td><td>${d?((d.items||[]).length+' items'):'—'}</td><td>${c?('tests '+((c.implementer_tests||{}).count)):'—'}</td></tr>`;
+      return `<tr><td>r${r}</td><td>${f?((f.clusters||[]).length+' cl · w'+topW):'—'}</td><td>${d?((d.items||[]).length+' items'):'—'}</td><td>${c?('tests '+((c.builder_tests||{}).count)):'—'}</td></tr>`;
     }).join('');
     const shipped = result && result.status==='ship';
     return `<!doctype html><meta charset="utf-8"><style>
@@ -1362,6 +1364,9 @@
         }catch(_){}
       }
       t.status = result.stop==='done'?'done':(result.stop==='error'?'error':'idle');
+      // Progressive reveal: the Must-pass gate is an affordance for work that already
+      // runs — surface it only once the project has had a first successful task.
+      if(result.stop==='done') state.proven = true;
       const stopLabel = result.stop==='aborted' ? 'stopped'
         : result.stop==='budget' ? ('hit budget ('+(result.budgetAxis||'')+')')
         : result.stop==='unverified' ? 'gate never passed'

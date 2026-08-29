@@ -1,8 +1,8 @@
 // Assay roles + the wall — over the P0 Grant primitive (sys/identity/grant.mjs).
 //
 // The wall (Menagerie §2) is one Grant fact, not a prompt: the instrument scope is
-// reachable by {assayer, foreman:summary, owner} and writable by {assayer} only; the
-// implementer's grant set does not include it. A denied access to the instrument
+// reachable by {checker, lead:summary, owner} and writable by {checker} only; the
+// builder's grant set does not include it. A denied access to the instrument
 // lands as an `assay.wall.breach` block in the shared History chain — the audit the
 // doc promises, built on the deny path that already exists (agent-face → ECAP → log).
 //
@@ -11,7 +11,7 @@
 // (r/rw/exec/append/summary) rides a `tools` caveat, since a scope caveat only
 // constrains the target prefix. Because scope matching is `/`-delimited,
 // `assay:<c>:instrument` and `assay:<c>:instrument:summary` are cleanly disjoint —
-// the assayer's raw-case scope never leaks to the foreman's summary grant.
+// the checker's raw-case scope never leaks to the lead's summary grant.
 
 import { issueGrant, verifyGrant, caveat } from '../identity/grant.mjs';
 
@@ -35,11 +35,11 @@ const RESOURCE_LEAF = {
 };
 
 // The three role manifests' grant columns (Anvil amendment §1.1–1.3), as
-// { resource: mode }. Implementer has NO instrument entry — that omission IS the wall.
+// { resource: mode }. Builder has NO instrument entry — that omission IS the wall.
 export const ROLE_GRANTS = Object.freeze({
-  implementer: { candidate: 'rw', oracle: 'exec', fixtures: 'r', spec: 'r', directives: 'r', ledger: 'append' },
-  assayer: { instrument: 'rw', oracle: 'exec', fixtures: 'r', spec: 'r', candidate: 'r+exec', ledger: 'append' },
-  foreman: { findings: 'r', 'instrument:summary': 'summary', candidate: 'r', ledger: 'rw', directives: 'w' },
+  builder: { candidate: 'rw', oracle: 'exec', fixtures: 'r', spec: 'r', directives: 'r', ledger: 'append' },
+  checker: { instrument: 'rw', oracle: 'exec', fixtures: 'r', spec: 'r', candidate: 'r+exec', ledger: 'append' },
+  lead: { findings: 'r', 'instrument:summary': 'summary', candidate: 'r', ledger: 'rw', directives: 'w' },
 });
 
 export const ROLES = Object.freeze(Object.keys(ROLE_GRANTS));

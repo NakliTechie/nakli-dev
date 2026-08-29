@@ -44,7 +44,7 @@ export function validateBlock(b, { allowUnknown = true } = {}) {
     case 'assay.instrument.v1': return (isInt(b.version) && isStr(b.ratchet_sha)) ? null : 'instrument needs version + ratchet_sha';
     case 'assay.candidate':
       if (!isInt(b.round) || b.round < 0) return 'candidate needs round >= 0';
-      if (!b.implementer_tests || !isInt(b.implementer_tests.count)) return 'candidate needs implementer_tests.count';
+      if (!b.builder_tests || !isInt(b.builder_tests.count)) return 'candidate needs builder_tests.count';
       return null;
     case 'assay.finding.v1': return (Array.isArray(b.clusters) && b.clusters.length) ? null : 'finding needs clusters[]';
     case 'assay.directive.v1':

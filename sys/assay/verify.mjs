@@ -4,8 +4,8 @@
 // headless tests call these, not the DOM. Each returns { ok, code } — code is the
 // process exit code (0 pass / 1 fail) — plus a reason for the failing case.
 
-// verify wall — History contains zero `assay.wall.breach`, and no implementer access
-// under `assay:*:instrument` was recorded. In this model a denied implementer read
+// verify wall — History contains zero `assay.wall.breach`, and no builder access
+// under `assay:*:instrument` was recorded. In this model a denied builder read
 // becomes a breach block, so a clean run has neither.
 export function verifyWall(ledger, { campaign } = {}) {
   const breaches = ledger.ofType('assay.wall.breach', campaign);
@@ -16,13 +16,13 @@ export function verifyWall(ledger, { campaign } = {}) {
 }
 
 // verify tests — the reward-hack screen. Walk `assay.candidate` blocks in round
-// order; fail if the implementer's own test count ever decreases, or any tests were
+// order; fail if the builder's own test count ever decreases, or any tests were
 // deleted, WITHOUT a ledger reason on that candidate.
 export function verifyTests(ledger, { campaign } = {}) {
   const cands = ledger.ofType('assay.candidate', campaign).slice().sort((a, b) => a.round - b.round);
   let prev = null;
   for (const c of cands) {
-    const t = c.implementer_tests || {};
+    const t = c.builder_tests || {};
     const count = Number(t.count);
     const deleted = Number(t.deleted || 0);
     const hasReason = typeof c.test_change_reason === 'string' && c.test_change_reason.length > 0;

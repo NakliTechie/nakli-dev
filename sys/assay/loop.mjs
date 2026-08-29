@@ -59,7 +59,7 @@ export function noProgress(directives, measures, cfg) {
 }
 
 // The reducer. Returns { phase, round?, next?: {actor, action, round?}, exit? }.
-// `next.actor` is a role name (owner/assayer/implementer/foreman); the driver maps it
+// `next.actor` is a role name (owner/checker/builder/lead); the driver maps it
 // to that role's manifest + grant set. Exits: 'ship' | 'no-discrimination' | 'no-progress'.
 export function nextStep(ledger, { campaign, config = {}, budgetHit = false } = {}) {
   const campaigns = ledger.ofType('assay.campaign', campaign);
@@ -67,11 +67,11 @@ export function nextStep(ledger, { campaign, config = {}, budgetHit = false } = 
   const cfg = { ...DEFAULTS, ship_bar: Number(campaigns[campaigns.length - 1].ship_bar) || DEFAULTS.ship_bar, ...config };
 
   if (!ledger.ofType('assay.instrument.v1', campaign).length) {
-    return { phase: 'instrument', next: { actor: 'assayer', action: 'build-instrument', round: 0 } };
+    return { phase: 'instrument', next: { actor: 'checker', action: 'build-instrument', round: 0 } };
   }
   const candidates = ledger.ofType('assay.candidate', campaign);
   if (!candidates.length) {
-    return { phase: 'bootstrap-candidate', round: 0, next: { actor: 'implementer', action: 'build-candidate', round: 0 } };
+    return { phase: 'bootstrap-candidate', round: 0, next: { actor: 'builder', action: 'build-candidate', round: 0 } };
   }
 
   const k = Math.max(...candidates.map((c) => Number(c.round) || 0));
@@ -80,27 +80,27 @@ export function nextStep(ledger, { campaign, config = {}, budgetHit = false } = 
   const directives = ledger.ofType('assay.directive.v1', campaign);
 
   // Budget cap always parks first (§6 no-progress/budget branch).
-  if (budgetHit) return { phase: 'exit', round: k, exit: 'no-progress', next: { actor: 'foreman', action: 'park', round: k } };
+  if (budgetHit) return { phase: 'exit', round: k, exit: 'no-progress', next: { actor: 'lead', action: 'park', round: k } };
 
   // Measure candidate k, if not yet measured.
   if (!atRound(measures, k).length) {
-    return { phase: 'measure', round: k, next: { actor: 'assayer', action: 'measure', round: k } };
+    return { phase: 'measure', round: k, next: { actor: 'checker', action: 'measure', round: k } };
   }
 
   // Fresh measurement in hand → test the exits, best outcome first.
   if (shipReady(measures, atRound(findings, k), cfg)) {
-    return { phase: 'exit', round: k, exit: 'ship', next: { actor: 'foreman', action: 'propose-ship', round: k } };
+    return { phase: 'exit', round: k, exit: 'ship', next: { actor: 'lead', action: 'propose-ship', round: k } };
   }
   if (noDiscrimination(findings)) {
-    return { phase: 'expand', round: k, next: { actor: 'foreman', action: 'request-expansion', round: k } };
+    return { phase: 'expand', round: k, next: { actor: 'lead', action: 'request-expansion', round: k } };
   }
   if (noProgress(directives, measures, cfg)) {
-    return { phase: 'exit', round: k, exit: 'no-progress', next: { actor: 'foreman', action: 'park', round: k } };
+    return { phase: 'exit', round: k, exit: 'no-progress', next: { actor: 'lead', action: 'park', round: k } };
   }
 
   // Continue: adjudicate this round into a directive, then build the next candidate.
   if (!atRound(directives, k).length) {
-    return { phase: 'adjudicate', round: k, next: { actor: 'foreman', action: 'adjudicate', round: k } };
+    return { phase: 'adjudicate', round: k, next: { actor: 'lead', action: 'adjudicate', round: k } };
   }
-  return { phase: 'implement', round: k, next: { actor: 'implementer', action: 'build-candidate', round: k + 1 } };
+  return { phase: 'implement', round: k, next: { actor: 'builder', action: 'build-candidate', round: k + 1 } };
 }

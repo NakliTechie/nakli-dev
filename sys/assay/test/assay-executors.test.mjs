@@ -38,21 +38,21 @@ function scriptedRunRole({ action, round, view }) {
 const executors = (runRole = scriptedRunRole) => makeCampaignExecutors({ campaign: C, goal: 'samtools view parity', ship_bar: 0.85, runRole, clock: (() => { let t = 0; return () => ++t; })() });
 
 await test('role instructions carry the load-bearing constraints', () => {
-  assert(/never see the instrument/i.test(ROLE_INSTRUCTIONS.implementer), 'implementer is told it never sees the instrument');
-  assert(/never naming a case|never a case|never name/i.test(ROLE_INSTRUCTIONS.foreman), 'foreman is told never to name a case');
-  assert(/never weaken/i.test(ROLE_INSTRUCTIONS.assayer), 'assayer is told never to weaken the instrument');
+  assert(/never see the instrument/i.test(ROLE_INSTRUCTIONS.builder), 'builder is told it never sees the instrument');
+  assert(/never naming a case|never a case|never name/i.test(ROLE_INSTRUCTIONS.lead), 'lead is told never to name a case');
+  assert(/never weaken/i.test(ROLE_INSTRUCTIONS.checker), 'checker is told never to weaken the instrument');
 });
 
-await test('the wall lives in the view: implementer sees no findings/instrument; foreman sees only summaries', async () => {
+await test('the wall lives in the view: builder sees no findings/instrument; lead sees only summaries', async () => {
   const L = createAssayLedger();
-  await L.append({ type: 'assay.instrument.v1', campaign: C, actor: 'actor:agent:assayer:camp-x', ts: 1, version: 1, ratchet_sha: 'sha256:a' });
-  await L.append({ type: 'assay.finding.v1', campaign: C, actor: 'actor:agent:assayer:camp-x', ts: 2, round: 0, clusters: [{ id: 'cl0', area: 'view', weight: 3, representative_symptom: 'raw', repro_hint: 'raw' }] });
-  const iv = viewFor('implementer', L, C);
-  assert(!('findings' in iv) && !('instrument' in iv) && !('measures' in iv), 'implementer view excludes findings/instrument/measures');
-  const fv = viewFor('foreman', L, C);
-  assert(Array.isArray(fv.findings) && !('instrument' in fv), 'foreman gets finding summaries, not the instrument');
+  await L.append({ type: 'assay.instrument.v1', campaign: C, actor: 'actor:agent:checker:camp-x', ts: 1, version: 1, ratchet_sha: 'sha256:a' });
+  await L.append({ type: 'assay.finding.v1', campaign: C, actor: 'actor:agent:checker:camp-x', ts: 2, round: 0, clusters: [{ id: 'cl0', area: 'view', weight: 3, representative_symptom: 'raw', repro_hint: 'raw' }] });
+  const iv = viewFor('builder', L, C);
+  assert(!('findings' in iv) && !('instrument' in iv) && !('measures' in iv), 'builder view excludes findings/instrument/measures');
+  const fv = viewFor('lead', L, C);
+  assert(Array.isArray(fv.findings) && !('instrument' in fv), 'lead gets finding summaries, not the instrument');
   const cl = fv.findings[0].clusters[0];
-  assert(cl.id && cl.weight != null && !('representative_symptom' in cl) && !('repro_hint' in cl), 'foreman finding summary carries no raw symptom/repro');
+  assert(cl.id && cl.weight != null && !('representative_symptom' in cl) && !('repro_hint' in cl), 'lead finding summary carries no raw symptom/repro');
 });
 
 await test('a full LIVE-harness campaign runs start → ship and passes every verifier', async () => {
@@ -67,7 +67,7 @@ await test('a full LIVE-harness campaign runs start → ship and passes every ve
 });
 
 await test('a clean measurement (no failure clusters) emits only a measure, no finding', async () => {
-  // A real Assayer legitimately reports zero clusters when the candidate passed —
+  // A real Checker legitimately reports zero clusters when the candidate passed —
   // that must produce a valid measure, not an invalid empty finding (live-test bug).
   const clean = (ctx) => (ctx.action === 'measure' ? { pass_mass: 1.0, clusters: [] } : scriptedRunRole(ctx));
   const ex = executors(clean);
