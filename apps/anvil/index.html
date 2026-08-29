@@ -168,6 +168,7 @@
       <span class="ttl" id="tb-title">No task</span>
       <span class="spacer"></span>
       <button id="gate-btn" class="gatebtn" title="Set a verify command — the agent isn't 'done' until it exits 0">✓ gate</button>
+      <button id="campaign-btn" class="gatebtn" title="Assay campaign (preview) — a role-separated campaign (Assayer authors the standard, Implementer builds, Foreman ships) with a Grant-enforced wall, run as a reducer over the History ledger">⚑ Campaign</button>
       <button id="stop" class="stopbtn" hidden>◼ Stop</button>
       <span class="meta" id="tb-meta"></span>
     </div>
@@ -219,6 +220,14 @@
   import { createMainThreadKiln } from '../../sys/kiln/main-thread-runtime.mjs';
   import { createOpfsBackend, opfsAvailable } from '../../sys/rig/fileops/opfs.mjs';
   import { CrateBackend } from '../../sys/rig/fileops/crate-backend.mjs';
+  // Run Mode (Assay): campaign topology over the P0 authority layer. The wall +
+  // ledger + verifiers + loop reducer + driver all live in sys/assay; Anvil is the
+  // driver's host and renders the campaign view.
+  import { newRootKey } from '../../sys/identity/grant.mjs';
+  import { mintRole } from '../../sys/assay/roles.mjs';
+  import { createAssayLedger } from '../../sys/assay/ledger.mjs';
+  import { runCampaign } from '../../sys/assay/runmode.mjs';
+  import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -658,6 +667,106 @@
   }
   function renderAll(){ renderProjects(); renderTaskbar(); renderLog(); renderPreview(); renderFiles(); }
 
+  // ── Run Mode (Assay) — the campaign driver + view ──────────────────────────────
+  // v0 wires the real driver (sys/assay/runmode) + the Grant wall + the History
+  // ledger + the three verifiers, run over a DETERMINISTIC in-app campaign so the
+  // topology, wall, and verifiers are visible and testable without a live endpoint.
+  // Next iteration: `roleExecutors` that run the agent loop as each role (through the
+  // role's grant set) instead of the demo scripts. The driver + view stay unchanged.
+  let campaignRun = null;
+  // Demo role executors: the canonical converge-to-ship campaign (same shape a real
+  // role-subagent would append), so the driver visibly runs start→ship.
+  function demoExecutors(C, goal){
+    const OWNER='actor:human:owner', AS='actor:agent:assayer:'+C, IM='actor:agent:implementer:'+C, FM='actor:agent:foreman:'+C;
+    const PM=(r)=>[0.6,0.8,0.86,0.865][r] ?? 0.87, WT=(r)=>[10,8,4,3][r] ?? 2;
+    return {
+      'campaign.start': ()=>({type:'assay.campaign',campaign:C,actor:OWNER,ts:1,goal,ship_bar:0.85}),
+      'build-instrument': ()=>({type:'assay.instrument.v1',campaign:C,actor:AS,ts:2,version:1,ratchet_sha:'sha256:demo'}),
+      'build-candidate': ({round})=>({type:'assay.candidate',campaign:C,actor:IM,ts:100+round,round,git_ref:'c'+round,from_directive:round>=1?'d'+(round-1):null,implementer_tests:{count:5+round,deleted:0}}),
+      measure: ({round})=>([
+        {type:'assay.measure',campaign:C,actor:AS,ts:200+round,round,pass_mass:PM(round),cluster_count:1},
+        {type:'assay.finding.v1',campaign:C,actor:AS,ts:250+round,round,clusters:[{id:'cl'+round,area:'view',weight:WT(round)}]},
+      ]),
+      adjudicate: ({round})=>({type:'assay.directive.v1',campaign:C,actor:FM,ts:300+round,round,id:'d'+round,from_findings:['cl'+round],items:[{area:'view',weight:3,instruction:'address round '+round}]}),
+      'propose-ship': ({round})=>({type:'assay.ship',campaign:C,actor:FM,ts:900,round,candidate_ref:'c'+round,foreman_rationale:'pass-mass over bar, converged'}),
+    };
+  }
+  async function startCampaign(goal, opts={}){
+    const C='camp-'+id();
+    const rk=newRootKey();
+    // Mint the three role grant sets (the wall lives in which scopes each omits).
+    const roleSets={};
+    for(const role of ['assayer','implementer','foreman']){
+      roleSets[role]=await mintRole(rk,{campaign:C,role,principal:'actor:agent:'+role+':'+C,now:0,ttlMs:3600000});
+    }
+    const L=createAssayLedger();
+    const executors = opts.demo!==false ? demoExecutors(C, goal) : demoExecutors(C, goal); // live roleExecutors: next iteration
+    const result = await runCampaign({ ledger:L, campaign:C, executors, config:{weight_floor:5, epsilon:0.01} });
+    campaignRun = { C, L, result, goal, roleSets, rk };
+    renderCampaign();
+    return campaignRun;
+  }
+  function renderCampaign(){
+    const cs=campaignRun; if(!cs) return;
+    const at=activeTask(); if(at) at.preview=null;
+    globalPreview={ type:'html', file:'⚑ Campaign — '+cs.goal, content: campaignHtml(cs) };
+    state.previewOpen=true; save(); renderPreview();
+  }
+  function campaignHtml(cs){
+    const { L, C, result, goal } = cs;
+    const camp=(L.ofType('assay.campaign',C)[0])||{};
+    const measures=L.ofType('assay.measure',C).slice().sort((a,b)=>a.round-b.round);
+    const cands=L.ofType('assay.candidate',C).slice().sort((a,b)=>a.round-b.round);
+    const finds=L.ofType('assay.finding.v1',C);
+    const dirs=L.ofType('assay.directive.v1',C);
+    const bar=Number(camp.ship_bar)||0.85;
+    const wall=verifyWall(L,{campaign:C}), tests=verifyTests(L,{campaign:C}), lineage=replayLineage(L,{campaign:C});
+    const badge=(name,ok,detail)=>`<span class="vb ${ok?'ok':'no'}">${ok?'✓':'✗'} ${name}${detail?(' — '+detail):''}</span>`;
+    const e=(s)=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const lastPM = measures.length? measures[measures.length-1].pass_mass : 0;
+    const pmRows = measures.map(m=>`<div class="pm"><span class="r">r${m.round}</span><span class="track"><span class="fill" style="width:${Math.round(Number(m.pass_mass)*100)}%"></span></span><span class="v">${Number(m.pass_mass).toFixed(3)}</span></div>`).join('');
+    const rounds = [...new Set(cands.map(c=>c.round))].sort((a,b)=>a-b);
+    const strip = rounds.map(r=>{
+      const f=finds.find(x=>x.round===r), d=dirs.find(x=>x.round===r), c=cands.find(x=>x.round===r);
+      const topW=f?Math.max(0,...(f.clusters||[]).map(x=>Number(x.weight)||0)):0;
+      return `<tr><td>r${r}</td><td>${f?((f.clusters||[]).length+' cl · w'+topW):'—'}</td><td>${d?((d.items||[]).length+' items'):'—'}</td><td>${c?('tests '+((c.implementer_tests||{}).count)):'—'}</td></tr>`;
+    }).join('');
+    const shipped = result && result.status==='ship';
+    return `<!doctype html><meta charset="utf-8"><style>
+      :root{color-scheme:dark}
+      body{margin:0;padding:16px;background:#0f1216;color:#d6dae0;font:13px/1.5 'IBM Plex Mono',ui-monospace,monospace}
+      h1{font-size:14px;margin:0 0 2px;color:#eef}
+      .sub{color:#8b93a1;font-size:12px;margin-bottom:14px}
+      .hdr{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #232833}
+      .kv{display:flex;flex-direction:column}.kv .k{color:#8b93a1;font-size:11px}.kv .v{font-size:15px;color:#eef}
+      .status{font-weight:600}.status.ship{color:#5fd08a}.status.paused{color:#e6c15f}.status.other{color:#9aa}
+      .pm{display:flex;align-items:center;gap:8px;margin:3px 0}.pm .r{width:26px;color:#8b93a1}
+      .track{flex:1;height:9px;background:#1a1f28;border-radius:5px;overflow:hidden}.fill{display:block;height:100%;background:linear-gradient(90deg,#3a6ea5,#5fd08a)}
+      .pm .v{width:44px;text-align:right;color:#cfe}
+      .barline{position:relative;height:0;border-top:1px dashed #3a4150;margin:6px 0 2px}.barline .lab{position:absolute;right:0;top:-8px;background:#0f1216;padding:0 4px;color:#8b93a1;font-size:10px}
+      table{border-collapse:collapse;width:100%;margin:6px 0 14px}th,td{text-align:left;padding:3px 8px;border-bottom:1px solid #1c212b}th{color:#8b93a1;font-weight:400;font-size:11px}
+      .wall{margin:12px 0;padding:8px 10px;border-left:3px solid ${wall.ok?'#3a4150':'#d0623a'};background:#141922;color:${wall.ok?'#8b93a1':'#e59a7f'}}
+      .vbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.vb{padding:3px 9px;border-radius:12px;font-size:12px}.vb.ok{background:#16301f;color:#5fd08a}.vb.no{background:#331a16;color:#e07a5f}
+      .note{margin-top:16px;color:#6f7885;font-size:11px;border-top:1px solid #232833;padding-top:10px}
+    </style>
+    <h1>⚑ Assay campaign · ${e(goal)}</h1>
+    <div class="sub">${e(C)} · role-separated (Assayer · Implementer · Foreman) over a Grant wall + History ledger</div>
+    <div class="hdr">
+      <div class="kv"><span class="k">status</span><span class="v status ${shipped?'ship':(result&&result.status==='paused'?'paused':'other')}">${e(result?result.status:'—')}</span></div>
+      <div class="kv"><span class="k">rounds</span><span class="v">${rounds.length}</span></div>
+      <div class="kv"><span class="k">pass-mass</span><span class="v">${lastPM?Number(lastPM).toFixed(3):'—'}</span></div>
+      <div class="kv"><span class="k">ship bar</span><span class="v">${bar}</span></div>
+    </div>
+    <div class="k" style="color:#8b93a1;font-size:11px;margin-bottom:4px">PASS-MASS OVER ROUNDS</div>
+    ${pmRows || '<div class="sub">no measurements yet</div>'}
+    <div class="barline"><span class="lab">ship bar ${bar}</span></div>
+    <div class="k" style="color:#8b93a1;font-size:11px;margin:14px 0 2px">ROUND STRIP</div>
+    <table><thead><tr><th>round</th><th>finding</th><th>directive</th><th>candidate</th></tr></thead><tbody>${strip||'<tr><td colspan=4>—</td></tr>'}</tbody></table>
+    <div class="wall">the wall — instrument scope is the Assayer's; the Implementer's grant set omits it. breaches: ${verifyWall(L,{campaign:C}).breaches?verifyWall(L,{campaign:C}).breaches.length:0}</div>
+    <div class="vbs">${badge('wall',wall.ok,wall.ok?'no breach':wall.reason)}${badge('tests',tests.ok,tests.ok?'monotone':tests.reason)}${badge('replay',lineage.ok,lineage.ok?'lineage intact':lineage.reason)}</div>
+    <div class="note">Preview: a deterministic demo campaign drives the real driver, wall, ledger, and verifiers. Next iteration runs the agent loop as each role instead of the demo scripts.</div>`;
+  }
+
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function diffHtml(s){ return String(s).split('\n').map(l=>{ const c=l[0]; const cls=c==='+'?'add':c==='-'?'del':(c==='@'?'hd':''); return cls?`<span class="${cls}">${esc(l)}</span>`:esc(l); }).join('\n'); }
   // Line-level diff (LCS): ' ' context, '-' removed, '+' added — rendered by diffHtml.
@@ -1064,6 +1173,9 @@
   // ── Preview toggle ──
   $('toggle-preview').onclick=()=>{ state.previewOpen=!state.previewOpen; save(); renderPreview(); };
   $('pv-close').onclick=()=>{ state.previewOpen=false; save(); renderPreview(); };
+  $('campaign-btn').onclick=async ()=>{ const g=prompt('Assay campaign goal (preview — runs a demo campaign that drives the real wall, ledger, and verifiers):','samtools view parity'); if(g) await startCampaign(g,{demo:true}); };
+  // Test hook: drive a deterministic campaign headlessly (offline, no endpoint).
+  window.__anvil = Object.assign(window.__anvil||{}, { test: Object.assign((window.__anvil&&window.__anvil.test)||{}, { demoCampaign:(g)=>startCampaign(g||'samtools view parity',{demo:true}) }) });
 
   // ── boot ──
   function syncMode(){ const t=activeTask(); const m=(t&&t.mode)||'code'; $('mode-btn').textContent='mode: '+m; $('mode-btn').classList.toggle('on',m!=='code'); }

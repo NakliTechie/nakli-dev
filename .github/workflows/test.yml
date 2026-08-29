@@ -105,6 +105,9 @@ jobs:
       - name: Verify Assay Run-Mode loop — campaign reducer over History, resume-by-replay
         run: node sys/assay/test/assay-loop.test.mjs
 
+      - name: Verify Assay Run-Mode driver — runs a campaign start→ship, pauses, resumes
+        run: node sys/assay/test/assay-runmode.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
