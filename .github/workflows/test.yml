@@ -99,6 +99,9 @@ jobs:
       - name: Verify P0 enforcement — agent face capability check
         run: node sys/rig/agent/test/agent-face-capability.test.mjs
 
+      - name: Verify Assay core — Grant wall, assay.* ledger on History, verifiers
+        run: node sys/assay/test/assay-core.test.mjs
+
       - name: Verify vendored LocalMind runtime assets
         run: node scripts/test-localmind-vendor.mjs
 
