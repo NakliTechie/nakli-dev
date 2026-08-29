@@ -65,6 +65,21 @@ filesystem calls, separate Browser/Folder/Crate libraries, async close
 durability, explicit remote-conflict handling, and the optional streamed
 chat and image-generation surfaces under `naklios.ai`.
 
+### Standalone apps go native inside NakliOS (`?naklios`)
+
+An app doesn't need a NakliOS-specific build to feel native. When it's embedded
+in a NakliOS window — or opened standalone with the `?naklios` flag — it routes
+its filesystem and AI through the host via the vendored `naklios.js` SDK; run on
+its own, the exact same source falls back to its native APIs. Detection never
+depends on the referrer (the host embeds apps with `referrerpolicy="no-referrer"`),
+and the SDK learns the trusted host origin on first contact, then targets every
+message to it. `?naklios` is a **hint**, not a channel: it sets
+`naklios.capabilities.hosted` so an app knows to route through NakliOS, but the
+transports only activate against a real host frame, so a bare `?naklios` top-level
+tab with no NakliOS around it safely falls back — detect, attempt, fall back.
+See "Detecting the host" and the transport-adapter pattern in the
+[app contract](docs/app-contract.md).
+
 The bundled Calendar lives in Essentials and provides month, week, and day
 views, recurring-series CRUD with IANA time-zone handling, and ICS
 import/export. Browser, Folder, and Crate each remain a separate calendar.
@@ -198,6 +213,21 @@ This is vendoring of built artifacts, not a second source tree: implementation a
 
 Manual trigger anytime: Actions tab → **Sync app mirrors** → **Run workflow**.
 
+### Keeping a vendored SDK fresh
+
+Cross-origin and single-file apps can't `<script src>` the canonical
+`naklios.js`, so they inline it — and an inlined copy silently rots when the SDK
+hardens. To prevent drift, the vendored SDK lives between `naklios-sdk` markers,
+and each app re-splices it from
+[`naklios.dev/sdk/naklios.js`](sdk/naklios.js) on its **own** CI
+([`scripts/vendor-naklios-sdk.mjs`](scripts/vendor-naklios-sdk.mjs) plus a daily
+`vendor-sdk.yml` from [`docs/vendor-sdk.workflow.yml`](docs/vendor-sdk.workflow.yml),
+opening a PR on change). The app pulls; NakliOS never pushes, so no cross-repo
+tokens. [`scripts/check-vendored-sdk.mjs`](scripts/check-vendored-sdk.mjs) is the
+fleet drift report. This is the same "standalone source of truth, vendored
+snapshot" discipline as app mirroring, applied to the SDK itself; see "Vendoring
+the SDK" in the [app contract](docs/app-contract.md).
+
 ## Storage backends — Folder + Crate
 
 Cooperative apps that want persistent state use the `naklios.fs.*` SDK surface. The host fulfils those calls with one of two backends, configured in Settings:
@@ -233,11 +263,12 @@ uses `naklios.fs.subscribe()` for live storage-change notifications when the
 host backend supports them. It complements Notepad: Notes manages a library;
 Notepad opens arbitrary files.
 
-**Draft** and **Reckon** round out the productivity set in Create & Convert —
-Draft a private browser word processor for rich-text documents, Reckon a private
-browser spreadsheet with formulas, sorting, and charts. Both keep files on your
-device via the File System Access API and are mirrored under `apps/` for
-same-origin embedding in Immersive mode.
+**Draft**, **Reckon**, and **Sheaf** round out the productivity set in Create &
+Convert — Draft a private browser word processor for rich-text documents, Reckon
+a private browser spreadsheet with formulas, sorting, and charts, and Sheaf a
+private browser PDF editor (merge, split, reorder, and on-device OCR). All keep
+files on your device via the File System Access API and are mirrored under
+`apps/` for same-origin embedding in Immersive mode.
 
 ## License
 
