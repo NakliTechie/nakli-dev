@@ -80,6 +80,8 @@
   .gatebtn{font-family:var(--mono);font-size:10.5px;color:var(--fg-2);background:transparent;border:1px solid var(--rule);border-radius:5px;padding:3px 9px;cursor:pointer;flex:0 0 auto;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gatebtn:hover{border-color:var(--accent);color:var(--accent)}
   .gatebtn.on{color:var(--ok);border-color:var(--ok)}
+  .gatebtn.beta{opacity:.55;border-style:dashed;font-size:10px}
+  .gatebtn.beta:hover{opacity:1}
   #log{flex:1;overflow:auto;padding:16px 0}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .msg{margin:0 0 14px}
@@ -168,7 +170,7 @@
       <span class="ttl" id="tb-title">No task</span>
       <span class="spacer"></span>
       <button id="gate-btn" class="gatebtn" title="Set a verify command — the agent isn't 'done' until it exits 0">✓ gate</button>
-      <button id="campaign-btn" class="gatebtn" title="Assay campaign (preview) — a role-separated campaign (Assayer authors the standard, Implementer builds, Foreman ships) with a Grant-enforced wall, run as a reducer over the History ledger">⚑ Campaign</button>
+      <button id="campaign-btn" class="gatebtn beta" title="Experimental — an independently-checked build: one agent writes the test/standard first, another writes the code without seeing it, a third referees. Guards against the agent grading its own work.">⚑ Proof build · beta</button>
       <button id="stop" class="stopbtn" hidden>◼ Stop</button>
       <span class="meta" id="tb-meta"></span>
     </div>
@@ -591,7 +593,7 @@
     $('tb-dot').className='dot '+((t&&t.status)||'idle');
     $('tb-title').textContent=t?t.title:'No task';
     $('tb-meta').textContent=t?(workspaceLabel):'';
-    const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ gate'; g.classList.toggle('on', !!vc); }
+    const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ Must-pass'; g.classList.toggle('on', !!vc); }
   }
   function renderLog(){
     const box=$('log'); const t=activeTask();
@@ -754,7 +756,7 @@
   function renderCampaign(){
     const cs=campaignRun; if(!cs) return;
     const at=activeTask(); if(at) at.preview=null;
-    globalPreview={ type:'html', file:'⚑ Campaign — '+cs.goal, content: campaignHtml(cs) };
+    globalPreview={ type:'html', file:'⚑ Proof build — '+cs.goal, content: campaignHtml(cs) };
     state.previewOpen=true; save(); renderPreview();
   }
   function campaignHtml(cs){
@@ -794,22 +796,22 @@
       .vbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.vb{padding:3px 9px;border-radius:12px;font-size:12px}.vb.ok{background:#16301f;color:#5fd08a}.vb.no{background:#331a16;color:#e07a5f}
       .note{margin-top:16px;color:#6f7885;font-size:11px;border-top:1px solid #232833;padding-top:10px}
     </style>
-    <h1>⚑ Assay campaign · ${e(goal)}</h1>
-    <div class="sub">${e(C)} · role-separated (Assayer · Implementer · Foreman) over a Grant wall + History ledger</div>
+    <h1>⚑ Proof build · ${e(goal)}</h1>
+    <div class="sub">${e(C)} · an independent check — a Checker writes the standard, a Builder writes the code (can't see it), a Lead referees</div>
     <div class="hdr">
       <div class="kv"><span class="k">status</span><span class="v status ${shipped?'ship':(result&&result.status==='paused'?'paused':'other')}">${e(result?result.status:'—')}</span></div>
       <div class="kv"><span class="k">rounds</span><span class="v">${rounds.length}</span></div>
-      <div class="kv"><span class="k">pass-mass</span><span class="v">${lastPM?Number(lastPM).toFixed(3):'—'}</span></div>
-      <div class="kv"><span class="k">ship bar</span><span class="v">${bar}</span></div>
+      <div class="kv"><span class="k">pass rate</span><span class="v">${lastPM?Number(lastPM).toFixed(3):'—'}</span></div>
+      <div class="kv"><span class="k">ship threshold</span><span class="v">${bar}</span></div>
     </div>
-    <div class="k" style="color:#8b93a1;font-size:11px;margin-bottom:4px">PASS-MASS OVER ROUNDS</div>
+    <div class="k" style="color:#8b93a1;font-size:11px;margin-bottom:4px">PASS RATE OVER ROUNDS</div>
     ${pmRows || '<div class="sub">no measurements yet</div>'}
-    <div class="barline"><span class="lab">ship bar ${bar}</span></div>
-    <div class="k" style="color:#8b93a1;font-size:11px;margin:14px 0 2px">ROUND STRIP</div>
-    <table><thead><tr><th>round</th><th>finding</th><th>directive</th><th>candidate</th></tr></thead><tbody>${strip||'<tr><td colspan=4>—</td></tr>'}</tbody></table>
-    <div class="wall">the wall — instrument scope is the Assayer's; the Implementer's grant set omits it. breaches: ${verifyWall(L,{campaign:C}).breaches?verifyWall(L,{campaign:C}).breaches.length:0}</div>
-    <div class="vbs">${badge('wall',wall.ok,wall.ok?'no breach':wall.reason)}${badge('tests',tests.ok,tests.ok?'monotone':tests.reason)}${badge('replay',lineage.ok,lineage.ok?'lineage intact':lineage.reason)}</div>
-    <div class="note">Preview: a deterministic demo campaign drives the real driver, wall, ledger, and verifiers. Next iteration runs the agent loop as each role instead of the demo scripts.</div>`;
+    <div class="barline"><span class="lab">ship threshold ${bar}</span></div>
+    <div class="k" style="color:#8b93a1;font-size:11px;margin:14px 0 2px">ROUNDS</div>
+    <table><thead><tr><th>round</th><th>issues found</th><th>fixes asked</th><th>build</th></tr></thead><tbody>${strip||'<tr><td colspan=4>—</td></tr>'}</tbody></table>
+    <div class="wall">the divider — the standard is the Checker's; the Builder can't see it. crossings: ${(wall.breaches?wall.breaches.length:0)}</div>
+    <div class="vbs">${badge('divider held',wall.ok,wall.ok?'builder never saw the standard':wall.reason)}${badge('tests kept',tests.ok,tests.ok?'no tests deleted':tests.reason)}${badge('traceable',lineage.ok,lineage.ok?'every fix traces to an issue':lineage.reason)}</div>
+    <div class="note">Beta — this demo run drives the real checker, divider, ledger and the same checks a live build uses. A live build runs a real agent as each role.</div>`;
   }
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
@@ -1236,8 +1238,8 @@
   $('campaign-btn').onclick=async ()=>{
     const canLive=!!(nak && nak.ai);
     const g=prompt(canLive
-      ? 'Assay campaign goal — runs live role-agents (Assayer/Implementer/Foreman) through the Grant wall:'
-      : 'Assay campaign goal — demo run (open Anvil in NakliOS with an AI endpoint for a live campaign):', 'samtools view parity');
+      ? 'Proof build (beta) — what should the agents build? A Checker writes the test/standard first, a Builder writes the code without seeing it, a Lead referees:'
+      : 'Proof build (beta) — demo run. Open Anvil inside NakliOS with an AI endpoint set for a live build:', 'add a hello() function to hello.js that returns "hello"');
     if(g) await startCampaign(g,{live:canLive});
   };
   // Test hooks: a deterministic demo (offline) and a live run (needs a host endpoint).
