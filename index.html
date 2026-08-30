@@ -12008,6 +12008,16 @@ Classics.solitaire = (body, win) => {
 // ════════════════════════════════════════════════════════════════════
 async function init(){
   applyTheme(state.theme);
+  // Ask the browser to make this origin's storage PERSISTENT (not evicted under
+  // pressure). Covers everything on naklios.dev — the egress secret + git PAT, the
+  // AI endpoint key, OPFS workspaces. Best-effort: Chrome grants by engagement,
+  // Firefox may prompt; a denial just leaves storage at the default best-effort tier.
+  // (Encryption-at-rest + a real vault is the Tijori/fabric-Vault track, separate.)
+  try {
+    if (navigator.storage && navigator.storage.persist && navigator.storage.persisted) {
+      navigator.storage.persisted().then(function(already){ if (!already) navigator.storage.persist().catch(function(){}); }).catch(function(){});
+    }
+  } catch(_){}
   updateDock();
   renderModePill();
 
