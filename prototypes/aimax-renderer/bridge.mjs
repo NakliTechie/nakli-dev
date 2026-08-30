@@ -21,21 +21,36 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const DIR = path.dirname(fileURLToPath(import.meta.url));
 const rawSock = process.argv[2] || path.join(os.homedir(), '.aimax', 'sock');
 const SOCK = rawSock.replace(/^~(?=$|\/)/, os.homedir());
 const PORT = Number(process.argv[3] || process.env.PORT || 9130);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-// TLS (wss) mode — set TLS_CERT + TLS_KEY to PEM paths. This is the path that
-// lets a public https origin (naklios.dev) reach the local daemon: secure page →
-// secure socket, no mixed content. With a REAL cert for a name that resolves to
-// 127.0.0.1 (local.naklios.dev), the browser trusts it with zero per-user setup
-// (the Plex/Discord loopback-cert pattern). Without these, the bridge serves
-// plaintext ws (fine for a localhost-served renderer).
-const TLS = process.env.TLS_CERT && process.env.TLS_KEY
-  ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) }
-  : null;
+// TLS (wss) mode lets a public https origin (naklios.dev) reach the local daemon:
+// secure page → secure socket, no mixed content. With a REAL cert for a name that
+// resolves to 127.0.0.1 (local.naklios.dev), the browser trusts it with zero
+// per-user setup (the Plex/Discord loopback-cert pattern).
+//
+// Cert resolution, in order:
+//   1. TLS_CERT + TLS_KEY env (explicit paths — operator issuing/renewing).
+//   2. the BUNDLED cert in ./certs/ — the shipped local.naklios.dev cert that
+//      travels with the bridge distribution (pattern A). The key is deliberately
+//      public (loopback-only); see certs/README.md. Kept out of the source repo
+//      (gitignored), included in the release package.
+//   3. none → plaintext ws (fine for a localhost-served renderer).
+function loadTLS() {
+  try {
+    if (process.env.TLS_CERT && process.env.TLS_KEY)
+      return { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) };
+    const c = path.join(DIR, 'certs', 'fullchain.pem'), k = path.join(DIR, 'certs', 'privkey.pem');
+    if (fs.existsSync(c) && fs.existsSync(k)) return { cert: fs.readFileSync(c), key: fs.readFileSync(k), bundled: true };
+  } catch (e) { console.error('TLS load failed:', e.message); }
+  return null;
+}
+const TLS = loadTLS();
 const SCHEME = TLS ? 'wss' : 'ws';
 
 // WebSockets are NOT gated by CORS, so a page on ANY site you visit could open

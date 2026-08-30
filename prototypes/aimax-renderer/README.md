@@ -123,6 +123,33 @@ so a user just runs the bridge (which carries the cert) and opens naklios.dev.
 The cert's key ships in the client, so it's effectively public, but it only
 certifies `127.0.0.1`, so it can't MITM real sites (the accepted tradeoff).
 
+### For an end user (not the operator) — the whole flow
+
+Once the operator has done the one-time infra (DNS + cert + deployed renderer),
+anyone else does just this — **no cert install, no DNS config**:
+
+1. **Run their aimax daemon:** `aimax --headless` (IPC on `~/.aimax/sock`).
+2. **Run the bridge** (it carries the bundled cert): `node bridge.mjs` — it
+   auto-loads `certs/` and serves `wss://local.naklios.dev:9130`. (Packaged, this
+   is one command, e.g. `npx nakli-local-bridge`.)
+3. **Open** `https://naklios.dev/prototypes/aimax-renderer/aimax` → **Connect**.
+   → **Chrome shows a "naklios.dev wants to access devices on your local network"
+   prompt → click Allow.** This is Chrome's Private Network Access consent; it is
+   **one-time, per browser**, and the connection **hangs on "connecting…" until
+   you allow it** (that's expected — allow, and it connects instantly).
+
+That's it: their aimax renders inside naklios.dev, browser-trusted, over wss.
+
+**Operator packaging (pattern A):** the `local.naklios.dev` cert+key live in
+`certs/` (gitignored — kept out of the public repo) and are included in the
+**release artifact** (npm/tarball/binary), so the user's bridge has them without
+any setup. See `certs/README.md` for the security rationale and 90-day rotation.
+
+Verified live on naklios.dev end to end: a public https page rendered — and
+**edited** — a buffer in a local aimax daemon over wss, confirmed by an
+independent socket probe. The only user-visible friction is the one-time PNA
+Allow prompt.
+
 Verified locally end to end with a self-signed cert (TLS handshake + a
 `get_state` round-trip over wss, `Origin: https://naklios.dev` accepted). The
 real-cert step (`setup-cert.sh`) needs the operator's Cloudflare token.
