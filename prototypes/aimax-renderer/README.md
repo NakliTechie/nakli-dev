@@ -20,12 +20,39 @@ watch them go out).
 
 ```bash
 node prototypes/aimax-renderer/mock-daemon.mjs        # ws://localhost:9123, zero deps
-cd prototypes/aimax-renderer && python3 -m http.server 8000
-# open http://localhost:8000/  →  Connect
+python3 -m http.server 8000                            # serve from the REPO ROOT (vt.html needs ../../vendor)
+# structured:  http://localhost:8000/prototypes/aimax-renderer/index.html  → Connect
+# raw VT:      http://localhost:8000/prototypes/aimax-renderer/vt.html      → Connect
 ```
 
-Point the renderer at a real aimax daemon by changing the ws URL, once the
-daemon speaks `PROTOCOL.md`.
+The one daemon serves both flavors; the client picks in its hello
+(`mode:"structured"` or `mode:"vt"`). Point either renderer at a real aimax
+daemon by changing the ws URL, once it speaks `PROTOCOL.md`.
+
+## Files
+
+| file | what |
+|---|---|
+| `index.html` | structured renderer — native panels, agent strip, Cmd-K palette, click-to-focus, version-gap resync |
+| `vt.html`    | raw-VT renderer — pipes the daemon's ANSI stream into xterm; a thin remote-terminal client for any TUI |
+| `mock-daemon.mjs` | zero-dep daemon, both flavors, chosen by the client hello |
+| `record.mjs` | connect to a daemon, dump its stream → `.jsonl` (point it at svs's real daemon to capture a live session) |
+| `conformance.mjs` | validate a `.jsonl` against `PROTOCOL.md` — where does a daemon's stream diverge from the strawman? |
+| `PROTOCOL.md` | the proposed structured render contract |
+
+## Record → validate → replay (the integration loop)
+
+The moment svs sends a socket dump — or points us at his daemon — this is the loop:
+
+```bash
+node record.mjs ws://his-daemon:PORT capture.jsonl 5   # capture 5s of his stream
+node conformance.mjs capture.jsonl                     # exit 0 = conforms; else a per-line diff report
+# then replay it into the renderer with NO daemon:
+#   http://localhost:8000/prototypes/aimax-renderer/index.html?replay=capture.jsonl
+```
+
+In the renderer, **⏺ rec** captures the inbound stream to a `.jsonl` you can
+download, and **replay** loads one back. `?replay=<url>` does the same by link.
 
 ## The transport wall (the real deployment constraint)
 

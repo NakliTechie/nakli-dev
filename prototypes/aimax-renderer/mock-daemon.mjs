@@ -1,16 +1,15 @@
 // mock-daemon.mjs — a zero-dependency stand-in for svs's aimax daemon.
 //
-// It speaks the STRUCTURED render protocol (see PROTOCOL.md) over a WebSocket,
-// so the naklios renderer (index.html) can connect to a REAL socket and prove
-// the transport end to end — no `ws` package, just node's http + crypto.
+// Speaks BOTH flavors over one WebSocket; the client picks in its hello:
+//   {t:'hello', mode:'structured'}  → semantic messages  (see PROTOCOL.md)  → index.html
+//   {t:'hello', mode:'vt'}          → a raw ANSI/VT byte stream             → vt.html
+// (no mode ⇒ structured, so the plain renderer works unchanged).
 //
-//   node prototypes/aimax-renderer/mock-daemon.mjs   # listens on ws://localhost:9123
+// Zero deps — just node's http + crypto, a hand-rolled RFC6455 codec.
 //
-// Then open the renderer FROM localhost (so the browser lets it reach ws://localhost):
-//   python3 -m http.server 8000   # in prototypes/aimax-renderer/
-//   open http://localhost:8000/  → Connect
+//   node prototypes/aimax-renderer/mock-daemon.mjs      # ws://localhost:9123
 //
-// The real aimax daemon would replace this file entirely; the renderer is unchanged.
+// The real aimax daemon replaces this file; the renderers are unchanged.
 
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -30,17 +29,37 @@ server.on('upgrade', (req, socket) => {
   );
   console.log('renderer connected');
   const send = (obj) => socket.write(encode(JSON.stringify(obj)));
-  socket.on('data', (buf) => { for (const msg of decode(buf)) onClient(JSON.parse(msg), send); });
+  const sendRaw = (str) => socket.write(encode(str)); // raw VT frame
+  let started = false;
+  const start = (mode) => {
+    if (started) return; started = true;
+    console.log('mode:', mode);
+    if (mode === 'vt') driveVT(sendRaw); else driveStructured(send);
+  };
+  socket.on('data', (buf) => { for (const m of decode(buf)) onClient(safeJson(m), send, start); });
   socket.on('error', () => {});
-  driveScene(send);
+  setTimeout(() => start('structured'), 500); // fallback if a client never says hello
 });
 
-// ── the "editor": a scripted scene proving buffers + windows + an agent edit ──
-function driveScene(send) {
-  send({ t: 'hello', app: 'aimax', proto: 1, caps: ['buffers', 'windows', 'agent', 'minibuffer'] });
-  send({ t: 'buffer', id: 'b1', name: 'main.rs', mode: 'rust', version: 3, cursor: { line: 5, col: 0 },
+function onClient(msg, send, start) {
+  if (!msg) return;
+  if (msg.t === 'hello') { start(msg.mode || 'structured'); return; }
+  // a real daemon acts on these; the mock echoes intent so the round-trip is visible
+  if (msg.t === 'key') send({ t: 'echo', text: `key ${keyLabel(msg)} → daemon` });
+  if (msg.t === 'command') send({ t: 'minibuffer', prompt: 'M-x ', text: msg.name || '' });
+  if (msg.t === 'resync') send(fullBuffer());          // structured: client asked for a full resend
+}
+const keyLabel = (m) => `${(m.mods || []).join('-')}${m.mods && m.mods.length ? '-' : ''}${m.key}`;
+
+// ── STRUCTURED scene: buffers + windows + an agent that edits main.rs ──
+function fullBuffer() {
+  return { t: 'buffer', id: 'b1', name: 'main.rs', mode: 'rust', version: 3, cursor: { line: 5, col: 0 },
     lines: ['use crate::agent::Agent;', '', 'fn main() {', '    let mut ed = Editor::new();',
-            '    // agent is a first-class citizen', '    ed.attach(Agent::claude());', '    ed.run();', '}'] });
+            '    // agent is a first-class citizen', '    ed.attach(Agent::claude());', '    ed.run();', '}'] };
+}
+function driveStructured(send) {
+  send({ t: 'hello', app: 'aimax', proto: 1, caps: ['buffers', 'windows', 'agent', 'minibuffer'] });
+  send(fullBuffer());
   send({ t: 'buffer', id: 'b2', name: '*agent*', mode: '', version: 1, cursor: { line: -1, col: 0 },
     lines: ['◆ watching buffer main.rs', '◆ awaiting instruction'] });
   send({ t: 'windows', focus: 'w1', layout: [{ id: 'w1', buffer: 'b1', weight: 1.6 }, { id: 'w2', buffer: 'b2', weight: 1 }] });
@@ -62,14 +81,44 @@ function driveScene(send) {
   }, 30);
 }
 
-// a real daemon acts on these; the mock just echoes intent back so you see the round-trip
-function onClient(msg, send) {
-  if (msg.t === 'hello') console.log('client hello:', msg.client);
-  if (msg.t === 'key') send({ t: 'echo', text: `key ${msg.mods?.join('-') || ''}${msg.mods?.length ? '-' : ''}${msg.key} → daemon` });
-  if (msg.t === 'command') send({ t: 'minibuffer', prompt: 'M-x ', text: msg.name || '' });
+// ── VT scene: a raw ANSI/VT byte stream, the flavor a plain TUI daemon emits ──
+const E = '\x1b['; // CSI
+function driveVT(sendRaw) {
+  const clear = `${E}2J${E}H`;
+  const bar = `${E}44m${E}97m aimax ${E}49m${E}39m ${E}90m~/proj · main.rs ${E}39m\r\n`;
+  const code = [
+    `${E}90m 1${E}39m ${E}34muse${E}39m crate::agent::Agent;`,
+    `${E}90m 2${E}39m `,
+    `${E}90m 3${E}39m ${E}34mfn${E}39m ${E}35mmain${E}39m() {`,
+    `${E}90m 4${E}39m     ${E}34mlet${E}39m ${E}34mmut${E}39m ed = Editor::new();`,
+    `${E}90m 5${E}39m     ${E}90m// agent is a first-class citizen${E}39m`,
+    `${E}90m 6${E}39m     ed.attach(Agent::claude());`,
+    `${E}90m 7${E}39m     ed.run();`,
+    `${E}90m 8${E}39m }`,
+  ].join('\r\n');
+  sendRaw(clear + bar + '\r\n' + code + '\r\n');
+  // code occupies terminal rows 3..10 (row1 bar, row2 blank). line 6 = row 8.
+  const CODE_ROW0 = 3;                                // terminal row of code line 1
+  const editRow = CODE_ROW0 + 5;                      // code line 6 (ed.attach…)
+  const msg = '  ◆ agent: applying /* by agent */ to line 6…';
+  let i = 0;
+  const iv = setInterval(() => {
+    if (i === 0) sendRaw(`${E}12;1H${E}95m`);         // move to row 12, magenta
+    if (i >= msg.length) {
+      clearInterval(iv);
+      sendRaw(`${E}39m`);
+      // redraw code line 6 in full with the agent's comment (clean, not an overwrite)
+      sendRaw(`${E}${editRow};1H${E}2K${E}90m 6${E}39m     ${E}90m/* by agent */${E}39m ed.attach(Agent::claude());`);
+      sendRaw(`${E}14;1H${E}92m  ✓ main.rs edited · +1 change${E}39m\r\n`);
+      return;
+    }
+    sendRaw(msg[i++]);
+  }, 30);
 }
 
-// ── minimal RFC6455 frame codec (text frames, server→client unmasked, client→server unmasked here) ──
+const safeJson = (s) => { try { return JSON.parse(s); } catch (_) { return null; } };
+
+// ── minimal RFC6455 frame codec (text frames) ──
 function encode(str) {
   const payload = Buffer.from(str);
   const len = payload.length;
@@ -92,11 +141,10 @@ function decode(buf) {
     if (p + len > buf.length) break;
     const data = buf.slice(p, p + len);
     if (masked) for (let i = 0; i < data.length; i++) data[i] ^= mask[i & 3];
-    const opcode = buf[o] & 0x0f;
-    if (opcode === 0x1) out.push(data.toString('utf8')); // text
+    if ((buf[o] & 0x0f) === 0x1) out.push(data.toString('utf8')); // text
     o = p + len;
   }
   return out;
 }
 
-server.listen(PORT, () => console.log(`mock aimax daemon on ws://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`mock aimax daemon on ws://localhost:${PORT} (structured + vt)`));

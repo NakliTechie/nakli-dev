@@ -77,6 +77,20 @@
   .wire h4{margin:0 0 6px;color:var(--faint);font-weight:600;font-size:10px;letter-spacing:.08em;text-transform:uppercase}
   .wire .m{color:#89b7e6;white-space:pre-wrap;word-break:break-all;margin-bottom:2px}
   .hint{position:fixed;left:12px;bottom:10px;color:var(--faint);font-size:11px}
+  #recBtn.on{border-color:#ff6b6b;color:#ff8f8f}
+
+  /* ── command palette (Cmd-K) ── */
+  .pal{position:fixed;inset:0;background:rgba(4,6,9,.5);display:none;align-items:flex-start;justify-content:center;z-index:20}
+  .pal.show{display:flex}
+  .pal .box{margin-top:12vh;width:min(560px,92vw);background:var(--panel);border:1px solid #2b3947;
+            border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden}
+  .pal input{width:100%;background:#0a0d11;border:0;border-bottom:1px solid var(--line);color:var(--ink);
+             font:14px var(--mono);padding:12px 14px;outline:none}
+  .pal .list{max-height:44vh;overflow:auto}
+  .pal .it{padding:9px 14px;cursor:pointer;color:var(--dim);display:flex;gap:10px;align-items:center}
+  .pal .it .k{color:var(--accent);flex:0 0 auto}
+  .pal .it.sel,.pal .it:hover{background:#17202a;color:var(--ink)}
+  .pal .hintbar{padding:7px 14px;color:var(--faint);font-size:11px;border-top:1px solid var(--line);background:var(--panel2)}
 </style>
 </head>
 <body>
@@ -87,12 +101,24 @@
     <button id="demo">▶ demo daemon</button>
     <span class="sp"></span>
     <span class="who" id="who">no daemon — this is the <b>renderer</b> half only</span>
+    <button id="recBtn" title="record the inbound message stream to a .jsonl">⏺ rec</button>
+    <button id="replayBtn" title="replay a recorded .jsonl session">replay</button>
+    <input type="file" id="replayFile" accept=".jsonl,.json,application/json" hidden>
+    <a href="vt.html" style="color:var(--dim);text-decoration:none;font-size:12px" title="the raw-VT flavor">VT →</a>
     <button id="wireBtn">wire ▾</button>
   </div>
 
   <div class="stage" id="stage"></div>
 
   <div class="mini" id="mini"><span class="prompt" id="miniPrompt"></span><span class="echo" id="miniEcho"></span></div>
+
+  <div class="pal" id="pal">
+    <div class="box">
+      <input id="palInput" placeholder="M-x  — a command name to send the daemon…" spellcheck="false">
+      <div class="list" id="palList"></div>
+      <div class="hintbar">↑↓ select · ↵ send to daemon · esc close — the daemon owns what each command does</div>
+    </div>
+  </div>
 
   <div class="wire" id="wireBox"><h4>→ frontend sends daemon</h4><div id="wireList"></div></div>
   <div class="hint" id="hint">keys type into the focused window · they are sent to the daemon, never executed here</div>
@@ -126,6 +152,7 @@ function render(){
     const el = document.createElement('div');
     el.className = 'win' + (w.id===state.focus ? ' focus':'');
     el.style.flex = String(w.weight || 1);
+    el.dataset.win = w.id;
     const ag = [...state.agents.values()].find(a => a.buffer === w.buffer && a.state!=='idle');
     if(ag) el.classList.add('hasagent');
     el.innerHTML = `
@@ -166,12 +193,15 @@ const esc = (s)=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 
 // ── inbound: apply one daemon message ──
 function apply(m){
+  if(recording) recBuf.push({ dt: Date.now()-recT0, m });
   switch(m.t){
     case 'hello':   setWho(`<b>${esc(m.app||'daemon')}</b> · proto ${m.proto} · caps: ${(m.caps||[]).join(', ')}`); break;
     case 'windows': state.windows = m.layout || []; state.focus = m.focus ?? state.focus; break;
     case 'buffer':  state.buffers.set(m.id, { name:m.name, mode:m.mode, lines:m.lines||[], cursor:m.cursor, version:m.version||0 }); break;
     case 'cursor':  { const b=state.buffers.get(m.id); if(b){ b.cursor=m.cursor; if(m.version!=null)b.version=m.version; } break; }
-    case 'patch':   applyPatch(m); break;
+    case 'patch': { const b=state.buffers.get(m.id);
+                    if(b && m.from!=null && b.version!==m.from){ requestResync(m.id); break; } // a message was missed → resync
+                    applyPatch(m); break; }
     case 'agent':   { const a = state.agents.get(m.id)||{buffer:m.buffer,text:'',state:'idle'};
                       a.buffer=m.buffer??a.buffer; a.state=m.state??a.state;
                       if(m.chunk) a.text=(a.text||'')+m.chunk; if(m.text!=null)a.text=m.text;
@@ -204,8 +234,8 @@ function logWire(obj){
 
 // keystrokes → daemon (never executed locally)
 window.addEventListener('keydown',(e)=>{
-  if(e.target.tagName==='INPUT') return;
-  if(e.metaKey && e.key==='k'){ e.preventDefault(); send({t:'command',name:'command-palette'}); return; }
+  if((e.metaKey||e.ctrlKey) && e.key==='k'){ e.preventDefault(); openPalette(); return; } // Cmd/Ctrl-K palette
+  if(e.target.tagName==='INPUT') return; // typing in the ws box or palette
   const mods=[]; if(e.ctrlKey)mods.push('C'); if(e.altKey)mods.push('M'); if(e.metaKey)mods.push('S');
   const printable = e.key.length===1;
   if(printable || ['Enter','Backspace','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Escape'].includes(e.key)){
@@ -213,6 +243,63 @@ window.addEventListener('keydown',(e)=>{
     send({t:'key', window:state.focus, key:e.key, mods});
   }
 });
+
+// click a window to focus it → tell the daemon
+stage.addEventListener('click',(e)=>{
+  const win = e.target.closest('.win'); if(!win) return;
+  const id = win.dataset.win; if(!id || id===state.focus) return;
+  state.focus = id; render(); send({t:'focus', window:id});
+});
+
+// a gap in buffer versions → ask the daemon to resend the whole buffer
+function requestResync(id){ send({t:'resync', id}); apply({t:'echo',text:`version gap on ${id} — requested resync`}); }
+
+function resetState(){ state.buffers.clear(); state.windows=[]; state.focus=null; state.agents.clear(); }
+
+// ── record / replay ──────────────────────────────────────────────────────────
+let recording=false, recBuf=[], recT0=0;
+$('recBtn').onclick=()=>{
+  if(!recording){ recording=true; recBuf=[]; recT0=Date.now(); $('recBtn').classList.add('on'); $('recBtn').textContent='⏹ save'; }
+  else{ recording=false; $('recBtn').classList.remove('on'); $('recBtn').textContent='⏺ rec';
+        const jsonl=recBuf.map(r=>JSON.stringify(r)).join('\n');
+        const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([jsonl],{type:'application/x-ndjson'}));
+        a.download='aimax-session.jsonl'; a.click(); URL.revokeObjectURL(a.href);
+        apply({t:'echo',text:`saved ${recBuf.length} messages → aimax-session.jsonl`}); }
+};
+$('replayBtn').onclick=()=>$('replayFile').click();
+$('replayFile').onchange=(e)=>{ const f=e.target.files[0]; if(!f)return;
+  const rd=new FileReader(); rd.onload=()=>playRecording(String(rd.result)); rd.readAsText(f); e.target.value=''; };
+function playRecording(text){
+  if(socket)socket.close(); sink=null; setDot('demo');
+  const rows=text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(_){return null}}).filter(Boolean);
+  if(!rows.length){ setWho('empty recording'); return; }
+  setWho(`<b>replaying</b> · ${rows.length} messages`); resetState(); render();
+  for(const r of rows){ const dt=Math.max(0, r.dt||0); const m=r.m||r; setTimeout(()=>apply(m), dt); }
+}
+
+// ── command palette (Cmd-K) — proposes M-x commands; the daemon owns their meaning ──
+const PAL_CMDS=['save-buffer','revert-buffer','split-window-right','split-window-below','other-window',
+                'find-file','kill-buffer','agent-run','agent-stop','goto-line','query-replace'];
+let palSel=0, palShown=[];
+function openPalette(){ $('pal').classList.add('show'); const inp=$('palInput'); inp.value=''; renderPal(''); inp.focus(); }
+function closePalette(){ $('pal').classList.remove('show'); }
+function renderPal(q){
+  palShown = PAL_CMDS.filter(c=>c.includes(q.toLowerCase().trim()));
+  palSel=0;
+  $('palList').innerHTML = palShown.map((c,i)=>`<div class="it${i===0?' sel':''}" data-i="${i}"><span class="k">M-x</span>${esc(c)}</div>`).join('')
+                          || '<div class="it" style="color:var(--faint)">no match — ↵ sends what you typed</div>';
+}
+$('palInput').addEventListener('input',(e)=>renderPal(e.target.value));
+$('palInput').addEventListener('keydown',(e)=>{
+  if(e.key==='Escape'){ e.preventDefault(); closePalette(); return; }
+  if(e.key==='ArrowDown'){ e.preventDefault(); palSel=Math.min(palSel+1,Math.max(palShown.length-1,0)); markPal(); return; }
+  if(e.key==='ArrowUp'){ e.preventDefault(); palSel=Math.max(palSel-1,0); markPal(); return; }
+  if(e.key==='Enter'){ e.preventDefault(); const name=palShown[palSel] || $('palInput').value.trim(); if(name){ send({t:'command',name}); apply({t:'minibuffer',prompt:'M-x ',text:name}); } closePalette(); }
+});
+function markPal(){ [...$('palList').children].forEach((el,i)=>el.classList.toggle('sel',i===palSel)); }
+$('palList').addEventListener('click',(e)=>{ const it=e.target.closest('.it'); if(!it||it.dataset.i==null)return;
+  const name=palShown[Number(it.dataset.i)]; if(name){ send({t:'command',name}); apply({t:'minibuffer',prompt:'M-x ',text:name}); } closePalette(); });
+$('pal').addEventListener('click',(e)=>{ if(e.target.id==='pal') closePalette(); });
 
 function setWho(html){ $('who').innerHTML = html; }
 function setDot(cls){ $('dot').className = 'dot '+(cls||''); const h=$('hint'); if(h) h.style.display = cls ? 'none' : ''; }
@@ -279,6 +366,12 @@ $('wireBtn').onclick=()=>$('wireBox').classList.toggle('show');
 // first paint
 render();
 setDot('');
+
+// ?replay=<url-to-jsonl> — load a recorded session by link (shareable, headless-friendly)
+const _rp = new URLSearchParams(location.search).get('replay');
+if(_rp){ fetch(_rp).then(r=>r.text()).then(playRecording).catch(()=>setWho('replay fetch failed')); }
+// ?demo=1 — auto-start the embedded mock
+if(new URLSearchParams(location.search).get('demo')) startDemo();
 </script>
 </body>
 </html>

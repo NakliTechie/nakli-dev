@@ -56,7 +56,8 @@ so highlighting is tree-sitter-accurate rather than the renderer's toy guess.
 ## Renderer → daemon
 
 ```jsonc
-{ "t":"hello", "client":"naklios-render", "proto":1 }
+// mode picks the flavor: "structured" (this doc) or "vt" (raw ANSI → xterm)
+{ "t":"hello", "client":"naklios-render", "proto":1, "mode":"structured" }
 
 // a keystroke aimed at a window. mods: "C"=ctrl "M"=alt/meta "S"=super/cmd
 { "t":"key", "window":"w1", "key":"a", "mods":[] }
@@ -71,7 +72,14 @@ so highlighting is tree-sitter-accurate rather than the renderer's toy guess.
 // subscribe / focus intent
 { "t":"subscribe", "buffers":["b1","b2"] }
 { "t":"focus", "window":"w2" }
+
+// the renderer detected a version gap (missed a message) → resend the whole buffer
+{ "t":"resync", "id":"b1" }
 ```
+
+In the **vt** flavor the client sends `{ "t":"input", "bytes":"…" }` (VT-encoded
+keystrokes from xterm) and the daemon replies with a raw ANSI byte stream in
+each frame — none of the structured messages above apply.
 
 ## Why this shape
 
