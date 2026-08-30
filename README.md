@@ -208,6 +208,34 @@ Personal Access Token held **host-side** and injected as the request leaves for
 your Worker — the coding agent never sees it. Next: browsing/RAG and any no-CORS
 API over the same primitive, and secrets moving into an encrypted vault.
 
+## Reaching a local daemon (`nakli-local-bridge`)
+
+The other half of egress: not "call the cloud," but **render and drive a program
+running on the user's own machine** from a public `naklios.dev` page. First worked
+out end-to-end in [`prototypes/aimax-renderer/`](prototypes/aimax-renderer/) — a
+native browser frontend for [aimax](https://github.com/svs/aimax) (an agent-native
+terminal editor) that speaks the daemon's **own JSON-RPC** over its unix socket
+(`eval`/`get_state`/`subscribe`), so the daemon stays the source of truth and no
+wire is invented.
+
+Getting a public https page to a `localhost` daemon is a real wall, and the fix is
+protocol-level (full write-up in `../CONV.md` → *"Reaching a local daemon"*):
+
+- **WebSockets aren't CORS-gated** — so the bridge enforces its own `Origin`
+  allowlist (otherwise any site you visit could drive your daemon).
+- **Mixed content + Private Network Access** — a public https page can't open
+  `ws://`, and reaching loopback triggers a one-time Chrome *"allow local network"*
+  prompt. Solved with **`wss://` + the loopback-cert pattern**: a public DNS name
+  (`local.naklios.dev`) → `127.0.0.1` with a **real Let's Encrypt cert**, so the
+  browser trusts it with **zero per-user cert install** (the Plex/Discord trick;
+  the shared key is loopback-only, so it can't MITM anything).
+- **One-command setup** — `bridge.naklios.dev` serves a self-contained bridge:
+  `curl -fsSL https://bridge.naklios.dev -o nakli-bridge.mjs && node nakli-bridge.mjs`.
+
+`nakli-local-bridge` is the reusable primitive (unix-socket ↔ wss, protocol-agnostic)
+for any host-local service — on-device inference, LAN devices, local tools. Setup
+guide: [`naklios.dev/prototypes/aimax-renderer/guide`](https://naklios.dev/prototypes/aimax-renderer/guide).
+
 ## Mirroring an app for same-origin embedding
 
 Cross-origin iframes can't invoke `showDirectoryPicker()`. To embed a File-System-Access-using app inside Immersive mode, mirror it under `apps/<id>/` so it loads from `naklios.dev` itself.
