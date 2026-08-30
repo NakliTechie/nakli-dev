@@ -28,6 +28,8 @@ plan/
 !nakli-egress/
 !nakli-egress/**
 nakli-egress/.dev.secret
+!prototypes/
+!prototypes/**
 
 # wrangler files
 .wrangler
