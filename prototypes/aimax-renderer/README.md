@@ -79,10 +79,25 @@ usually get backwards:
    nothing *requires* the server to answer it a particular way to connect. So
    "make the bridge CORS-compliant" is a non-goal — CORS isn't the gate.
 2. **The browser gate is mixed content**, not CORS: an `https://` page cannot
-   open `ws://`. `localhost` is exempt (a trustworthy origin), so serving the
-   renderer from `http://localhost` and dialing `ws://localhost` just works —
-   which is the recipe above. From `https://naklios.dev` you'd need the bridge
-   on `wss://` (a local cert) or rely on the localhost mixed-content exemption.
+   open `ws://`. Serving the renderer from `http://localhost` and dialing
+   `ws://localhost` just works — which is the recipe above.
+
+**Tested live on naklios.dev (the page IS deployed there):** from
+`https://naklios.dev`, `new WebSocket('ws://localhost:9130')` is **blocked by the
+browser before any network request** — the bridge sees nothing. So the localhost
+"exemption" does **not** save a public-https page here; `ws://` from `https://`
+is refused, and the browser doesn't even send the Private Network Access
+preflight. (The bridge now answers that PNA preflight anyway — see
+`Access-Control-Allow-Private-Network` — because it's half of the eventual fix.)
+
+**To make naklios.dev → a local daemon work you need `wss://`:** the bridge
+serves TLS with a locally-trusted cert (e.g. `mkcert` for `127.0.0.1` or a
+loopback host), so it's secure-to-secure (no mixed content) and the PNA grant
+covers the public→local hop. That installs a local CA into the system trust
+store — a deliberate step, not done here. Until then, the intended deployment
+for a *local* daemon is to **serve the renderer from localhost** (or have the
+daemon serve it); a public-origin renderer talking to your localhost is exactly
+what browsers work to prevent.
 
 **The real security control is the reverse of CORS.** *Because* ws skips CORS,
 any website you happen to be visiting could run `new WebSocket('ws://localhost:9130')`

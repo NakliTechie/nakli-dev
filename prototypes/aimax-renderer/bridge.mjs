@@ -38,7 +38,34 @@ function originOk(origin) {
   return ALLOW_ORIGINS.includes(origin);
 }
 
-const server = http.createServer((_, res) => { res.writeHead(426); res.end('websocket only'); });
+// A public https page (naklios.dev) reaching a local address (localhost) is
+// gated by Chrome's Private Network Access: before the ws handshake the browser
+// sends a CORS-style preflight (OPTIONS with Access-Control-Request-Private-Network).
+// Answer it — with the private-network grant — for allowed origins, else the
+// connection is blocked before it ever reaches the socket. (This is what lets
+// naklios.dev talk to a local daemon; localhost-served pages skip the preflight.)
+const server = http.createServer((req, res) => {
+  const origin = req.headers['origin'] || '';
+  if (req.method === 'OPTIONS') {
+    if (originOk(origin)) {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': origin || '*',
+        'Access-Control-Allow-Private-Network': 'true',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Max-Age': '600',
+        'Vary': 'Origin',
+      });
+      console.log('answered PNA preflight for origin:', origin || '(none)');
+    } else {
+      res.writeHead(403);
+      console.error('REJECTED PNA preflight from origin:', origin || '(none)');
+    }
+    res.end();
+    return;
+  }
+  res.writeHead(426); res.end('websocket only');
+});
 
 server.on('upgrade', (req, ws) => {
   const origin = req.headers['origin'] || '';
@@ -52,6 +79,7 @@ server.on('upgrade', (req, ws) => {
   const key = req.headers['sec-websocket-key'];
   const accept = crypto.createHash('sha1').update(key + GUID).digest('base64');
   ws.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+           'Access-Control-Allow-Private-Network: true\r\n' +
            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
 
   const unix = net.connect(SOCK);
