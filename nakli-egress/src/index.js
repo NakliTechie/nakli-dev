@@ -13,17 +13,20 @@
 //   - CORS scoped to the configured origins, not '*'.
 
 import { verifyEnvelope, hostAllowed, HOP_BY_HOP, bytesToB64 } from './lib.js';
+import { EgressGuard } from './guard.js';
+export { EgressGuard }; // the Worker runtime needs the DO class exported from the entry
 
 const NONCE_TTL_MS = 6 * 60 * 1000;      // a hair over the ts window
-const seen = new Map();                  // nonce -> expiry (best-effort, per-isolate)
+const seen = new Map();                  // nonce -> expiry (fallback when no DO binding)
 
 const MAX_REQ_BYTES = 25 * 1024 * 1024;  // reject request bodies over 25 MB
 const MAX_RESP_BYTES = 50 * 1024 * 1024; // abort upstream responses over 50 MB
+const MAX_BYTES_PER_MIN = 500 * 1024 * 1024; // global per-minute byte budget (DO)
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
-// Coarse per-isolate throughput brake. Not a global limiter (that needs a Durable
-// Object / KV — see the spec) but it bounds a runaway flood's cost per isolate.
-// Generous for one user's git traffic; trips only on egregious volume.
+// Per-isolate throughput brake — a cheap first line that bounds a flood's cost
+// per isolate. The GLOBAL, cross-isolate rate + nonce enforcement lives in the
+// EgressGuard Durable Object (below); this stays as the no-DO fallback.
 const RATE_MAX_PER_MIN = 600;
 const rate = { count: 0, resetAt: 0 };
 function rateTrip(now) {
@@ -97,11 +100,15 @@ export default {
     let envelope;
     try { envelope = await request.json(); } catch (_) { return json({ ok: false, error: 'bad json' }, 400, cors); }
 
+    // Nonce (+ the global rate limit) is enforced by the EgressGuard DO after the
+    // signature verifies. Only when there's no DO binding do we fall back to the
+    // per-isolate `seen` map inside verifyEnvelope.
+    const useDO = !!env.EGRESS_GUARD;
     let v;
     try {
       v = await verifyEnvelope(envelope, env.EGRESS_SECRET, {
         now,
-        seenNonce: (n) => {
+        seenNonce: useDO ? undefined : (n) => {
           for (const [k, exp] of seen) if (exp < now) seen.delete(k); // sweep
           if (seen.has(n)) return true;
           seen.set(n, now + NONCE_TTL_MS);
@@ -134,6 +141,32 @@ export default {
     if (hasAuth) {
       let proto = ''; try { proto = new URL(url).protocol; } catch (_) {}
       if (proto !== 'https:') return json({ ok: false, error: 'credentialed request must use https' }, 400, cors);
+    }
+
+    // GLOBAL, cross-isolate replay + rate/byte enforcement (the authenticated path).
+    // One serialized DO instance is the single source of truth; on a DO error we
+    // fail CLOSED (reject) rather than silently drop the guarantee.
+    if (useDO) {
+      try {
+        const stub = env.EGRESS_GUARD.get(env.EGRESS_GUARD.idFromName('guard'));
+        const gr = await stub.fetch('https://guard/check', {
+          method: 'POST',
+          body: JSON.stringify({
+            nonce: envelope.nonce,
+            nonceTtlMs: NONCE_TTL_MS,
+            bytes: bodyBytes ? bodyBytes.length : 0,
+            maxPerMin: RATE_MAX_PER_MIN,
+            maxBytesPerMin: MAX_BYTES_PER_MIN,
+          }),
+        });
+        const gj = await gr.json();
+        if (!gj.ok) {
+          const limited = gj.reason === 'rate limited';
+          return json({ ok: false, error: limited ? 'rate limited' : ('unauthorized: ' + gj.reason) }, limited ? 429 : 401, cors);
+        }
+      } catch (_) {
+        return json({ ok: false, error: 'guard unavailable' }, 503, cors);
+      }
     }
 
     let upstream;
