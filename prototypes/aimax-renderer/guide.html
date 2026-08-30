@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Step-by-step: connect a local aimax daemon to the naklios.dev renderer over wss.">
+<title>Run aimax in naklios.dev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --bg:#f6f8fb; --panel:#ffffff; --ink:#151a21; --muted:#586372; --faint:#8a94a2;
+    --line:#e3e8ef; --accent:#2563c9; --accent-soft:#e8f0fd; --agent:#7c4dd0;
+    --ok:#1f9d63; --warn:#c9871f;
+    --code-bg:#0d1117; --code-ink:#dbe4ee; --code-dim:#7f8b98;
+    --code-blue:#79b0ff; --code-mag:#c9a0ff; --code-str:#8fd7a6;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,sans-serif;
+    --measure:44rem;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0b0e12; --panel:#11151b; --ink:#e4eaf1; --muted:#8d99a7; --faint:#5d6875;
+      --line:#1e252e; --accent:#5db0ff; --accent-soft:#132234; --agent:#c9a0ff;
+      --ok:#5ad19a; --warn:#ffcf6b; --code-bg:#0a0d11; --code-ink:#dbe4ee;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b0e12; --panel:#11151b; --ink:#e4eaf1; --muted:#8d99a7; --faint:#5d6875;
+    --line:#1e252e; --accent:#5db0ff; --accent-soft:#132234; --agent:#c9a0ff;
+    --ok:#5ad19a; --warn:#ffcf6b; --code-bg:#0a0d11; --code-ink:#dbe4ee;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+       font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--measure);margin:0 auto;padding:clamp(24px,5vw,64px) clamp(18px,4vw,28px) 96px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  /* header */
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;
+           color:var(--accent);font-weight:600}
+  h1{font-size:clamp(2rem,6vw,2.9rem);line-height:1.05;font-weight:700;letter-spacing:-.02em;
+     margin:.5rem 0 .4rem;text-wrap:balance}
+  .lede{font-size:1.12rem;color:var(--muted);margin:0 0 1.4rem;max-width:38rem}
+  .urlbar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .8rem;padding:.7rem .9rem;
+          background:var(--panel);border:1px solid var(--line);border-radius:10px;font-family:var(--mono);
+          font-size:.86rem}
+  .urlbar b{color:var(--faint);font-weight:500;letter-spacing:.04em;text-transform:uppercase;font-size:.72rem}
+  .urlbar a{word-break:break-all}
+
+  h2{font-size:1.34rem;font-weight:600;letter-spacing:-.01em;margin:2.6rem 0 .2rem}
+  h2 .num{font-family:var(--mono);color:var(--faint);font-weight:500;margin-right:.5rem}
+  p{margin:.7rem 0}
+  .muted{color:var(--muted)}
+  hr{border:0;border-top:1px solid var(--line);margin:2.2rem 0}
+
+  /* architecture diagram */
+  figure{margin:1.6rem 0 .4rem}
+  .diagram{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 14px}
+  figcaption{font-family:var(--mono);font-size:.75rem;color:var(--faint);text-align:center;margin-top:.6rem;
+             letter-spacing:.03em}
+
+  /* steps */
+  ol.steps{list-style:none;margin:1.4rem 0 0;padding:0;position:relative}
+  ol.steps::before{content:"";position:absolute;left:15px;top:14px;bottom:26px;width:2px;background:var(--line)}
+  ol.steps>li{position:relative;padding:0 0 1.8rem 3rem}
+  ol.steps>li .badge{position:absolute;left:0;top:-2px;width:32px;height:32px;border-radius:50%;
+      background:var(--accent);color:#fff;font-family:var(--mono);font-weight:600;font-size:.95rem;
+      display:grid;place-items:center;box-shadow:0 0 0 4px var(--bg)}
+  ol.steps>li h3{margin:.15rem 0 .3rem;font-size:1.08rem;font-weight:600}
+  ol.steps>li p{margin:.35rem 0}
+
+  /* code */
+  pre{margin:.7rem 0;background:var(--code-bg);color:var(--code-ink);border-radius:10px;
+      padding:.85rem 1rem;overflow-x:auto;font-family:var(--mono);font-size:.86rem;line-height:1.6;
+      border:1px solid rgba(255,255,255,.06)}
+  pre .c{color:var(--code-dim)}
+  pre .p{color:var(--code-mag)}
+  pre .k{color:var(--code-blue)}
+  code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);color:var(--ink);
+       padding:.08em .38em;border-radius:5px}
+  pre code{background:none;padding:0;color:inherit}
+
+  /* callout */
+  .callout{margin:1.4rem 0;border:1px solid var(--line);border-left:3px solid var(--warn);
+           background:var(--panel);border-radius:10px;padding:1rem 1.1rem}
+  .callout .tag{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+                color:var(--warn);font-weight:600}
+  .callout.key{border-left-color:var(--agent)}
+  .callout.key .tag{color:var(--agent)}
+  .callout p{margin:.4rem 0 0}
+
+  /* troubleshooting rows */
+  .tbl{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;
+       overflow:hidden;margin:1rem 0}
+  .tbl>div{background:var(--panel);padding:.8rem 1rem}
+  .tbl .sym{font-family:var(--mono);font-size:.84rem;color:var(--ink);font-weight:500}
+  .tbl .fix{color:var(--muted);font-size:.95rem;margin-top:.2rem}
+
+  ul.plain{margin:.6rem 0;padding-left:1.1rem}
+  ul.plain li{margin:.35rem 0}
+  .foot{margin-top:3rem;padding-top:1.3rem;border-top:1px solid var(--line);color:var(--faint);
+        font-family:var(--mono);font-size:.78rem;display:flex;flex-wrap:wrap;gap:.4rem 1rem;justify-content:space-between}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">naklios · aimax bridge</div>
+    <h1>Run aimax in naklios.dev</h1>
+    <p class="lede">Render your own aimax daemon inside the naklios.dev browser desktop — over your
+      machine, nothing leaving your device. naklios is just a frontend; your daemon stays the source of truth.</p>
+    <div class="urlbar">
+      <b>renderer</b>
+      <a href="https://naklios.dev/prototypes/aimax-renderer/aimax">naklios.dev/prototypes/aimax-renderer/aimax</a>
+    </div>
+  </header>
+
+  <figure>
+    <div class="diagram">
+      <svg viewBox="0 0 640 150" width="100%" role="img" aria-label="Data path: naklios.dev connects over wss to a local bridge, which relays over a unix socket to your headless aimax daemon — all on your machine.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--faint)"/>
+          </marker>
+        </defs>
+        <!-- machine boundary -->
+        <rect x="150" y="12" width="478" height="126" rx="12" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="620" y="30" text-anchor="end" font-family="var(--mono)" font-size="10" fill="var(--faint)" letter-spacing="1">YOUR MACHINE</text>
+
+        <!-- browser node -->
+        <rect x="12" y="46" width="118" height="58" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="71" y="71" text-anchor="middle" font-family="var(--sans)" font-weight="600" font-size="13" fill="var(--ink)">naklios.dev</text>
+        <text x="71" y="88" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--muted)">the renderer</text>
+
+        <!-- bridge node -->
+        <rect x="250" y="46" width="130" height="58" rx="9" fill="var(--panel)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="315" y="71" text-anchor="middle" font-family="var(--sans)" font-weight="600" font-size="13" fill="var(--ink)">the bridge</text>
+        <text x="315" y="88" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--muted)">unix ↔ wss</text>
+
+        <!-- daemon node -->
+        <rect x="486" y="46" width="130" height="58" rx="9" fill="var(--panel)" stroke="var(--agent)" stroke-width="1.5"/>
+        <text x="551" y="71" text-anchor="middle" font-family="var(--sans)" font-weight="600" font-size="13" fill="var(--ink)">aimax</text>
+        <text x="551" y="88" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--muted)">--headless</text>
+
+        <!-- edges -->
+        <line x1="132" y1="75" x2="248" y2="75" stroke="var(--faint)" stroke-width="1.5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+        <text x="190" y="66" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--accent)">wss</text>
+        <line x1="382" y1="75" x2="484" y2="75" stroke="var(--faint)" stroke-width="1.5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+        <text x="433" y="66" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--muted)">~/.aimax/sock</text>
+      </svg>
+    </div>
+    <figcaption>The page runs on naklios.dev; everything it talks to runs on your machine.</figcaption>
+  </figure>
+
+  <hr>
+
+  <h2>Before you start</h2>
+  <ul class="plain">
+    <li>aimax built and runnable (<code>--headless</code> mode — it's already in your <code>tui/src/main.rs</code>).</li>
+    <li>Node 18+ (for the bridge).</li>
+    <li>The <b>nakli-local-bridge</b> bundle (Chirag sends you the zip — it carries the cert; see the last section for why that's fine).</li>
+  </ul>
+
+  <ol class="steps">
+    <li>
+      <span class="badge">1</span>
+      <h3>Start aimax, headless</h3>
+      <p class="muted">Runs the daemon with just the IPC server, no TUI. It listens on a unix socket.</p>
+      <pre><code>aimax --headless
+<span class="c"># → IPC listening on ~/.aimax/sock</span></code></pre>
+    </li>
+    <li>
+      <span class="badge">2</span>
+      <h3>Run the bridge</h3>
+      <p class="muted">Unzip the bundle and run it. It exposes your unix socket as a WebSocket the browser can
+        reach, and serves it over TLS with a real cert for <code>local.naklios.dev</code>.</p>
+      <pre><code>unzip nakli-local-bridge.zip &amp;&amp; cd nakli-local-bridge
+node bridge.mjs
+<span class="c"># → nakli-local-bridge: </span><span class="k">wss://localhost:9130</span><span class="c">  ↔  ~/.aimax/sock  (TLS)</span></code></pre>
+    </li>
+    <li>
+      <span class="badge">3</span>
+      <h3>Open the renderer &amp; connect</h3>
+      <p class="muted">In Chrome, open the renderer and click <b>Connect</b>. The endpoint is pre-filled with
+        <code>wss://local.naklios.dev:9130</code> — which resolves to your own <code>127.0.0.1</code>.</p>
+      <pre><code>open https://naklios.dev/prototypes/aimax-renderer/aimax
+<span class="c"># then click Connect</span></code></pre>
+    </li>
+    <li>
+      <span class="badge">4</span>
+      <h3>Allow the local-network prompt</h3>
+      <p class="muted">Chrome asks permission for a public page to reach your machine. Click <b>Allow</b> — once.</p>
+      <div class="callout">
+        <span class="tag">Expected — not a bug</span>
+        <p>On the first connect, the status sits on <b>“connecting…”</b> and looks stuck. That's Chrome
+          waiting on the <b>“naklios.dev wants to access devices on your local network”</b> prompt. Click
+          <b>Allow</b> and it connects instantly. It's one-time, per browser.</p>
+      </div>
+    </li>
+  </ol>
+
+  <hr>
+
+  <h2>What you get</h2>
+  <p>Your live buffers as tabs, rendered natively (not a terminal in a tab). Click a tab to switch buffers.
+    Type in the buffer and edits go to your daemon as <code>(buffer-insert …)</code>. <b>M-x</b> runs your real
+    <code>eval</code> — any Scheme, e.g. <code>(buffer-names)</code> or <code>(buffer-switch "main.rs")</code>.
+    Nothing is edited in the browser; the daemon owns every buffer.</p>
+
+  <h2>If it doesn't connect</h2>
+  <div class="tbl">
+    <div><div class="sym">Stuck on “connecting…”</div><div class="fix">The local-network prompt is waiting — click Allow. If you dismissed it, reload and Connect again.</div></div>
+    <div><div class="sym">“disconnected” immediately</div><div class="fix">Is <code>aimax --headless</code> running? Is <code>node bridge.mjs</code> running? The bridge needs both the socket and the browser.</div></div>
+    <div><div class="sym">TLS / cert error</div><div class="fix">Run the bridge from inside the unzipped bundle so it finds <code>certs/</code>. Don't move <code>bridge.mjs</code> out of the folder.</div></div>
+    <div><div class="sym">Nothing renders but status is connected</div><div class="fix">Open <b>wire ▾</b> (top right) to see the JSON-RPC traffic; check the bridge terminal for errors.</div></div>
+  </div>
+
+  <hr>
+
+  <h2>How it works</h2>
+  <p>The renderer speaks <b>aimax's own protocol</b> — JSON-RPC 2.0 over your IPC socket
+    (<code>eval</code> / <code>get_state</code> / <code>subscribe</code> + event notifications). It subscribes,
+    pulls <code>get_state</code> for the buffer list and cursor, and <code>eval (buffer-text)</code> for content,
+    re-pulling on each event. No invented wire.</p>
+  <p>The only trick is reaching a local daemon from a public https page. <code>local.naklios.dev</code> is a
+    public DNS record that points at <code>127.0.0.1</code> — so on <em>your</em> machine it's your own loopback —
+    and it has a <b>real Let's Encrypt cert</b>, so your browser trusts <code>wss://local.naklios.dev</code> with
+    no cert install. The bridge just shims your unix socket to that wss endpoint.</p>
+  <div class="callout key">
+    <span class="tag">About the shipped cert</span>
+    <p>The bundle includes the cert's private key. That's intentional: the cert only certifies
+      <code>127.0.0.1</code>, which never leaves your machine — there's no network path to intercept, so it
+      can't MITM anything. Same pattern Plex and Discord use for their local helpers.</p>
+  </div>
+
+  <h2>Where v0 stops</h2>
+  <p class="muted">Honest limits, in case you want to close them from the daemon side:</p>
+  <ul class="plain">
+    <li>It renders the <b>current buffer</b> + a tab per buffer. <code>get_state</code> gives buffer metadata +
+      cursor but not <b>window layout</b> or buffer text (text comes via <code>eval</code>). Expose windows/text in
+      <code>get_state</code> and the renderer can draw your splits natively.</li>
+    <li>Structured flavor only. There's also a raw-VT renderer (xterm) if you'd rather stream the TUI —
+      but structured is what makes it feel native in naklios.</li>
+  </ul>
+
+  <div class="foot">
+    <span>prototypes/aimax-renderer</span>
+    <span>github.com/NakliTechie/nakliOS</span>
+  </div>
+</div>
+
+</body>
+</html>
