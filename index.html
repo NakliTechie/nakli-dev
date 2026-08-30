@@ -7207,6 +7207,18 @@ const EGRESS_HOP_BY_HOP = new Set(['host','connection','content-length','keep-al
 function egressSettings(){ try { return JSON.parse(localStorage.getItem('nakliOS.egressSettings.v1')||'null') || null; } catch(_) { return null; } }
 function egressConfigured(){ const s = egressSettings(); return !!(s && s.workerUrl && s.secret); }
 function egressBackendLabel(){ const s = egressSettings(); return (s && s.backend) ? s.backend : (egressConfigured() ? 'worker' : null); }
+// Git auth (a PAT) lives HOST-SIDE only. When an egress request targets a configured
+// git host and carries no Authorization of its own, the host injects Basic auth from
+// nakliOS.gitAuth.v1 — so the PAT never enters an app or an onAuth callback.
+function gitAuthSettings(){ try { return JSON.parse(localStorage.getItem('nakliOS.gitAuth.v1')||'null') || null; } catch(_) { return null; } }
+function gitAuthConfigured(){ const g = gitAuthSettings(); return !!(g && g.token); }
+function gitAuthFor(url){
+  const g = gitAuthSettings(); if(!g || !g.token) return null;
+  let host=''; try{ host = new URL(url).hostname.toLowerCase(); }catch(_){ return null; }
+  const hosts = (g.hosts && g.hosts.length) ? g.hosts : ['github.com','*.github.com','gitlab.com','*.gitlab.com'];
+  const match = hosts.some(h=>{ h=String(h).toLowerCase(); return h.startsWith('*.') ? (host===h.slice(2)||host.endsWith('.'+h.slice(2))) : host===h; });
+  return match ? { username: g.username || 'x-access-token', token: g.token } : null;
+}
 function _egHex(u8){ let s=''; for(let i=0;i<u8.length;i++) s+=u8[i].toString(16).padStart(2,'0'); return s; }
 function _egCanonHeaders(h){ return Object.entries(h||{}).map(([k,v])=>[String(k).toLowerCase(),String(v)]).filter(([k])=>!EGRESS_HOP_BY_HOP.has(k)).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0).map(([k,v])=>k+':'+v).join('\n'); }
 function _egCanon({method,url,headers,bodySha256,nonce,ts}){ return [String(method||'GET').toUpperCase(),String(url||''),_egCanonHeaders(headers),String(bodySha256||''),String(nonce||''),String(ts||'')].join('\n'); }
@@ -7218,6 +7230,11 @@ function _egBytes(body){ if(body==null) return new Uint8Array(0); if(body instan
 async function egressFetch({url, method='GET', headers={}, body=null}){
   const s = egressSettings();
   if(!s || !s.workerUrl || !s.secret){ const e=new Error('No egress backend configured'); e.code='ENOEGRESS'; throw e; }
+  // Inject host-held git auth (the PAT never came from the app) for git hosts.
+  headers = Object.assign({}, headers || {});
+  const ga = gitAuthFor(url);
+  const hasAuth = Object.keys(headers).some(k=>String(k).toLowerCase()==='authorization');
+  if(ga && !hasAuth){ headers['Authorization'] = 'Basic ' + btoa(unescape(encodeURIComponent(ga.username + ':' + ga.token))); }
   const bytes = _egBytes(body);
   const bodyB64 = bytes.length ? _egB64(bytes) : null;
   const bodySha256 = bytes.length ? await _egSha(bytes) : '';
@@ -7230,6 +7247,42 @@ async function egressFetch({url, method='GET', headers={}, body=null}){
   if(!j.ok){ const e=new Error('egress: '+(j.error||('http '+r.status))); e.code='EEGRESS'; throw e; }
   return { status:j.status, statusText:j.statusText||'', headers:j.headers||{}, body: j.body ? _egUnb64(j.body) : new Uint8Array(0) };
 }
+
+// Minimal secure PAT entry (down payment on the full egress settings UX). Renders a
+// password field the user types into directly — the token goes straight to host-only
+// localStorage and is never read back by anything but egressFetch's Authorization
+// injection. Opened from Settings (and callable as window.nakliosGitAuthSetup()).
+function nakliosGitAuthSetup(){
+  if (document.getElementById('nakli-gitauth-modal')) return;
+  const g = gitAuthSettings() || {};
+  const wrap = document.createElement('div');
+  wrap.id = 'nakli-gitauth-modal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
+  wrap.innerHTML = '<div role="dialog" aria-label="Connect git push" style="background:#181b1f;color:#e6e9eb;padding:20px 22px;border-radius:12px;width:min(440px,92vw);box-sizing:border-box;box-shadow:0 12px 48px rgba(0,0,0,.55)">'
+    + '<div style="font-weight:600;font-size:14px;margin-bottom:4px">Connect git push</div>'
+    + '<div style="font-size:12px;color:#98a2a8;line-height:1.5;margin-bottom:14px">Paste a Personal Access Token (repo scope). It is stored on THIS device only and reaches GitHub through your own egress Worker — never a naklios server. Prefer a fine-grained token scoped to just the repo you push to.</div>'
+    + '<input id="nakli-gitauth-user" value="' + (g.username ? String(g.username).replace(/"/g,'&quot;') : '') + '" placeholder="git username (optional — default x-access-token)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px 10px;border-radius:6px;border:1px solid #2a2f34;background:#0f1215;color:#e6e9eb;font-size:13px">'
+    + '<input id="nakli-gitauth-token" type="password" autocomplete="off" placeholder="Personal Access Token" style="width:100%;box-sizing:border-box;margin-bottom:14px;padding:8px 10px;border-radius:6px;border:1px solid #2a2f34;background:#0f1215;color:#e6e9eb;font-size:13px">'
+    + '<div style="display:flex;gap:8px;justify-content:space-between;align-items:center">'
+    + '<button id="nakli-gitauth-clear" style="padding:6px 10px;background:transparent;color:#98a2a8;border:1px solid #2a2f34;border-radius:6px;font-size:12px;cursor:pointer">Remove token</button>'
+    + '<span style="flex:1"></span>'
+    + '<button id="nakli-gitauth-cancel" style="padding:6px 12px;background:#22272c;color:#e6e9eb;border:1px solid #2a2f34;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button>'
+    + '<button id="nakli-gitauth-save" style="padding:6px 14px;background:#f0a83c;color:#111;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Save</button>'
+    + '</div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+  document.getElementById('nakli-gitauth-cancel').onclick = close;
+  document.getElementById('nakli-gitauth-clear').onclick = () => { localStorage.removeItem('nakliOS.gitAuth.v1'); close(); };
+  document.getElementById('nakli-gitauth-save').onclick = () => {
+    const token = document.getElementById('nakli-gitauth-token').value.trim();
+    const username = document.getElementById('nakli-gitauth-user').value.trim();
+    if (token) localStorage.setItem('nakliOS.gitAuth.v1', JSON.stringify({ username: username || 'x-access-token', token, hosts: ['github.com','*.github.com','gitlab.com','*.gitlab.com'] }));
+    close();
+  };
+  setTimeout(() => { const t = document.getElementById('nakli-gitauth-token'); if (t) t.focus(); }, 30);
+}
+window.nakliosGitAuthSetup = nakliosGitAuthSetup;
 
 function capabilitySnapshot(appId){
   // fs is available if EITHER backend is connected AND the app isn't denied.
