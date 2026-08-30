@@ -167,9 +167,46 @@ Anvil's capabilities are at parity with desktop coding agents:
   automatically when they touch different files, and any conflict is held for you
   to resolve. `review` spawns an independent read-only reviewer for a second
   opinion. Only a subagent that finishes cleanly is merged.
+- **Remote git** — `git clone` / `fetch` / `push` to GitHub/GitLab, with all
+  network I/O routed through the [sovereign egress](#egress--sovereign-cross-origin-fetch-nakliosnet)
+  below. Your token is injected host-side, so the coding agent never sees it.
 
 The agent tier calls your configured endpoint (Settings → AI) for inference; see
 the tier split in [AI](#ai) above.
+
+## Egress — sovereign cross-origin fetch (`naklios.net`)
+
+Some things a browser tab simply can't do: push to GitHub, fetch a page for
+research, call an API that sends no CORS headers. The Same-Origin Policy blocks
+them. NakliOS adds one primitive for all of it —
+
+```js
+naklios.net.fetch({ url, method, headers, body }) // -> { status, headers, body }
+```
+
+— and routes it to a backend **you** configure. It is **never a naklios-hosted
+proxy:** a shared relay would put every user's code and tokens through our server.
+Two sovereign backends instead:
+
+- **`nakli-egress`** — a Cloudflare Worker *you* deploy on *your* account
+  ([`nakli-egress/`](nakli-egress/)). Every request carries an HMAC-signed envelope
+  (bad signature / stale timestamp / replayed nonce are rejected); a default-deny
+  **destination allowlist** and an SSRF guard bound where it can reach; it forwards
+  headers verbatim, logs nothing, and is stateless. Deleting the Worker revokes
+  egress instantly.
+- **`nakli-local-bridge`** — a helper on your own machine, for reaching
+  host-local services (on-device inference at `localhost`, LAN) and, as the
+  maximal-privacy path, egress that never touches any cloud.
+
+Honest scope: a web app can't tunnel TLS, so the relay does see the plaintext it
+forwards — the guarantee is that the relay is **your** infrastructure (your
+Worker, stateless, single-tenant), not ours. Egress is **opt-in**; the core
+(local files, local git, local AI) needs none of it.
+
+Consumers today: Anvil's remote git (`clone`/`fetch`/`push`). Git auth is a
+Personal Access Token held **host-side** and injected as the request leaves for
+your Worker — the coding agent never sees it. Next: browsing/RAG and any no-CORS
+API over the same primitive, and secrets moving into an encrypted vault.
 
 ## Mirroring an app for same-origin embedding
 
