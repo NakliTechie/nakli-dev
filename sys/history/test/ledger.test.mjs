@@ -64,7 +64,9 @@ await test('M0: a 2-app run replays every staged diff from the NDJSON alone', as
 await test('unknown door rejected; DOORS frozen', async () => {
   let threw = false; try { await appendEvent(null, { ts: 1, principal: 'p', door: 'sideways', tool: 't', app: 'a', input: {}, output: {} }); } catch (_) { threw = true; }
   assert(threw, 'bad door rejected');
-  assert(DOORS.includes('ui') && DOORS.includes('call') && DOORS.includes('brief'), 'doors');
+  assert(DOORS.includes('ui') && DOORS.includes('call') && DOORS.includes('brief') && DOORS.includes('net'), 'doors');
+  const netEvt = await appendEvent(null, { ts: 1, principal: 'p', door: 'net', tool: 'fetch', app: 'anvil', input: { url_host: 'github.com' }, output: { status: 200 } });
+  assert(netEvt && netEvt.event.door === 'net', 'net door accepted (egress History entry)');
 });
 
 if (failures.length) { console.error(`history/ledger: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }

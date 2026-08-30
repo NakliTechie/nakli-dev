@@ -10,7 +10,7 @@
 // obeys §11's "no second ledger" — integrity lives in History, not a parallel chain.
 //
 // The doc's block-level `door` vocabulary (modelContext/window/channel/system) does
-// not match History's DOORS (ui/call/brief); we map by actor kind (person→ui, else
+// not match History's DOORS (ui/call/brief/net); we map by actor kind (person→ui, else
 // call) so blocks are valid History events. Reconcile the vocab when wiring the UI.
 
 import { appendEvent, verifyChain, contentHash } from '../history/ledger.mjs';
