@@ -245,6 +245,13 @@ $('palList').addEventListener('click',e=>{const it=e.target.closest('.it');if(!i
 $('pal').addEventListener('click',e=>{if(e.target.id==='pal')closePal();});
 
 render();
+
+// Endpoint default follows the deployment: from a public https origin
+// (naklios.dev) use the loopback-cert host over wss; from a localhost-served
+// page use plaintext ws. Editable either way.
+try {
+  if (location.protocol === 'https:') $('ws').value = 'wss://local.naklios.dev:9130';
+} catch (_) {}
 </script>
 </body>
 </html>

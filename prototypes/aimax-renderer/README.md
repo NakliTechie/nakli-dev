@@ -90,14 +90,48 @@ is refused, and the browser doesn't even send the Private Network Access
 preflight. (The bridge now answers that PNA preflight anyway — see
 `Access-Control-Allow-Private-Network` — because it's half of the eventual fix.)
 
-**To make naklios.dev → a local daemon work you need `wss://`:** the bridge
-serves TLS with a locally-trusted cert (e.g. `mkcert` for `127.0.0.1` or a
-loopback host), so it's secure-to-secure (no mixed content) and the PNA grant
-covers the public→local hop. That installs a local CA into the system trust
-store — a deliberate step, not done here. Until then, the intended deployment
-for a *local* daemon is to **serve the renderer from localhost** (or have the
-daemon serve it); a public-origin renderer talking to your localhost is exactly
-what browsers work to prevent.
+**To make naklios.dev → a local daemon work you need `wss://`.** The bridge
+supports it: set `TLS_CERT` + `TLS_KEY` and it serves `wss` instead of `ws`.
+
+### Pattern B — naklios.dev over wss, zero per-user cert install
+
+The chosen shape (identity = naklios.dev for everyone). Uses the loopback + real
+cert pattern that Plex / Discord / 1Password use: a **real** Let's Encrypt cert
+for a name that resolves to `127.0.0.1`, shipped with the bridge, so the browser
+trusts it with **no CA install** on any user's machine.
+
+One-time infra (operator, credentialed — `setup-cert.sh` does it):
+
+```bash
+export CF_API_TOKEN=<Cloudflare token: Zone:DNS:Edit on naklios.dev>
+bash prototypes/aimax-renderer/setup-cert.sh
+#   → DNS: local.naklios.dev A 127.0.0.1 (DNS-only)
+#   → Let's Encrypt cert (DNS-01) → prototypes/aimax-renderer/tls/{cert,key}.pem
+```
+
+Then run the bridge in wss mode + open the deployed renderer:
+
+```bash
+TLS_CERT=…/tls/cert.pem TLS_KEY=…/tls/key.pem \
+  node prototypes/aimax-renderer/bridge.mjs ~/.aimax/sock 9130
+# https://naklios.dev/prototypes/aimax-renderer/aimax → Connect (wss://local.naklios.dev:9130)
+```
+
+Why it's zero-setup **for end users**: the DNS name is public (resolves to their
+own loopback) and the cert is a real LE cert already trusted by every browser —
+so a user just runs the bridge (which carries the cert) and opens naklios.dev.
+The cert's key ships in the client, so it's effectively public, but it only
+certifies `127.0.0.1`, so it can't MITM real sites (the accepted tradeoff).
+
+Verified locally end to end with a self-signed cert (TLS handshake + a
+`get_state` round-trip over wss, `Origin: https://naklios.dev` accepted). The
+real-cert step (`setup-cert.sh`) needs the operator's Cloudflare token.
+
+`tls/` (the key) is gitignored — never commit it.
+
+If you'd rather not run cert infra, the alternative is to **serve the renderer
+from localhost** (`ws://`, no cert) — sovereign and zero-infra, but the address
+bar is `localhost`, not `naklios.dev`.
 
 **The real security control is the reverse of CORS.** *Because* ws skips CORS,
 any website you happen to be visiting could run `new WebSocket('ws://localhost:9130')`

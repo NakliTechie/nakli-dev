@@ -15,8 +15,10 @@
 // Zero deps. Hand-rolled RFC6455 (text frames). One unix connection per ws client.
 
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -24,6 +26,17 @@ const rawSock = process.argv[2] || path.join(os.homedir(), '.aimax', 'sock');
 const SOCK = rawSock.replace(/^~(?=$|\/)/, os.homedir());
 const PORT = Number(process.argv[3] || process.env.PORT || 9130);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+// TLS (wss) mode — set TLS_CERT + TLS_KEY to PEM paths. This is the path that
+// lets a public https origin (naklios.dev) reach the local daemon: secure page →
+// secure socket, no mixed content. With a REAL cert for a name that resolves to
+// 127.0.0.1 (local.naklios.dev), the browser trusts it with zero per-user setup
+// (the Plex/Discord loopback-cert pattern). Without these, the bridge serves
+// plaintext ws (fine for a localhost-served renderer).
+const TLS = process.env.TLS_CERT && process.env.TLS_KEY
+  ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) }
+  : null;
+const SCHEME = TLS ? 'wss' : 'ws';
 
 // WebSockets are NOT gated by CORS, so a page on ANY site you visit could open
 // ws://localhost and drive your local daemon. The bridge must check Origin
@@ -44,7 +57,7 @@ function originOk(origin) {
 // Answer it — with the private-network grant — for allowed origins, else the
 // connection is blocked before it ever reaches the socket. (This is what lets
 // naklios.dev talk to a local daemon; localhost-served pages skip the preflight.)
-const server = http.createServer((req, res) => {
+function handleRequest(req, res) {
   const origin = req.headers['origin'] || '';
   if (req.method === 'OPTIONS') {
     if (originOk(origin)) {
@@ -65,7 +78,9 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(426); res.end('websocket only');
-});
+}
+
+const server = TLS ? https.createServer(TLS, handleRequest) : http.createServer(handleRequest);
 
 server.on('upgrade', (req, ws) => {
   const origin = req.headers['origin'] || '';
@@ -137,4 +152,4 @@ function decode(buf) {
   return { messages, rest: buf.slice(o) };
 }
 
-server.listen(PORT, () => console.log(`nakli-local-bridge: ws://localhost:${PORT}  ↔  ${SOCK}`));
+server.listen(PORT, () => console.log(`nakli-local-bridge: ${SCHEME}://localhost:${PORT}  ↔  ${SOCK}${TLS ? '  (TLS)' : ''}`));

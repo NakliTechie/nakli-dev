@@ -30,6 +30,9 @@ plan/
 nakli-egress/.dev.secret
 !prototypes/
 !prototypes/**
+prototypes/aimax-renderer/tls/
+prototypes/**/*.pem
+prototypes/**/*.key
 
 # wrangler files
 .wrangler
