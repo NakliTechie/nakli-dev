@@ -69,6 +69,39 @@ Gaps (open questions for svs, not blockers): `get_state` exposes buffer
 metadata + cursor but **not** window layout or buffer text (text comes via
 `eval`); v0 renders the current buffer + a tab per buffer.
 
+### How it connects — and why it's NOT a CORS thing
+
+The renderer opens a plain `new WebSocket(url)` to the bridge. Two facts people
+usually get backwards:
+
+1. **WebSockets are not subject to CORS.** No preflight, no
+   `Access-Control-Allow-Origin`. The handshake carries an `Origin` header, but
+   nothing *requires* the server to answer it a particular way to connect. So
+   "make the bridge CORS-compliant" is a non-goal — CORS isn't the gate.
+2. **The browser gate is mixed content**, not CORS: an `https://` page cannot
+   open `ws://`. `localhost` is exempt (a trustworthy origin), so serving the
+   renderer from `http://localhost` and dialing `ws://localhost` just works —
+   which is the recipe above. From `https://naklios.dev` you'd need the bridge
+   on `wss://` (a local cert) or rely on the localhost mixed-content exemption.
+
+**The real security control is the reverse of CORS.** *Because* ws skips CORS,
+any website you happen to be visiting could run `new WebSocket('ws://localhost:9130')`
+and drive your local daemon. So the bridge enforces its **own Origin allowlist**
+(`ALLOW_ORIGINS`, default `http://localhost:8000` + `https://naklios.dev`); a
+request from any other origin gets `403`. A request with no Origin (a non-browser
+client — node, curl — which could reach the unix socket directly anyway) is
+allowed. Verified: `Origin: https://evil.example.com` → 403; `http://localhost:8000`
+→ accepted. This is the same class of control the egress Worker applies, just at
+the local-bridge boundary.
+
+### Where the connection settings live
+
+In this prototype: the **ws URL field + Connect button** in the toolbar (default
+`ws://localhost:9130`) — that's the whole config surface. There is no persistent
+store yet. In a real naklios integration this would move into the host's
+bridge/egress settings (the `nakliOS.gitAuth` / egress-settings pattern), and the
+allowlist would be the host's, not a per-prototype default.
+
 ## Files
 
 | file | what |

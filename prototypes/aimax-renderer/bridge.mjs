@@ -25,9 +25,30 @@ const SOCK = rawSock.replace(/^~(?=$|\/)/, os.homedir());
 const PORT = Number(process.argv[3] || process.env.PORT || 9130);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
+// WebSockets are NOT gated by CORS, so a page on ANY site you visit could open
+// ws://localhost and drive your local daemon. The bridge must check Origin
+// itself. Allow same-machine renderers + naklios.dev by default; a request with
+// NO Origin (a non-browser client — node, curl) is allowed (it can reach the
+// unix socket directly anyway). Override with ALLOW_ORIGINS=comma,list.
+const ALLOW_ORIGINS = (process.env.ALLOW_ORIGINS ||
+  'http://localhost:8000,http://127.0.0.1:8000,https://naklios.dev')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+function originOk(origin) {
+  if (!origin) return true;                 // non-browser client (no Origin header)
+  return ALLOW_ORIGINS.includes(origin);
+}
+
 const server = http.createServer((_, res) => { res.writeHead(426); res.end('websocket only'); });
 
 server.on('upgrade', (req, ws) => {
+  const origin = req.headers['origin'] || '';
+  if (!originOk(origin)) {
+    console.error('REJECTED ws upgrade from origin:', origin || '(none)');
+    ws.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    try { ws.destroy(); } catch (_) {}
+    return;
+  }
+  console.log('accepted ws upgrade from origin:', origin || '(none, non-browser)');
   const key = req.headers['sec-websocket-key'];
   const accept = crypto.createHash('sha1').update(key + GUID).digest('base64');
   ws.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
