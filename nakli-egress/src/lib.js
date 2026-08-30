@@ -81,9 +81,13 @@ export function hostAllowed(urlStr, allowlist) {
 // Block obvious internal/loopback/metadata targets (defense-in-depth under the
 // allowlist). Literal-IP based; the allowlist is the primary guard.
 export function isPrivateHost(host) {
-  const h = String(host || '').toLowerCase();
+  let h = String(host || '').toLowerCase().replace(/\.+$/, ''); // drop trailing dot(s)
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);  // unwrap IPv6 literal
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
   if (h === '169.254.169.254') return true; // cloud metadata
+  // IPv4-mapped IPv6 (::ffff:127.0.0.1) → evaluate the embedded IPv4.
+  const mapped = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (mapped) h = mapped[1];
   // IPv4 literal ranges
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
@@ -94,7 +98,8 @@ export function isPrivateHost(host) {
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
   }
-  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')) return true; // IPv6 loopback/ULA/link-local
+  // IPv6 loopback (::1, ::), ULA (fc00::/7 → fc/fd), link-local (fe80::/10 → fe8/fe9/fea/feb)
+  if (h === '::1' || h === '::' || /^(fc|fd|fe8|fe9|fea|feb)/.test(h)) return true;
   return false;
 }
 
@@ -106,11 +111,19 @@ export async function verifyEnvelope(env, secret, { now, windowSec = 300, seenNo
   if (!url || !nonce || !ts || !sig) return { ok: false, reason: 'missing fields' };
   const skew = Math.abs(Number(now) - Number(ts));
   if (!Number.isFinite(skew) || skew > windowSec * 1000) return { ok: false, reason: 'stale timestamp' };
-  if (seenNonce && seenNonce(nonce)) return { ok: false, reason: 'replayed nonce' };
-  const bodyBytes = body ? b64ToBytes(body) : new Uint8Array(0);
+  // Decode + hash the body and verify the SIGNATURE first — before touching any
+  // shared/persistent state. This is the order that matters: an unauthenticated
+  // caller must not be able to mutate the nonce store (a fresh-nonce flood would
+  // otherwise grow it unboundedly → isolate OOM). Body hashing is unavoidable
+  // pre-auth (it's part of what's signed) but is bounded by the request-size cap.
+  let bodyBytes;
+  try { bodyBytes = body ? b64ToBytes(body) : new Uint8Array(0); }
+  catch (_) { return { ok: false, reason: 'bad body encoding' }; }
   const bodySha256 = body ? await sha256Hex(bodyBytes) : '';
   const expect = await hmacHex(secret, canonicalString({ method, url, headers, bodySha256, nonce, ts }));
   if (!timingSafeEqual(expect, String(sig))) return { ok: false, reason: 'bad signature' };
+  // Authenticated: NOW enforce single-use. Only a valid signature can grow `seen`.
+  if (seenNonce && seenNonce(nonce)) return { ok: false, reason: 'replayed nonce' };
   return { ok: true, req: { url, method, headers, bodyBytes } };
 }
 

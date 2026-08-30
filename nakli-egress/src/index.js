@@ -17,6 +17,41 @@ import { verifyEnvelope, hostAllowed, HOP_BY_HOP, bytesToB64 } from './lib.js';
 const NONCE_TTL_MS = 6 * 60 * 1000;      // a hair over the ts window
 const seen = new Map();                  // nonce -> expiry (best-effort, per-isolate)
 
+const MAX_REQ_BYTES = 25 * 1024 * 1024;  // reject request bodies over 25 MB
+const MAX_RESP_BYTES = 50 * 1024 * 1024; // abort upstream responses over 50 MB
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
+
+// Coarse per-isolate throughput brake. Not a global limiter (that needs a Durable
+// Object / KV — see the spec) but it bounds a runaway flood's cost per isolate.
+// Generous for one user's git traffic; trips only on egregious volume.
+const RATE_MAX_PER_MIN = 600;
+const rate = { count: 0, resetAt: 0 };
+function rateTrip(now) {
+  if (now > rate.resetAt) { rate.count = 0; rate.resetAt = now + 60_000; }
+  rate.count += 1;
+  return rate.count > RATE_MAX_PER_MIN;
+}
+
+// Read an upstream body with a hard byte cap, so a huge response can't OOM the
+// isolate. Returns null if the cap is exceeded.
+async function readCapped(resp, max) {
+  if (!resp.body) return new Uint8Array(0);
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) { try { await reader.cancel(); } catch (_) {} return null; }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
 function corsHeaders(origin, allowOrigins) {
   const ok = allowOrigins.includes(origin) || allowOrigins.includes('*');
   return {
@@ -52,29 +87,53 @@ export default {
     if (!env.EGRESS_SECRET) return json({ ok: false, error: 'worker not configured (EGRESS_SECRET unset)' }, 500, cors);
     const allowlist = parseList(env.ALLOWLIST || 'github.com,*.github.com,*.githubusercontent.com,gitlab.com');
 
+    const now = Date.now();
+    if (rateTrip(now)) return json({ ok: false, error: 'rate limited' }, 429, cors);
+
+    // Reject an oversized request body before reading it into memory.
+    const clen = Number(request.headers.get('content-length') || 0);
+    if (clen && clen > MAX_REQ_BYTES) return json({ ok: false, error: 'request too large' }, 413, cors);
+
     let envelope;
     try { envelope = await request.json(); } catch (_) { return json({ ok: false, error: 'bad json' }, 400, cors); }
 
-    const now = Date.now();
-    const v = await verifyEnvelope(envelope, env.EGRESS_SECRET, {
-      now,
-      seenNonce: (n) => {
-        for (const [k, exp] of seen) if (exp < now) seen.delete(k); // sweep
-        if (seen.has(n)) return true;
-        seen.set(n, now + NONCE_TTL_MS);
-        return false;
-      },
-    });
+    let v;
+    try {
+      v = await verifyEnvelope(envelope, env.EGRESS_SECRET, {
+        now,
+        seenNonce: (n) => {
+          for (const [k, exp] of seen) if (exp < now) seen.delete(k); // sweep
+          if (seen.has(n)) return true;
+          seen.set(n, now + NONCE_TTL_MS);
+          return false;
+        },
+      });
+    } catch (_) { return json({ ok: false, error: 'bad request' }, 400, cors); }
     if (!v.ok) return json({ ok: false, error: 'unauthorized: ' + v.reason }, 401, cors);
 
     const { url, method, headers, bodyBytes } = v.req;
+    if (!ALLOWED_METHODS.has(String(method).toUpperCase())) return json({ ok: false, error: 'method not allowed' }, 405, cors);
     if (!hostAllowed(url, allowlist)) return json({ ok: false, error: 'destination not allowed: ' + hostForLog(url) }, 403, cors);
+    if (bodyBytes && bodyBytes.length > MAX_REQ_BYTES) return json({ ok: false, error: 'request too large' }, 413, cors);
 
-    // Forward headers verbatim (incl. Authorization) minus hop-by-hop; let fetch
-    // set host/content-length. NEVER log headers or bodies.
+    // Build the forwarded headers verbatim (incl. Authorization) minus hop-by-hop;
+    // a bad value (CRLF) makes Headers.set throw — caught as a clean 400, never
+    // smuggled upstream. NEVER log headers or bodies.
     const fwd = new Headers();
-    for (const [k, val] of Object.entries(headers || {})) {
-      if (!HOP_BY_HOP.has(String(k).toLowerCase())) fwd.set(k, val);
+    let hasAuth = false;
+    try {
+      for (const [k, val] of Object.entries(headers || {})) {
+        const lk = String(k).toLowerCase();
+        if (HOP_BY_HOP.has(lk)) continue;
+        if (lk === 'authorization') hasAuth = true;
+        fwd.set(k, val);
+      }
+    } catch (_) { return json({ ok: false, error: 'invalid header' }, 400, cors); }
+
+    // Refuse to egress credentials over cleartext http (downgrade footgun).
+    if (hasAuth) {
+      let proto = ''; try { proto = new URL(url).protocol; } catch (_) {}
+      if (proto !== 'https:') return json({ ok: false, error: 'credentialed request must use https' }, 400, cors);
     }
 
     let upstream;
@@ -89,13 +148,19 @@ export default {
       return json({ ok: false, error: 'upstream fetch failed: ' + (e && e.message || e) }, 502, cors);
     }
 
+    // Read the response under a hard byte cap so a huge upstream can't OOM us.
+    const respBytes = await readCapped(upstream, MAX_RESP_BYTES);
+    if (respBytes === null) return json({ ok: false, error: 'upstream response too large' }, 502, cors);
+
     // A redirect is returned to the client (with the Location) rather than
     // followed, so the client can re-issue through the same allowlisted path.
+    // Drop Set-Cookie — never surface an upstream's cookies to the calling app.
     const outHeaders = {};
     for (const [k, val] of upstream.headers) {
-      if (!HOP_BY_HOP.has(k.toLowerCase())) outHeaders[k] = val;
+      const lk = k.toLowerCase();
+      if (HOP_BY_HOP.has(lk) || lk === 'set-cookie') continue;
+      outHeaders[k] = val;
     }
-    const respBytes = new Uint8Array(await upstream.arrayBuffer());
     return json({
       ok: true,
       status: upstream.status,

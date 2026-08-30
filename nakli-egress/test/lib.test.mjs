@@ -38,6 +38,15 @@ await (async () => {
   ok('metadata IP blocked', isPrivateHost('169.254.169.254'));
   ok('public IP allowed', !isPrivateHost('140.82.121.3'));
   ok('allowlist rejects a private target even if rule is loose', !hostAllowed('http://127.0.0.1/x', ['*.0.0.1', '127.0.0.1']));
+  // hardened SSRF cases (audit #4)
+  ok('bracketed IPv6 loopback blocked', isPrivateHost('[::1]'));
+  ok('bare IPv6 loopback blocked', isPrivateHost('::1'));
+  ok('IPv4-mapped IPv6 loopback blocked', isPrivateHost('::ffff:127.0.0.1'));
+  ok('bracketed IPv4-mapped metadata blocked', isPrivateHost('[::ffff:169.254.169.254]'));
+  ok('trailing-dot loopback literal blocked', isPrivateHost('127.0.0.1.'));
+  ok('ULA fd00 blocked', isPrivateHost('fd12:3456::1'));
+  ok('link-local fe80 blocked', isPrivateHost('fe80::1'));
+  ok('public IPv6 allowed', !isPrivateHost('2606:4700::1111'));
 
   // ── envelope verification ──
   const good = await sign(SECRET, { url: 'https://github.com/a/b.git/info/refs?service=git-receive-pack', ts: now, nonce: 'n1' });
@@ -70,6 +79,19 @@ await (async () => {
   const rep = await sign(SECRET, { url: 'https://github.com/x', ts: now, nonce: 'n4' });
   ok('first use of a nonce passes', (await verifyEnvelope(rep, SECRET, { now, seenNonce })).ok);
   ok('replayed nonce rejected', !(await verifyEnvelope(rep, SECRET, { now, seenNonce })).ok);
+
+  // audit #1: an UNAUTHENTICATED request must NOT consume/grow the nonce store.
+  const guard = new Set();
+  const guardNonce = (n) => { if (guard.has(n)) return true; guard.add(n); return false; };
+  const forged = { url: 'https://github.com/x', method: 'GET', headers: {}, body: null, nonce: 'attacker', ts: now, sig: 'deadbeef' };
+  const fr = await verifyEnvelope(forged, SECRET, { now, seenNonce: guardNonce });
+  ok('forged request rejected as bad signature (not replay)', !fr.ok && fr.reason === 'bad signature');
+  ok('forged request did NOT touch the nonce store', !guard.has('attacker'));
+
+  // audit #6: malformed base64 body → clean reason, no throw
+  const badB64 = { url: 'https://github.com/x', method: 'POST', headers: {}, body: '@@not-base64@@', nonce: 'n5', ts: now, sig: 'x' };
+  const br = await verifyEnvelope(badB64, SECRET, { now });
+  ok('malformed body encoding handled cleanly', !br.ok && br.reason === 'bad body encoding');
 
   // ── misc ──
   ok('canonical headers lowercase+sorted, drop hop-by-hop', canonicalHeaders({ 'B': '2', 'a': '1', 'Host': 'x' }) === 'a:1\nb:2');
