@@ -1459,6 +1459,21 @@
     // Remote git through the egress transport (probe). References the live `git` binding.
     gitClone:async(url, opts)=>{ try{ const r=await git.clone(Object.assign({ url, singleBranch:true, depth:1 }, opts||{})); return { ok:true, branch:r&&r.branch, hasOid: !!(r&&r.oid) }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
     gitLsRemote:async(url)=>{ try{ const r=await git.listServerRefs({ url }); return { ok:true, refCount: r&&r.refs?Object.keys(r.refs).length:0 }; }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
+    // Isolated push M0: a fresh in-memory repo (never the dirty workspace) → commit →
+    // push over the egress transport. Auth (PAT) is injected host-side; nothing here.
+    gitPushTest:async(url, marker)=>{ try{
+      const tfs = createFileops({ backend: new MemoryBackend() });
+      const tp = (nak && nak.net && typeof nak.net.fetch==='function') ? new HttpTransport({ http: naklHttp((req)=>nak.net.fetch(req)) }) : null;
+      if(!tp) return { ok:false, error:'no egress transport' };
+      const tg = createGitCore({ fs: tfs, dir:'/', transport: tp });
+      await tg.init({ defaultBranch:'main' });
+      const stamp = String(marker||('m'+Math.random().toString(36).slice(2)));
+      await tfs.write('HELLO.md', '# Hello from the NakliOS sovereign egress\n\nmarker: '+stamp+'\n');
+      await tg.add({ filepath:'HELLO.md' });
+      const c = await tg.commit({ message:'egress push M0 ('+stamp+')', actor:'agent' });
+      const p = await tg.push({ url, ref:'main', remoteRef:'main' });
+      return { ok: (p&&p.ok!==false), oid: c&&c.oid, marker: stamp, pushErr: (p&&p.error)||null };
+    }catch(e){ return { ok:false, error:String(e&&e.message||e) }; } },
   }) });
 
   // ── boot ──
