@@ -165,7 +165,7 @@
   <ul class="plain">
     <li>aimax built and runnable (<code>--headless</code> mode — it's already in your <code>tui/src/main.rs</code>).</li>
     <li>Node 18+ (for the bridge).</li>
-    <li>The <b>nakli-local-bridge</b> bundle (Chirag sends you the zip — it carries the cert; see the last section for why that's fine).</li>
+    <li>Nothing to download ahead of time — step 2 fetches the bridge in one command.</li>
   </ul>
 
   <ol class="steps">
@@ -178,11 +178,11 @@
     </li>
     <li>
       <span class="badge">2</span>
-      <h3>Run the bridge</h3>
-      <p class="muted">Unzip the bundle and run it. It exposes your unix socket as a WebSocket the browser can
-        reach, and serves it over TLS with a real cert for <code>local.naklios.dev</code>.</p>
-      <pre><code>unzip nakli-local-bridge.zip &amp;&amp; cd nakli-local-bridge
-node bridge.mjs
+      <h3>Fetch &amp; run the bridge</h3>
+      <p class="muted">One command grabs a single self-contained file and runs it. It exposes your unix
+        socket as a WebSocket the browser can reach, over TLS with a real cert for
+        <code>local.naklios.dev</code>. (Open the file first if you'd rather read it before running.)</p>
+      <pre><code>curl -fsSL https://bridge.naklios.dev -o nakli-bridge.mjs &amp;&amp; node nakli-bridge.mjs
 <span class="c"># → nakli-local-bridge: </span><span class="k">wss://localhost:9130</span><span class="c">  ↔  ~/.aimax/sock  (TLS)</span></code></pre>
     </li>
     <li>
@@ -218,7 +218,7 @@ node bridge.mjs
   <div class="tbl">
     <div><div class="sym">Stuck on “connecting…”</div><div class="fix">The local-network prompt is waiting — click Allow. If you dismissed it, reload and Connect again.</div></div>
     <div><div class="sym">“disconnected” immediately</div><div class="fix">Is <code>aimax --headless</code> running? Is <code>node bridge.mjs</code> running? The bridge needs both the socket and the browser.</div></div>
-    <div><div class="sym">TLS / cert error</div><div class="fix">Run the bridge from inside the unzipped bundle so it finds <code>certs/</code>. Don't move <code>bridge.mjs</code> out of the folder.</div></div>
+    <div><div class="sym">TLS / cert error</div><div class="fix">Re-fetch the file (<code>curl -fsSL https://bridge.naklios.dev -o nakli-bridge.mjs</code>) — the cert is embedded in it; the cert renews every ~90 days.</div></div>
     <div><div class="sym">Nothing renders but status is connected</div><div class="fix">Open <b>wire ▾</b> (top right) to see the JSON-RPC traffic; check the bridge terminal for errors.</div></div>
   </div>
 
@@ -235,7 +235,7 @@ node bridge.mjs
     no cert install. The bridge just shims your unix socket to that wss endpoint.</p>
   <div class="callout key">
     <span class="tag">About the shipped cert</span>
-    <p>The bundle includes the cert's private key. That's intentional: the cert only certifies
+    <p>The file includes the cert's private key. That's intentional: the cert only certifies
       <code>127.0.0.1</code>, which never leaves your machine — there's no network path to intercept, so it
       can't MITM anything. Same pattern Plex and Discord use for their local helpers.</p>
   </div>

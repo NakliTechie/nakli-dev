@@ -70,7 +70,7 @@
     <span class="sp"></span>
     <span class="who" id="who">not connected — start aimax <b>--headless</b> + the bridge, then Connect</span>
     <button id="evalBtn" title="run Scheme (Cmd-K)">M-x</button>
-    <a href="index.html" title="the strawman/mock renderer">strawman →</a>
+    <a href="guide.html" title="how to set this up">first time? setup guide ↗</a>
     <button id="wireBtn">wire ▾</button>
   </div>
 
@@ -207,14 +207,26 @@ $('connect').onclick=()=>{
     if(socket)socket.close();
     socket=new WebSocket(url); setWho('connecting…'); setDot(false);
     let acc='';
+    // UX1: a public https page reaching localhost triggers Chrome's Private
+    // Network Access prompt; the socket sits in CONNECTING until the user allows
+    // it. Coach that instead of leaving them on a silent "connecting…".
+    const pnaCoach=setTimeout(()=>{ if(socket&&socket.readyState===0)
+      setWho('connecting… <b style="color:var(--warn)">if this is stuck, click Allow on Chrome\'s “access your local network” prompt.</b>'); },1500);
     socket.onopen=async()=>{
+      clearTimeout(pnaCoach);
       setDot(true); setWho('connected — <b>aimax</b> over JSON-RPC');
       await rpc('subscribe',{events:['buffer_changed','buffer_created','buffer_killed','chat_message','process_output','process_exit']}).catch(()=>{});
       refresh(); $('buf').focus();
     };
     socket.onmessage=(ev)=>{ acc+=ev.data; let nl; while((nl=acc.indexOf('\n'))>=0){ const l=acc.slice(0,nl); acc=acc.slice(nl+1); if(l.trim())onLine(l); } if(acc.trim()){ onLine(acc); acc=''; } };
-    socket.onclose=()=>{ setDot(false); setWho('disconnected'); };
-    socket.onerror=()=>setWho('<span style="color:var(--warn)">connect failed — bridge on '+esc(url)+'? (serve this from localhost)</span>');
+    socket.onclose=()=>{ clearTimeout(pnaCoach); setDot(false); setWho('disconnected'); };
+    // UX4: endpoint-aware error — the "serve from localhost" hint is only right
+    // for a ws:// (localhost-served) page; on wss:// (naklios.dev) the fix is the
+    // bridge + the local-network prompt.
+    socket.onerror=()=>{ clearTimeout(pnaCoach);
+      const wss=url.startsWith('wss://');
+      setWho('<span style="color:var(--warn)">connect failed — is the bridge running? '+
+        (wss?'and did you Allow the “access local network” prompt?':'(serve this page from localhost)')+'</span>'); };
   }catch(_){ setWho('bad url'); }
 };
 

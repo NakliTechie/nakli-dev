@@ -41,12 +41,19 @@ const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 //      public (loopback-only); see certs/README.md. Kept out of the source repo
 //      (gitignored), included in the release package.
 //   3. none → plaintext ws (fine for a localhost-served renderer).
+// Embedded cert — EMPTY in the source repo (never commit a key). The hosted
+// single-file build (served for the `curl … | node` one-click) injects the
+// base64 cert+key here, so that one downloaded file runs wss with no extra files.
+const EMBEDDED_CERT_B64 = '';
+const EMBEDDED_KEY_B64 = '';
 function loadTLS() {
   try {
     if (process.env.TLS_CERT && process.env.TLS_KEY)
       return { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) };
     const c = path.join(DIR, 'certs', 'fullchain.pem'), k = path.join(DIR, 'certs', 'privkey.pem');
     if (fs.existsSync(c) && fs.existsSync(k)) return { cert: fs.readFileSync(c), key: fs.readFileSync(k), bundled: true };
+    if (EMBEDDED_CERT_B64 && EMBEDDED_KEY_B64)
+      return { cert: Buffer.from(EMBEDDED_CERT_B64, 'base64'), key: Buffer.from(EMBEDDED_KEY_B64, 'base64'), bundled: true };
   } catch (e) { console.error('TLS load failed:', e.message); }
   return null;
 }

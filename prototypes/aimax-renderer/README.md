@@ -129,9 +129,10 @@ Once the operator has done the one-time infra (DNS + cert + deployed renderer),
 anyone else does just this — **no cert install, no DNS config**:
 
 1. **Run their aimax daemon:** `aimax --headless` (IPC on `~/.aimax/sock`).
-2. **Run the bridge** (it carries the bundled cert): `node bridge.mjs` — it
-   auto-loads `certs/` and serves `wss://local.naklios.dev:9130`. (Packaged, this
-   is one command, e.g. `npx nakli-local-bridge`.)
+2. **Fetch + run the bridge** — one command, no files to place:
+   `curl -fsSL https://bridge.naklios.dev -o nakli-bridge.mjs && node nakli-bridge.mjs`.
+   It's a single self-contained file (cert embedded) that serves
+   `wss://local.naklios.dev:9130`.
 3. **Open** `https://naklios.dev/prototypes/aimax-renderer/aimax` → **Connect**.
    → **Chrome shows a "naklios.dev wants to access devices on your local network"
    prompt → click Allow.** This is Chrome's Private Network Access consent; it is
@@ -140,10 +141,16 @@ anyone else does just this — **no cert install, no DNS config**:
 
 That's it: their aimax renders inside naklios.dev, browser-trusted, over wss.
 
-**Operator packaging (pattern A):** the `local.naklios.dev` cert+key live in
-`certs/` (gitignored — kept out of the public repo) and are included in the
-**release artifact** (npm/tarball/binary), so the user's bridge has them without
-any setup. See `certs/README.md` for the security rationale and 90-day rotation.
+**Operator delivery (hosted one-click):** `bridge.naklios.dev` is a standalone
+Cloudflare Worker (`nakli-aimax-bridge`) that serves a **self-contained**
+`bridge.mjs` with the cert injected into `EMBEDDED_CERT_B64`/`EMBEDDED_KEY_B64`
+(empty in git — never committed). The Worker source lives outside the repo (holds
+the key). To rebuild after a 90-day cert renewal: re-run `setup-cert.sh`, copy the
+new cert into `certs/`, regenerate the self-contained file (inject base64 into the
+two consts), and `wrangler deploy` the Worker. The key is deliberately public
+(loopback-only) — see `certs/README.md`. This is effectively the option-B public
+key by design: one-click convenience in exchange for slightly higher rotation
+cadence if the CA revokes.
 
 Verified live on naklios.dev end to end: a public https page rendered — and
 **edited** — a buffer in a local aimax daemon over wss, confirmed by an
