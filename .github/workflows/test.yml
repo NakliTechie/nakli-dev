@@ -150,6 +150,9 @@ jobs:
       - name: Verify NakliAmp mirror, locality, and preview contract
         run: node scripts/test-nakliamp-integration.mjs
 
+      - name: Verify paired Compos relay and downloadable artifact Worker
+        run: node --test prototypes/compos/bridge.test.mjs prototypes/compos/relay-worker.test.mjs
+
       - name: Verify static-asset delivery exclusions
         run: node scripts/verify-delivery.mjs
 

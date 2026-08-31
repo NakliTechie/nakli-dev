@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Run the native Compos browser client inside NakliOS through a paired local bridge.">
+  <title>NakliOS · Compos prototype</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07100d;--panel:#0d1814;--line:#263a31;--fg:#eef7f1;--muted:#9db1a6;--brand:#73e2a7;--warn:#f1bf6b}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 12% 0,#163226 0,transparent 34rem),var(--bg);color:var(--fg);font:15px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
+    a{color:var(--brand)}button,input{font:inherit}.shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}.top{display:flex;gap:14px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);background:#07100de8;backdrop-filter:blur(12px)}
+    .mark{font-weight:800;letter-spacing:.06em}.mark span{color:var(--brand)}.tag{color:var(--muted);font-size:12px}.top a{margin-left:auto}.setup{width:min(820px,calc(100% - 32px));margin:6vh auto;padding:28px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#102019,#0a1410);box-shadow:0 24px 80px #0008}
+    h1{font-size:clamp(28px,5vw,54px);line-height:1.05;margin:0 0 14px;letter-spacing:-.05em}h1 em{color:var(--brand);font-style:normal}.lede{color:var(--muted);max-width:68ch}.steps{display:grid;gap:10px;margin:24px 0}.step{display:grid;grid-template-columns:28px 1fr;gap:10px}.n{width:24px;height:24px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;color:var(--brand)}code{color:#c7f9dd;background:#06100b;padding:2px 5px;border-radius:5px;overflow-wrap:anywhere}
+    form{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:10px;margin-top:22px}label{display:grid;gap:5px;color:var(--muted);font-size:12px}input{width:100%;border:1px solid var(--line);background:#060d09;color:var(--fg);padding:11px 12px;border-radius:9px;outline:none}input:focus{border-color:var(--brand);box-shadow:0 0 0 3px #73e2a722}button{align-self:end;border:0;border-radius:9px;background:var(--brand);color:#04100a;font-weight:800;padding:12px 18px;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid var(--warn);outline-offset:3px}.status{min-height:24px;margin-top:12px;color:var(--muted)}.status.warn{color:var(--warn)}
+    .viewer{display:none;min-height:0}.viewer.on{display:grid;grid-template-rows:auto 1fr;height:calc(100vh - 49px)}.viewerbar{display:flex;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:12px}.viewerbar a{margin-left:auto}.viewer iframe{width:100%;height:100%;border:0;background:#fff}.hidden{display:none!important}
+    @media(max-width:720px){form{grid-template-columns:1fr}.setup{margin:18px auto;padding:20px}.top .tag{display:none}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="top"><div class="mark">nakli<span>OS</span> · compos</div><div class="tag">native client · local daemon · paired bridge</div><a href="guide.html">setup guide</a></header>
+    <main id="setup" class="setup">
+      <h1>Your Compos context, <em>inside NakliOS.</em></h1>
+      <p class="lede">This prototype does not reimplement Compos. It carries the native Phoenix LiveView client from your local daemon through a paired loopback bridge. Compos remains the source of truth for buffers, windows, agents, and commands.</p>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><div>Start <a href="https://github.com/svs/compos" rel="noreferrer">Compos</a>: <code>mix run --no-halt</code>.</div></div>
+        <div class="step"><span class="n">2</span><div>Download the Compos relay and create its local TLS certificate. The <a href="guide.html">setup guide</a> has the three commands.</div></div>
+        <div class="step"><span class="n">3</span><div>Paste the pairing code printed by the bridge, then connect.</div></div>
+      </div>
+      <form id="connectForm">
+        <label>Bridge endpoint<input id="endpoint" inputmode="url" value="https://local.naklios.dev:9130" autocomplete="off" spellcheck="false"></label>
+        <label>Pairing code<input id="pair" type="password" autocomplete="one-time-code" minlength="16" required></label>
+        <button type="submit">Connect</button>
+      </form>
+      <div id="status" class="status">The pairing code stays in this page long enough to establish one bridge session.</div>
+    </main>
+    <section id="viewer" class="viewer" aria-label="Compos client">
+      <div class="viewerbar"><span id="viewerStatus">opening the paired local client</span><button id="disconnect" type="button">Disconnect</button><a id="openTab" href="#" target="_blank" rel="noreferrer">open in tab</a></div>
+      <iframe id="composFrame" title="Compos" referrerpolicy="no-referrer" allow="clipboard-read; clipboard-write" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-modals"></iframe>
+    </section>
+  </div>
+  <script>
+    const form=document.querySelector('#connectForm');
+    const endpoint=document.querySelector('#endpoint');
+    const pair=document.querySelector('#pair');
+    const status=document.querySelector('#status');
+    const setup=document.querySelector('#setup');
+    const viewer=document.querySelector('#viewer');
+    const frame=document.querySelector('#composFrame');
+    const viewerStatus=document.querySelector('#viewerStatus');
+    const openTab=document.querySelector('#openTab');
+    const saved=sessionStorage.getItem('nakli.compos.endpoint');
+    if(saved) endpoint.value=saved;
+
+    function acceptedEndpoint(value){
+      const url=new URL(value);
+      const loopback=['local.naklios.dev','localhost','127.0.0.1','[::1]'].includes(url.hostname);
+      const protocol=url.protocol==='https:'||(url.protocol==='http:'&&url.hostname!=='local.naklios.dev');
+      if(!loopback||!protocol) throw new Error('Use local.naklios.dev or a localhost development endpoint.');
+      return url;
+    }
+
+    form.addEventListener('submit',(event)=>{
+      event.preventDefault();
+      try{
+        const url=acceptedEndpoint(endpoint.value.trim());
+        const code=pair.value.trim();
+        if(code.length<16) throw new Error('The pairing code is incomplete.');
+        sessionStorage.setItem('nakli.compos.endpoint',url.origin);
+        url.pathname='/';
+        url.search='';
+        url.searchParams.set('pair',code);
+        pair.value='';
+        frame.src=url.href;
+        openTab.href=`${url.origin}/`;
+        setup.classList.add('hidden');
+        viewer.classList.add('on');
+        viewerStatus.textContent='waiting for the local-network permission and bridge';
+        setTimeout(()=>{if(viewer.classList.contains('on'))viewerStatus.textContent='If Chrome is waiting, allow local-network access.'},1500);
+      }catch(error){
+        status.textContent=error.message;
+        status.className='status warn';
+      }
+    });
+
+    frame.addEventListener('load',()=>{viewerStatus.textContent='bridge answered · Compos owns this view'});
+    document.querySelector('#disconnect').addEventListener('click',()=>{
+      frame.src='about:blank';
+      viewer.classList.remove('on');
+      setup.classList.remove('hidden');
+      viewerStatus.textContent='disconnected';
+    });
+  </script>
+</body>
+</html>

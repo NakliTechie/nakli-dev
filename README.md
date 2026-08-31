@@ -208,33 +208,32 @@ Personal Access Token held **host-side** and injected as the request leaves for
 your Worker — the coding agent never sees it. Next: browsing/RAG and any no-CORS
 API over the same primitive, and secrets moving into an encrypted vault.
 
-## Reaching a local daemon (`nakli-local-bridge`)
+## Reaching a local daemon (Compos relay)
 
-The other half of egress: not "call the cloud," but **render and drive a program
-running on the user's own machine** from a public `naklios.dev` page. First worked
-out end-to-end in [`prototypes/aimax-renderer/`](prototypes/aimax-renderer/) — a
-native browser frontend for [aimax](https://github.com/svs/aimax) (an agent-native
-terminal editor) that speaks the daemon's **own JSON-RPC** over its unix socket
-(`eval`/`get_state`/`subscribe`), so the daemon stays the source of truth and no
-wire is invented.
+The other half of egress is **rendering a program running on the user's own
+machine** inside a public `naklios.dev` page. The canonical prototype is
+[`prototypes/compos/`](prototypes/compos/), built around
+[`svs/compos`](https://github.com/svs/compos). NakliOS carries Compos's native
+Phoenix LiveView client over HTTP and WebSockets; Compos remains the source of
+truth for buffers, windows, agents, commands, persistence, and rendering.
 
-Getting a public https page to a `localhost` daemon is a real wall, and the fix is
-protocol-level (full write-up in `../CONV.md` → *"Reaching a local daemon"*):
+Getting a public HTTPS page to a loopback daemon requires a protocol-level path:
 
-- **WebSockets aren't CORS-gated** — so the bridge enforces its own `Origin`
-  allowlist (otherwise any site you visit could drive your daemon).
-- **Mixed content + Private Network Access** — a public https page can't open
-  `ws://`, and reaching loopback triggers a one-time Chrome *"allow local network"*
-  prompt. Solved with **`wss://` + the loopback-cert pattern**: a public DNS name
-  (`local.naklios.dev`) → `127.0.0.1` with a **real Let's Encrypt cert**, so the
-  browser trusts it with **zero per-user cert install** (the Plex/Discord trick;
-  the shared key is loopback-only, so it can't MITM anything).
-- **One-command setup** — `bridge.naklios.dev` serves a self-contained bridge:
-  `curl -fsSL https://bridge.naklios.dev -o nakli-bridge.mjs && node nakli-bridge.mjs`.
+- **WebSockets are not CORS-gated.** The Compos relay checks every supplied
+  `Origin`, including WebSocket upgrades.
+- **Mixed content and Private Network Access apply.** The public page reaches
+  `https://local.naklios.dev:9130`, where public DNS resolves to `127.0.0.1`.
+  The setup helper uses `mkcert` to create a unique locally trusted certificate.
+- **The daemon needs an application boundary.** The relay reverse proxies only
+  Compos's native HTTP and WebSocket client. It never exposes the unauthenticated
+  `~/.compos/sock` JSON-RPC surface.
+- **Pairing is explicit.** A one-time random code creates an in-memory HttpOnly
+  session. Every proxied request and upgrade requires that session.
+- **Setup uses public source and a local key.** `compos-relay.naklios.dev` serves
+  the branded relay and an explicit `mkcert` helper. No private key is published.
 
-`nakli-local-bridge` is the reusable primitive (unix-socket ↔ wss, protocol-agnostic)
-for any host-local service — on-device inference, LAN devices, local tools. Setup
-guide: [`naklios.dev/prototypes/aimax-renderer/guide`](https://naklios.dev/prototypes/aimax-renderer/guide).
+Setup guide:
+[`naklios.dev/prototypes/compos/guide`](https://naklios.dev/prototypes/compos/guide).
 
 ## Mirroring an app for same-origin embedding
 

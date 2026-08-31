@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Install Compos and connect its native client to NakliOS through the paired Compos relay.">
+  <title>Compos prototype · setup</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07100d;--panel:#0d1814;--line:#263a31;--fg:#eef7f1;--muted:#a9baaf;--brand:#73e2a7;--warn:#f1bf6b}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#173628 0,transparent 34rem),var(--bg);color:var(--fg);font:15px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}main{width:min(860px,calc(100% - 32px));margin:40px auto 80px}a{color:var(--brand)}h1{font-size:clamp(32px,6vw,58px);letter-spacing:-.05em;line-height:1;margin:0 0 16px}h2{margin-top:38px;border-top:1px solid var(--line);padding-top:24px}h3{margin-top:26px}p,li{color:var(--muted)}code,pre{color:#c8f9de;background:#030a06;border:1px solid var(--line);border-radius:8px}code{padding:2px 5px}pre{padding:16px;overflow:auto}.callout{border-left:3px solid var(--brand);background:var(--panel);padding:12px 16px}.warn{border-left-color:var(--warn)}nav{display:flex;justify-content:space-between;margin-bottom:48px}.check{list-style:none;padding:0}.check li{padding:5px 0}.check li::before{content:'□';color:var(--brand);margin-right:10px}
+  </style>
+</head>
+<body><main>
+  <nav><a href="./">← prototype</a><a href="https://github.com/svs/compos" rel="noreferrer">canonical upstream · svs/compos ↗</a></nav>
+  <h1>Compos in NakliOS</h1>
+  <p>NakliOS carries Compos’s native browser client through a paired loopback relay. It does not mirror editor state or introduce another application protocol.</p>
+
+  <h2>Before you begin</h2>
+  <ul class="check">
+    <li>Git, Elixir, and Erlang/OTP are installed.</li>
+    <li>Node.js 20 or newer and <a href="https://github.com/FiloSottile/mkcert#installation" rel="noreferrer">mkcert</a> are installed.</li>
+    <li>You can run two terminal sessions.</li>
+  </ul>
+
+  <h2>1 · Install and start Compos</h2>
+  <pre>git clone https://github.com/svs/compos
+cd compos
+mix deps.get
+mix run --no-halt</pre>
+  <p>Keep this terminal open. Compos serves its native client on <code>http://127.0.0.1:4004</code> and stores its state under <code>~/.compos</code>.</p>
+
+  <h2>2 · Download and trust the Compos relay</h2>
+  <p>Open another terminal:</p>
+  <pre>curl -fsSLO https://compos-relay.naklios.dev/compos-relay.mjs
+curl -fsSLO https://compos-relay.naklios.dev/setup-local-tls.sh
+sh setup-local-tls.sh
+node compos-relay.mjs</pre>
+  <p>The relay prints <code>nakli-compos-relay listening</code>, a pairing code, and a pair URL. Keep this terminal open too.</p>
+  <div class="callout"><code>setup-local-tls.sh</code> shows the trust-store action, runs <code>mkcert -install</code>, and creates a certificate unique to this machine. The relay download contains no private key.</div>
+
+  <h2>3 · Pair</h2>
+  <ol>
+    <li>Open the <a href="./">Compos prototype</a>.</li>
+    <li>Paste the terminal’s pairing code.</li>
+    <li>Select <strong>Connect</strong>.</li>
+    <li>If Chrome asks for local-network access, allow it for <code>naklios.dev</code>.</li>
+  </ol>
+  <p>The pairing code is consumed after the first accepted request. The relay replaces it with an HttpOnly session cookie and removes it from the URL.</p>
+
+  <h2>Security boundary</h2>
+  <p>Compos’s JSON-RPC socket exposes <code>eval</code> without authentication. The prototype never forwards that socket. The relay proxies Compos’s HTTP and WebSocket client behind one in-memory session and an Origin allowlist.</p>
+  <div class="callout warn">Keep the relay on its default loopback bind address. Do not set <code>BIND_HOST</code> to a public interface.</div>
+
+  <h2>Troubleshooting</h2>
+  <h3>“Compos is unavailable”</h3>
+  <p>Check the first terminal. Open <code>http://127.0.0.1:4004</code> directly. Restart <code>mix run --no-halt</code> if it does not load.</p>
+  <h3>Pairing code refused</h3>
+  <p>The code has already been consumed or was copied incompletely. Restart <code>node compos-relay.mjs</code> to mint another code.</p>
+  <h3>The frame keeps waiting</h3>
+  <p>Allow Chrome’s local-network prompt. Confirm that the relay reports <code>https://local.naklios.dev:9130</code>. Rerun <code>sh setup-local-tls.sh</code> if the browser does not trust the local certificate.</p>
+
+  <h2>Repository development</h2>
+  <p>A source checkout can run without TLS beside a local static server:</p>
+  <pre>python3 -m http.server 8000
+DISABLE_TLS=1 node prototypes/compos/compos-relay.mjs --port 9130</pre>
+  <p>Open <code>http://localhost:8000/prototypes/compos/</code> and set the endpoint to <code>http://127.0.0.1:9130</code>.</p>
+</main></body>
+</html>

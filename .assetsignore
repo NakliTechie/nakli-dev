@@ -7,6 +7,13 @@ redirects/
 test/
 **/test/
 **/*.test.mjs
+**/*.pem
+**/*.key
+*.mcp.json
+opencode.json
+prototypes/compos/relay-worker.mjs
+prototypes/compos/relay-worker-core.mjs
+prototypes/compos/wrangler.jsonc
 apps/forge/*.md
 apps/forge/forge-mockup.html
 wrangler.jsonc

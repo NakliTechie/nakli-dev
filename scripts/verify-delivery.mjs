@@ -35,6 +35,13 @@ const expectedRules = [
   'test/',
   '**/test/',
   '**/*.test.mjs',
+  '**/*.pem',
+  '**/*.key',
+  '*.mcp.json',
+  'opencode.json',
+  'prototypes/compos/relay-worker.mjs',
+  'prototypes/compos/relay-worker-core.mjs',
+  'prototypes/compos/wrangler.jsonc',
   'apps/forge/*.md',
   'apps/forge/forge-mockup.html',
   'wrangler.jsonc',
@@ -62,6 +69,13 @@ const requiredAssets = [
   'vendor/crate/v1.0.2/crate.js',
   'sys/kiln/kiln.mjs',
   'sys/rig/registry/registry.mjs',
+  'prototypes/compos/index.html',
+  'prototypes/compos/guide.html',
+  'prototypes/compos/compos-relay.mjs',
+  'prototypes/compos/setup-local-tls.sh',
+  'prototypes/aimax-renderer/index.html',
+  'prototypes/aimax-renderer/aimax.html',
+  'prototypes/aimax-renderer/guide.html',
 ];
 await Promise.all(requiredAssets.map(asset => access(path.join(root, ...asset.split('/')))));
 
