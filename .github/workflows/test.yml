@@ -78,6 +78,9 @@ jobs:
       - name: Verify Anvil wires belief revision through (status reaches the index)
         run: node scripts/test-anvil-memory-status.mjs
 
+      - name: Verify Anvil honesty guards (gate, hooks, single-writer state)
+        run: node scripts/test-anvil-guards.mjs
+
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 

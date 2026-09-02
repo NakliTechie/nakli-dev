@@ -106,6 +106,22 @@ await test('parseApplyPatch: missing envelope errors', () => {
 });
 
 // ── executor over a real Rig face ───────────────────────────────────────
+await test('shell reports the exit code, so a failure is not read as success', async () => {
+  const { exec } = fresh();
+  eq(await exec('shell', { command: 'echo hi' }), 'hi\n[exit 0]', 'success carries exit 0');
+  // The load-bearing case: no output AND a non-zero code. Without the marker the
+  // model saw "(no output)" and had no way to tell this from a clean run.
+  eq(await exec('shell', { command: 'test -f missing.txt' }), '(no output)\n[exit 1]', 'silent failure is legible');
+  assert(/\[exit 127\]$/.test(await exec('shell', { command: 'nosuchcommand' })), 'unknown command reports 127');
+});
+await test('an intercepted command reports NO exit code (lastCode would be stale)', async () => {
+  const { exec } = fresh();
+  // interceptBashCommand redirects this to the edit tool without ever calling
+  // shell.feed, so shell.lastCode still holds some earlier command's result.
+  const out = await exec('shell', { command: 'sed -i s/a/b/ f.txt' });
+  assert(/edit` tool/.test(out), `redirected: ${out}`);
+  assert(!/\[exit /.test(out), `no exit code invented for an unrun command: ${out}`);
+});
 await test('read returns line-numbered content', async () => {
   const { exec, shell } = fresh();
   await shell.feed('printf "alpha\\nbeta\\n" > f.txt');

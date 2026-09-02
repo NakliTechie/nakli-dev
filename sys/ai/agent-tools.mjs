@@ -17,7 +17,7 @@
 //   const exec  = makeToolExecutor({ shell, face });
 //   await runAgentLoop({ messages, tools, infer, executeTool: exec });
 
-import { shellTool, makeShellExecutor, runAgentLoop, taskDoneTool } from './agent-loop.mjs';
+import { shellTool, makeShellExecutor, runAgentLoop, taskDoneTool, interceptBashCommand } from './agent-loop.mjs';
 import {
   dispatchTool, reviewTool, normalizeTasks, planMerge, formatDispatchDigest,
   SUBAGENT_SYSTEM, REVIEW_SYSTEM, SUBAGENT_MAX_STEPS,
@@ -456,19 +456,29 @@ export function makeToolExecutor({ shell, face, mode = 'code', infer = null, sub
       }
       if (name === 'shell') {
         const command = String(args?.command || '');
+        // An intercepted command never reaches the shell, so `lastCode` would be
+        // stale from some earlier call — only ever report a code we caused.
+        const reachedShell = !interceptBashCommand(command);
         const out = await runShell(name, args);
         // YOLO: the agent auto-confirms a staged destructive op (rm, git commit)
         // rather than stalling on a [y/N] it can't answer. Git history + the
         // verifier are the safety net.
         let result = out;
+        // Read the exit code BEFORE the auto-confirm — that fires a second
+        // shell.feed('y') and overwrites lastCode with the confirmation's result.
+        let code = reachedShell && shell ? shell.lastCode : null;
         if (shell && shell.awaitingConfirm) {
           const confirmed = await runShell('shell', { command: 'y' });
           result = (out ? out + '\n' : '') + confirmed;
+          code = shell.lastCode; // the confirmed run is the real outcome
         }
         // A plain single-file display satisfies the read-before-edit ledger.
         const m = /^\s*(?:cat|less|more|head|tail)\s+(\S+)\s*$/.exec(command);
         if (m && !/[|>]/.test(command)) noteRead(resolve(m[1]));
-        return await capOutput(result, 'shell output');
+        // Without this the model reads a failing build's stdout with no verdict.
+        // Appended AFTER capping so truncation can never eat the exit code.
+        const capped = await capOutput(result, 'shell output');
+        return code == null ? capped : `${capped}\n[exit ${code}]`;
       }
 
       if (name === 'read') {

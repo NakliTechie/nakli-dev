@@ -68,6 +68,9 @@
   .dot{width:7px;height:7px;border-radius:999px;flex:0 0 auto;background:var(--fg-2)}
   .dot.running{background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:pulse 1.2s infinite}
   .dot.done{background:var(--ok)} .dot.error{background:var(--err)} .dot.idle{background:var(--fg-2)}
+  /* Finished, but nothing machine-checked it — a hollow ring, never the solid
+     green a gated pass earns. Shape carries the difference, not colour alone. */
+  .dot.unclaimed{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ok)}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(217,138,40,.5)}70%{box-shadow:0 0 0 5px rgba(217,138,40,0)}100%{box-shadow:0 0 0 0 rgba(217,138,40,0)}}
   #left .lfoot{border-top:1px solid var(--rule);padding:8px;display:flex;gap:6px}
   #left .lfoot button{flex:1}
@@ -394,10 +397,40 @@
   // restores them). The host write is debounced; localStorage is the fast cache.
   const hostFsReady = () => !!(nak && nak.capabilities && nak.capabilities.fs && nak.fs);
   let remoteSaveTimer=null;
+  // Two Anvil tabs on one project both write this WHOLE blob, so an idle tab's
+  // debounced save used to silently overwrite the other tab's tasks 800ms after
+  // any trivial UI change — last-writer-wins over the entire projects/tasks/
+  // transcript tree. Two guards now: Web Locks serialise the read-modify-write so
+  // it cannot interleave, and a monotonic `rev` makes a STALE tab refuse to write
+  // rather than clobber newer state.
+  //
+  // Honest scope: this is serialisation + conflict DETECTION, not a merge — the
+  // stale tab declines and says so instead of losing the other tab's work. Web
+  // Locks are same-origin, so it covers tabs on this device, NOT two devices on
+  // one roaming Crate. localStorage (below) is still shared and last-writer-wins.
   function scheduleRemoteSave(){
     if(!hostFsReady()) return;
     clearTimeout(remoteSaveTimer);
-    remoteSaveTimer=setTimeout(()=>{ try{ nak.fs.write('state.json', JSON.stringify(state)); }catch(_){} }, 800);
+    remoteSaveTimer=setTimeout(()=>{ void writeRemoteState(); }, 800);
+  }
+  async function writeRemoteState(){
+    const write=async()=>{
+      try{
+        const disk=await loadRemoteState();
+        const diskRev=Number(disk&&disk.rev)||0, mine=Number(state.rev)||0;
+        if(disk && diskRev>mine){
+          const t=activeTask();
+          if(t){ (t.log=t.log||[]).push({k:'system',text:'⚠ Another Anvil tab saved newer state (rev '+diskRev+' > '+mine+'). This tab did NOT overwrite it — reload to pick up its work.'}); renderLog(); }
+          return;
+        }
+        state.rev=mine+1;
+        await nak.fs.write('state.json', JSON.stringify(state));
+      }catch(_){}
+    };
+    try{
+      if(navigator.locks && navigator.locks.request) await navigator.locks.request('anvil-state', write);
+      else await write();
+    }catch(_){ /* lock unavailable (or aborted) — the next save retries */ }
   }
   function save(){ try{ const c=JSON.parse(JSON.stringify(state)); localStorage.setItem(LS, JSON.stringify(c)); }catch(_){} scheduleRemoteSave(); }
   async function loadRemoteState(){
@@ -535,6 +568,13 @@
         messages:[{role:'system',content:sys},{role:'user',content:'Survey this project and record its key facts with `remember`, then stop.'}],
         tools:codingToolset('ask',{}).concat(rememberTool()), infer:inferViaHost, executeTool:execTool,
         maxSteps:18, budget:{tokens:90000, wallClockMs:180000},
+        // Without an onEvent the entire priming run was invisible — the user saw
+        // one "surveying…" line, then a fact count, and nothing in between. Show
+        // what it looks at, so a run that stalls or reads the wrong thing is legible.
+        onEvent:(e)=>{
+          if(e.type==='tool-call'){ const a=e.args||{}; const what=a.path||a.command||a.pattern||a.name||''; logn('· '+e.name+(what?' '+String(what).slice(0,80):'')); }
+          else if(e.type==='tool-error'){ logn('· '+e.name+' failed: '+String(e.error||'').slice(0,160)); }
+        },
       });
     }catch(e){ logn('Priming error: '+(e&&e.message||e)); }
     priming=false;
@@ -747,8 +787,11 @@
     $('tb-title').textContent=t?t.title:'No task';
     $('tb-meta').textContent='';  // storage moved to the single header chip; taskbar stays uncluttered
     const g=$('gate-btn'); if(g){ const vc=((t&&t.verifyCmd)||'').trim(); g.textContent=vc?('✓ '+vc):'✓ Must-pass'; g.classList.toggle('on', !!vc);
-      // Reveal Must-pass after the first successful task (or whenever a gate is already set).
-      g.hidden = !(state.proven || vc); }
+      // Always visible. The old progressive reveal keyed on `state.proven`, which
+      // seedState() never set — so on a fresh install it was undefined and the gate
+      // was hidden until a task first reported done, i.e. hidden exactly while a
+      // first-time user most needed it. The gate is how a task earns "done".
+      g.hidden = false; }
   }
   function renderLog(){
     const box=$('log'); const t=activeTask();
@@ -1186,6 +1229,20 @@
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
     const executeTool = async (nm, ar, callObj)=>{
+      // Pre-tool hook guard, hoisted to the TOP: skill/recall/remember/revise/
+      // synthesize all return below before the old guard site, so a project's
+      // preTool rule could never see — let alone block — any of them.
+      // hooksCfg is loaded before any run and hookMatches takes arbitrary tool
+      // names, so this is a pure reordering.
+      const dec0 = preToolDecision(hooksCfg, nm, ar);
+      if(dec0.blocked) return '[blocked by a project hook] '+dec0.message;
+      // Defence in depth for the same five: they are only pushed into `tools`
+      // when mode==='code', so reaching one from plan/ask means the model invented
+      // a name it was never handed. A MODE_TOOLS lookup would be wrong here —
+      // skill and recall are deliberately offered in every mode.
+      if(mode!=='code' && (nm==='remember'||nm==='revise'||nm==='synthesize')){
+        return 'Error: the "'+nm+'" tool is not available in '+mode+' mode (read-only).';
+      }
       // Skills (progressive disclosure): load one skill's full body on demand.
       if(nm==='skill'){
         const name=String((ar&&ar.name)||'').trim();
@@ -1243,10 +1300,8 @@
           onGen:({gen,bestScore})=>{ if(t){ t.log.push({k:'system',text:'synthesize gen '+gen+': best fitness '+Number(bestScore).toFixed(3)}); renderLog(); } } });
         return 'Synthesized: '+res.generations+' gen(s). Best fitness '+res.bestScore.toFixed(3)+'/1.0'+(res.solved?' — SOLVED all examples. ':' — best still fails indices '+JSON.stringify((res.bestDetail&&res.bestDetail.failed)||[])+'. ')+'Wrote solver.py; apply it to the real input.';
       }
-      // Pre-tool hook guard (project policy): a matching preTool hook with a
-      // `block` message refuses the tool before it runs.
-      const dec = preToolDecision(hooksCfg, nm, ar);
-      if(dec.blocked) return '[blocked by a project hook] '+dec.message;
+      // (the preTool hook guard now runs at the top of executeTool, so it also
+      // covers the Anvil-layer tools that return above this point)
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
         try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }
@@ -1378,13 +1433,19 @@
           if(slug){ factMap[slug]=MEMORY_DIR+'/'+slug+'.md'; t.log.push({k:'system',text:'Saved this plan to project memory ("'+slug+'") — code tasks start from it; retract it with `revise` once done.'}); }
         }catch(_){}
       }
-      t.status = result.stop==='done'?'done':(result.stop==='error'?'error':'idle');
-      // Progressive reveal: the Must-pass gate is an affordance for work that already
-      // runs — surface it only once the project has had a first successful task.
-      if(result.stop==='done') state.proven = true;
+      // "done" is the verifier's word, never the agent's. A gated pass and "the
+      // model stopped calling tools" are different outcomes and must not share a
+      // green dot. Key on verifyCmd AND result.verified: an UNGATED task_done
+      // also returns verified:true (sys/ai/agent-loop.mjs:290-295), so
+      // result.verified alone would still paint an unearned pass.
+      const gated = !!String((t.verifyCmd||'')).trim();
+      t.status = result.stop==='done'
+        ? ((gated && result.verified) ? 'done' : 'unclaimed')
+        : (result.stop==='error' ? 'error' : 'idle');
       const stopLabel = result.stop==='aborted' ? 'stopped'
         : result.stop==='budget' ? ('hit budget ('+(result.budgetAxis||'')+')')
         : result.stop==='unverified' ? 'gate never passed'
+        : (result.stop==='done' && !gated) ? 'finished — no gate, so this is the agent\'s own claim'
         : result.stop;
       if(result.stop==='unverified') t.status='error';
       t.log.push({k:'system',text:`agent ${stopLabel} · ${result.steps} steps`});
@@ -1436,7 +1497,11 @@
   };
   $('gate-btn').onclick=()=>{
     const t=activeTask(); if(!t) return;
-    const v=prompt('Gate command — runs after the agent finishes; the task isn\'t "done" until it exits 0 (e.g. "python -m pytest", "python fib.py", "sh check.sh"). Empty to clear:', t.verifyCmd||'');
+    // Examples MUST be runnable in the Forge browser shell. The previous copy
+    // suggested "python -m pytest" (no pytest — Kiln is stdlib + a pinned
+    // allowlist) and "sh check.sh" (`sh` is not a builtin → command not found,
+    // exit 127): two of three examples could never pass.
+    const v=prompt('Gate command — runs after the agent finishes; the task isn\'t "done" until it exits 0 (e.g. "python test_fib.py", "python -c \'import fib; assert fib.fib(10)==55\'", "grep -q TODO src/main.py"). Empty to clear:', t.verifyCmd||'');
     if(v===null) return; t.verifyCmd=v.trim(); save(); renderTaskbar();
   };
   const MODES=['code','plan','ask'];
