@@ -52,6 +52,43 @@ export async function hmac(keyBytes, bytes) {
   return new Uint8Array(await subtle.sign('HMAC', key, typeof bytes === 'string' ? enc(bytes) : bytes));
 }
 
+// ── Passphrase KDF + AES-256-GCM (the FIF's encryption at rest) ──────────────
+// KDF NOTE (documented gap, not an oversight): the vault design calls for
+// Argon2id (plan/tijori-vault-spec.md), which WebCrypto does not provide —
+// getting it means shipping a wasm build, which sys/ deliberately avoids (no
+// build step, no dependency). PBKDF2-HMAC-SHA256 at OWASP's 2023 iteration
+// count is the strongest native option. The derived params are STORED with the
+// vault (see fif.mjs `kdf`), so moving to Argon2id later is a version bump that
+// re-wraps the master key, not a format break.
+export const PBKDF2_ITERATIONS = 600_000;
+
+export async function deriveKey(passphrase, salt, iterations = PBKDF2_ITERATIONS) {
+  const base = await subtle.importKey('raw', enc(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return subtle.deriveKey(
+    { name: 'PBKDF2', salt: salt instanceof Uint8Array ? salt : b64uDecode(salt), iterations, hash: 'SHA-256' },
+    base,
+    { name: 'AES-GCM', length: 256 },
+    false, // non-extractable: the master key never leaves WebCrypto
+    ['encrypt', 'decrypt'],
+  );
+}
+
+// `aad` is authenticated but not encrypted — bind a record to its own key so a
+// ciphertext cannot be moved to a different slot and still decrypt.
+export async function aesGcmEncrypt(key, bytes, aad = '') {
+  const iv = randomBytes(12);
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc(aad) }, key, typeof bytes === 'string' ? enc(bytes) : bytes));
+  return { iv: b64uEncode(iv), ct: b64uEncode(ct) };
+}
+export async function aesGcmDecrypt(key, { iv, ct }, aad = '') {
+  const out = await subtle.decrypt(
+    { name: 'AES-GCM', iv: iv instanceof Uint8Array ? iv : b64uDecode(iv), additionalData: enc(aad) },
+    key,
+    ct instanceof Uint8Array ? ct : b64uDecode(ct),
+  );
+  return new Uint8Array(out);
+}
+
 // Constant-time compare (both must be Uint8Array of equal length to match).
 export function constantTimeEqual(a, b) {
   if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;

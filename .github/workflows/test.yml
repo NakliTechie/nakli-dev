@@ -111,6 +111,9 @@ jobs:
       - name: Verify P0 Grant — capability tokens
         run: node sys/identity/test/grant.test.mjs
 
+      - name: Verify P0 FIF — encrypted identity storage survives a reload
+        run: node sys/identity/test/fif.test.mjs
+
       - name: Verify P0 History — tamper-evident ledger
         run: node sys/history/test/ledger.test.mjs
 
