@@ -117,6 +117,9 @@ jobs:
       - name: Verify P0 Staging — envelope + commit authority
         run: node sys/staging/test/envelope.test.mjs
 
+      - name: Verify P0 Staging — one reviewer over many apps (real diff types)
+        run: node sys/staging/test/reviewer.test.mjs
+
       - name: Verify P0 enforcement — agent face capability check
         run: node sys/rig/agent/test/agent-face-capability.test.mjs
 
