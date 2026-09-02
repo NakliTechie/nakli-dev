@@ -1411,7 +1411,13 @@
       let result = await runAgentLoop({
         messages:[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo],
         tools, infer: inferViaHost, executeTool, maxSteps:24, signal: abortController.signal,
-        budget: { tokens: 120000, wallClockMs: 240000 }, verify, maxVerifyRounds: 3, onEvent:onLoopEvent,
+        // Wall clock, not step count, is what ends a run on a local model. Measured
+        // 2026-09-03 against Ollama qwen3:8b (thinking mode) through this loop: 3
+        // steps consumed the whole 240s budget, so the agent never saw its own gate
+        // failure and could not act on it — and a re-send does not help, because
+        // t.convo carries only prompts and the final text, never the gate output.
+        // 900s lets a slow local model actually reach the retry it needs.
+        budget: { tokens: 120000, wallClockMs: 900000 }, verify, maxVerifyRounds: 3, onEvent:onLoopEvent,
       });
       // Act-or-nudge: a CODE-mode run that produced ONLY prose (0 tool calls) gets one
       // firm nudge to actually use the tools — weak endpoints often "answer" instead of
