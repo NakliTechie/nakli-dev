@@ -616,7 +616,7 @@
     try{
       const dir=await fs.list(MEMORY_DIR,{recursive:false});
       if(dir&&dir.ok){ for(const e of (dir.entries||[])){ if(e.type==='dir'||!e.name.endsWith('.md')) continue;
-        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type }); } }catch(_){} } }
+        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type, status:f.status }); } }catch(_){} } }
     }catch(_){}
     return out;
   }
@@ -631,7 +631,10 @@
   async function openProjectMemory(){
     const facts=await listFacts();
     if(facts.length){
-      const body=facts.map(f=>'• '+f.name+' ('+(f.type||'project')+')'+(f.description?(' — '+f.description):'')).join('\n');
+      // Status is shown, never hidden: a retracted fact stays visible and marked so a
+      // dead hypothesis is not silently re-derived (the file is kept for provenance).
+      const mark=(s)=> s==='retracted' ? ' [RETRACTED — hidden from the agent]' : s==='hypothesis' ? ' [hypothesis]' : '';
+      const body=facts.map(f=>'• '+f.name+' ('+(f.type||'project')+')'+mark(f.status)+(f.description?(' — '+f.description):'')).join('\n');
       globalPreview={ type:'text', file:'Project memory', content:'Facts the agent recorded (loaded on demand via recall):\n\n'+body };
       state.previewOpen=true; save(); renderPreview(); return;
     }
@@ -1317,7 +1320,10 @@
           try{
             const r=await fs.read(e.path,{encoding:'utf-8'});
             if(r&&r.ok){ const f=parseFact(r.data); const name=f.name || e.name.replace(/\.md$/,'');
-              facts.push({ name, description:f.description, type:f.type }); factMap[name]=e.path; }
+              // `status` MUST ride along: buildMemoryIndex filters on it, so dropping
+              // it made every retracted fact survive into the injected context and
+              // silenced the hypothesis tag and the "do not re-derive" footer.
+              facts.push({ name, description:f.description, type:f.type, status:f.status }); factMap[name]=e.path; }
           }catch(_){}
         }
         memoryIndex = buildMemoryIndex(facts);

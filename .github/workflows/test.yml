@@ -75,6 +75,9 @@ jobs:
       - name: Verify belief-revising memory (hypothesis→verified/retracted)
         run: node sys/ai/test/memory-belief.test.mjs
 
+      - name: Verify Anvil wires belief revision through (status reaches the index)
+        run: node scripts/test-anvil-memory-status.mjs
+
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 
