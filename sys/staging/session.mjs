@@ -34,6 +34,18 @@ export function createStagingSession({ fif, appliers = {}, now = () => Date.now(
   const events = new Map();    // app -> events[]
   const pending = new Map();   // proposal_id -> { envelope, principal, grant, reversible, target }
   const usage = new Map();     // grant identifier -> { calls } — budget caveats need honest counters
+  // The ledger commits its outcome by HASH, so an event carries no readable
+  // verdict. A live session keeps the plaintext label alongside, keyed by the
+  // event object itself so a merged (re-ordered) view still labels correctly.
+  const outcomes = new Map();  // event -> { ok, label }
+
+  function labelFor(output) {
+    if (output.denied) return { ok: false, label: `refused: ${output.denied}` };
+    if (output.committed) return { ok: true, label: `committed (${output.mode})` };
+    if (output.discarded) return { ok: true, label: 'discarded' };
+    if (output.staged) return { ok: true, label: 'staged' };
+    return { ok: true, label: 'ok' };
+  }
 
   async function log(app, { principal, tool, input, output, grant_id }) {
     const prev = heads.get(app) ?? null;
@@ -43,6 +55,7 @@ export function createStagingSession({ fif, appliers = {}, now = () => Date.now(
     heads.set(app, head);
     if (!events.has(app)) events.set(app, []);
     events.get(app).push(event);
+    outcomes.set(event, labelFor(output));
     return event;
   }
 
@@ -147,6 +160,10 @@ export function createStagingSession({ fif, appliers = {}, now = () => Date.now(
 
     // The ledger — per app (each chain independently verifiable) or merged.
     events(app) { return app ? [...(events.get(app) || [])] : Object.fromEntries([...events].map(([k, v]) => [k, [...v]])); },
+    // The readable verdict for an event from THIS session (the chain itself
+    // holds only its hash). Unknown after a reload — the ledger is the record,
+    // this is a live-session convenience for the reviewer surface.
+    outcomeOf(event) { return outcomes.get(event) || { ok: true, label: '' }; },
     usageFor(grantId) { return { ...(usage.get(grantId) || { calls: 0 }) }; },
   };
 }

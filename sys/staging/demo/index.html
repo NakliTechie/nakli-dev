@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No unsafe-eval anywhere. unsafe-inline is the single-file shape (inline
+     module script), which is not unsafe-eval. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+<title>P0 — authority layer demo</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --font: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --n0:#fff; --n1:#f6f7f8; --n2:#e3e5e8; --n3:#c9ccd1; --n5:#696e77; --n7:#40444c; --n9:#17191d;
+    --accent:#1a5fb4; --accent-soft:rgba(26,95,180,.08);
+    --ok:#1d7a45; --danger:#a51d2d; --warn:#7c5200;
+    --add-bg:rgba(29,122,69,.10); --rm-bg:rgba(165,29,45,.09); --edit-bg:rgba(26,95,180,.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --n0:#17191d; --n1:#1d2024; --n2:#2a2d33; --n3:#40444c; --n5:#a6aab2; --n7:#c9ccd1; --n9:#f6f7f8;
+      --accent:#7aa8e8; --accent-soft:rgba(122,168,232,.12);
+      --ok:#5fce93; --danger:#f08a99; --warn:#e0b352;
+      --add-bg:rgba(95,206,147,.12); --rm-bg:rgba(240,138,153,.12); --edit-bg:rgba(122,168,232,.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; font:13px/1.55 var(--font); background:var(--n1); color:var(--n9); }
+  main { max-width:960px; margin:0 auto; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub { color:var(--n5); margin:0 0 24px; max-width:62ch; }
+  .step { background:var(--n0); border:1px solid var(--n2); border-radius:8px; padding:14px 16px; margin-bottom:12px; }
+  .step[aria-disabled="true"] { opacity:.5; }
+  .step h2 { font-size:13px; margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+  .num { display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--accent-soft); color:var(--accent);
+         align-items:center; justify-content:center; font-size:11px; flex:none; }
+  .step.done .num { background:var(--ok); color:var(--n0); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--n3); background:var(--n0); color:var(--n9); cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { border-color:var(--danger); color:var(--danger); }
+  input { font:inherit; padding:6px 8px; border-radius:6px; border:1px solid var(--n3); background:var(--n0); color:var(--n9); }
+  input:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .note { color:var(--n5); margin:6px 0 0; }
+  .fact { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .fact code { background:var(--n1); border:1px solid var(--n2); border-radius:4px; padding:1px 6px; word-break:break-all; }
+  .ok { color:var(--ok); } .bad { color:var(--danger); } .warn { color:var(--warn); }
+
+  /* ---- the reviewer component's own surface (sys/staging/reviewer.mjs) ---- */
+  .nk-rev-queue { display:grid; gap:12px; }
+  .nk-rev { border:1px solid var(--n2); border-radius:8px; background:var(--n0); overflow:hidden; }
+  .nk-rev-head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 12px; border-bottom:1px solid var(--n2); background:var(--n1); }
+  .nk-rev-app { font-weight:600; color:var(--accent); text-transform:uppercase; font-size:11px; letter-spacing:.04em; }
+  .nk-rev-tool { color:var(--n5); }
+  .nk-rev-summary { margin-left:auto; color:var(--n5); }
+  .nk-rev-flag { background:var(--warn); color:var(--n0); border-radius:4px; padding:0 6px; font-size:11px; }
+  .nk-rev-diff { width:100%; border-collapse:collapse; }
+  .nk-rev-diff caption { text-align:left; padding:8px 12px 4px; color:var(--n5); font-size:11px; }
+  .nk-rev-diff th, .nk-rev-diff td { text-align:left; padding:5px 12px; border-top:1px solid var(--n2); vertical-align:top; word-break:break-word; }
+  .nk-rev-diff thead th { color:var(--n5); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .nk-rev-where { width:11ch; color:var(--n5); font-weight:600; }
+  .nk-rev-before { color:var(--n5); text-decoration:line-through; text-decoration-color:var(--n3); }
+  .nk-rev-after { color:var(--n9); }
+  .nk-rev-add td, .nk-rev-add th { background:var(--add-bg); }
+  .nk-rev-remove td, .nk-rev-remove th { background:var(--rm-bg); }
+  .nk-rev-edit td, .nk-rev-edit th { background:var(--edit-bg); }
+  .nk-rev-foot { display:flex; gap:8px; align-items:center; padding:10px 12px; border-top:1px solid var(--n2); }
+  .nk-rev-why { margin:0; margin-right:auto; color:var(--danger); }
+  .nk-rev-commit { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .nk-rev-commit:disabled { background:var(--n2); border-color:var(--n3); color:var(--n5); }
+  /* Visible only to assistive tech — the add/remove/edit word behind the colour. */
+  .nk-sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  table.ledger { width:100%; border-collapse:collapse; margin-top:8px; }
+  table.ledger th, table.ledger td { text-align:left; padding:4px 8px; border-top:1px solid var(--n2); font-size:12px; }
+  table.ledger thead th { color:var(--n5); font-weight:500; font-size:11px; text-transform:uppercase; }
+  .state { padding:8px 12px; border-radius:6px; background:var(--n1); border:1px solid var(--n2); margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>P0 — the authority layer, end to end</h1>
+  <p class="sub">
+    A person mints an agent, grants it scoped tools, the agent acts across two apps, and
+    <strong>one reviewer</strong> renders both diffs before anything lands. Identity, grants and the
+    revocation list persist in an encrypted FIF on this device — reload the page and the agent is
+    still there. No account, no server, nothing leaves the browser.
+  </p>
+
+  <section class="step" id="s1">
+    <h2><span class="num">1</span> Identity — an encrypted FIF on this device</h2>
+    <div class="row">
+      <label for="pw">Passphrase</label>
+      <input id="pw" type="password" value="demo passphrase" autocomplete="off">
+      <button id="btnCreate" class="primary" type="button">Create identity</button>
+      <button id="btnUnlock" type="button">Unlock existing</button>
+      <button id="btnReset" class="danger" type="button">Destroy vault</button>
+    </div>
+    <p class="note" id="fifNote">No vault yet on this device.</p>
+    <div class="fact" id="fifFacts" hidden></div>
+  </section>
+
+  <section class="step" id="s2" aria-disabled="true">
+    <h2><span class="num">2</span> Grant — scoped tools, a TTL, a budget, and no commit</h2>
+    <div class="row">
+      <button id="btnGrant" type="button" disabled>Mint agent + issue grant</button>
+      <button id="btnRevoke" class="danger" type="button" disabled>Revoke grant</button>
+    </div>
+    <div class="fact" id="grantFacts" hidden></div>
+  </section>
+
+  <section class="step" id="s3" aria-disabled="true">
+    <h2><span class="num">3</span> The agent acts across both apps</h2>
+    <div class="row">
+      <button id="btnAct" type="button" disabled>Run the agent</button>
+      <span class="note">Stages a Reckon cell edit and a Draft rewrite — neither is applied yet.</span>
+    </div>
+  </section>
+
+  <section class="step" id="s4" aria-disabled="true">
+    <h2><span class="num">4</span> One reviewer, both diffs</h2>
+    <div id="reviewer"></div>
+    <p class="note" id="revNote">Nothing staged.</p>
+  </section>
+
+  <section class="step" id="s5" aria-disabled="true">
+    <h2><span class="num">5</span> A scope violation fails loud</h2>
+    <div class="row">
+      <button id="btnViolateTool" type="button" disabled>Agent calls an ungranted tool</button>
+      <button id="btnViolateCommit" type="button" disabled>Agent tries to commit</button>
+    </div>
+    <p class="note" id="violNote">Each attempt is refused <em>and</em> written to the ledger.</p>
+  </section>
+
+  <section class="step">
+    <h2><span class="num">6</span> State + the ledger</h2>
+    <div class="state" id="worldState">Sheet1!A1 = <code>1</code> · Sheet1!B2 = <code>(empty)</code> · Notes = <code>a rough draft</code></div>
+    <div id="chainState" class="note"></div>
+    <table class="ledger">
+      <thead><tr><th scope="col">app</th><th scope="col">tool</th><th scope="col">who</th><th scope="col">outcome</th></tr></thead>
+      <tbody id="ledgerBody"><tr><td colspan="4" class="note">empty</td></tr></tbody>
+    </table>
+  </section>
+</main>
+
+<script type="module">
+import { createFifStore, memoryBackend, opfsBackend } from '../../identity/fif.mjs';
+import { mintPrincipal } from '../../identity/principal.mjs';
+import { issueGrant, caveat } from '../../identity/grant.mjs';
+import { verifyChain, mergeChains } from '../../history/ledger.mjs';
+import { clearRegistry } from '../envelope.mjs';
+import { registerAppDiffTypes } from '../diff-types.mjs';
+import { renderReviewQueue } from '../reviewer.mjs';
+import { createStagingSession, StagingDenied } from '../session.mjs';
+
+const $ = (id) => document.getElementById(id);
+
+// OPFS is what makes the FIF durable across reloads; without it the demo still
+// runs, but says so rather than implying a persistence it does not have.
+const hasOpfs = !!(navigator.storage && navigator.storage.getDirectory);
+const backend = hasOpfs ? opfsBackend('p0-demo-fif.json') : memoryBackend();
+
+clearRegistry();
+registerAppDiffTypes();
+
+// The two "apps" — real state, so a commit visibly lands.
+const world = {
+  sheet: { A1: '1' },
+  doc: 'a rough draft',
+  reset() { this.sheet = { A1: '1' }; this.doc = 'a rough draft'; },
+};
+const appliers = {
+  reckon: async (env) => {
+    for (const op of env.diff.ops) {
+      if (op.op !== 'setCells') continue;
+      for (const [a1, cell] of Object.entries(op.cells)) {
+        if (cell === null) delete world.sheet[a1];
+        else world.sheet[a1] = 'f' in cell ? String(cell.f) : String(cell.v);
+      }
+    }
+    return { ok: true };
+  },
+  draft: async (env) => {
+    for (const h of env.diff.hunks) world.doc = world.doc.replace(h.delText, h.insText);
+    return { ok: true };
+  },
+};
+
+// Diffs in the shapes the real apps produce: a Reckon setCells transaction with
+// the inverse applyTransaction precomputes, and Draft's buildStageHunks list.
+const RECKON_DIFF = {
+  sheet: 's1', sheetName: 'Sheet1',
+  ops: [{ op: 'setCells', sheet: 's1', cells: { A1: { v: 42 }, B2: { f: '=A1*2' } } }],
+  inverse: [{ op: 'setCells', sheet: 's1', cells: { A1: { v: 1 }, B2: null } }],
+};
+const DRAFT_DIFF = {
+  docId: 'notes.md', docName: 'Notes', from: 0, to: 13,
+  hunks: [{ index: 0, kind: 'replace', delText: 'a rough draft', insText: 'a final draft' }],
+};
+
+let fif = null, session = null, person = null, agent = null, grant = null;
+
+const short = (s) => (s ? String(s).slice(0, 14) + '…' : '—');
+function facts(el, pairs) {
+  el.hidden = false;
+  el.textContent = '';
+  for (const [k, v] of pairs) {
+    const span = document.createElement('span');
+    span.textContent = k + ' ';
+    const code = document.createElement('code');
+    code.textContent = v;
+    span.appendChild(code);
+    el.appendChild(span);
+  }
+}
+function stepDone(id, done = true) {
+  const el = $(id);
+  el.classList.toggle('done', done);
+  el.setAttribute('aria-disabled', String(!done));
+}
+function enable(id, on) { $(id).disabled = !on; }
+
+async function refresh() {
+  $('worldState').textContent = '';
+  const bits = [
+    `Sheet1!A1 = ${world.sheet.A1 ?? '(empty)'}`,
+    `Sheet1!B2 = ${world.sheet.B2 ?? '(empty)'}`,
+    `Notes = ${world.doc}`,
+  ];
+  $('worldState').textContent = bits.join(' · ');
+
+  // The reviewer: one component, every open proposal, any mix of apps.
+  const host = $('reviewer');
+  host.textContent = '';
+  const pending = session ? session.pending() : [];
+  if (!pending.length) {
+    $('revNote').hidden = false;
+    $('revNote').textContent = session ? 'Nothing staged — run the agent.' : 'Nothing staged.';
+  } else {
+    $('revNote').hidden = true;
+    const { element } = renderReviewQueue(
+      pending,
+      (env) => session.contextFor(env.proposal_id),
+      {
+        doc: document,
+        onCommit: async (model) => {
+          try {
+            await session.commit(model.proposalId, { actor: 'person', principal: person.descriptor.id });
+          } catch (e) { alert(e.message); }
+          await refresh();
+        },
+        onDiscard: async (model) => { await session.discard(model.proposalId, { principal: person.descriptor.id }); await refresh(); },
+      },
+    );
+    host.appendChild(element);
+  }
+  stepDone('s4', pending.length > 0);
+
+  // The ledger, merged across apps, with its chain verified live.
+  const body = $('ledgerBody');
+  body.textContent = '';
+  const byApp = session ? session.events() : {};
+  const merged = mergeChains(byApp);
+  if (!merged.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4; td.className = 'note'; td.textContent = 'empty';
+    tr.appendChild(td); body.appendChild(tr);
+  }
+  for (const e of merged) {
+    const tr = document.createElement('tr');
+    for (const v of [e.app, e.tool, e.principal === (agent && agent.descriptor.id) ? 'agent' : 'person']) {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+    }
+    // The chain commits the outcome by hash; the live session holds the label.
+    const outcome = session.outcomeOf(e);
+    const td = document.createElement('td');
+    td.textContent = outcome.label;
+    td.className = outcome.ok ? 'ok' : 'bad';
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
+
+  const chains = await Promise.all(Object.entries(byApp).map(async ([app, evs]) => [app, await verifyChain(evs)]));
+  $('chainState').textContent = chains.length
+    ? chains.map(([app, v]) => `${app}: ${v.ok ? 'chain verified' : `BROKEN at ${v.brokenAt}`} (${byApp[app].length})`).join(' · ')
+    : '';
+  $('chainState').className = chains.every(([, v]) => v.ok) ? 'note ok' : 'note bad';
+}
+
+async function boot() {
+  $('fifNote').textContent = hasOpfs
+    ? ((await backend.read()) ? 'A vault exists on this device — unlock it.' : 'No vault yet on this device.')
+    : 'This browser has no OPFS: the vault will not survive a reload.';
+  await refresh();
+}
+
+// Deriving the vault key is 600k PBKDF2 rounds — one to two seconds of silence
+// unless the control says it is working. Without this the button reads as dead
+// and the person clicks again.
+async function withBusy(btn, label, fn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = label;
+  $('fifNote').textContent = 'Deriving the vault key (600,000 PBKDF2 rounds)…';
+  $('fifNote').className = 'note';
+  try { await fn(); } finally { btn.disabled = false; btn.textContent = original; }
+}
+
+$('btnCreate').addEventListener('click', () => withBusy($('btnCreate'), 'Creating…', async () => {
+  try {
+    fif = createFifStore({ backend });
+    await fif.create($('pw').value, { force: true });
+    await afterUnlock('created');
+  } catch (e) { $('fifNote').textContent = e.message; $('fifNote').className = 'note bad'; }
+}));
+
+$('btnUnlock').addEventListener('click', () => withBusy($('btnUnlock'), 'Unlocking…', async () => {
+  try {
+    fif = createFifStore({ backend });
+    await fif.unlock($('pw').value);
+    await afterUnlock('unlocked');
+  } catch (e) { $('fifNote').textContent = e.message; $('fifNote').className = 'note bad'; }
+}));
+
+$('btnReset').addEventListener('click', async () => {
+  await backend.clear();
+  fif = session = person = agent = grant = null;
+  world.reset();
+  for (const id of ['s1', 's2', 's3', 's4', 's5']) stepDone(id, false);
+  for (const id of ['btnGrant', 'btnRevoke', 'btnAct', 'btnViolateTool', 'btnViolateCommit']) enable(id, false);
+  $('fifFacts').hidden = true; $('grantFacts').hidden = true;
+  $('fifNote').textContent = 'Vault destroyed.'; $('fifNote').className = 'note';
+  await refresh();
+});
+
+// Restore whatever the FIF already holds — this is the durability payoff: after
+// a reload the person, the agent and the grant come back without re-minting.
+async function afterUnlock(how) {
+  session = createStagingSession({ fif, appliers });
+  const principals = fif.listPrincipals();
+  person = null; agent = null; grant = null;
+  for (const d of principals) {
+    if (d.kind === 'person' && !person) person = await fif.getPrincipal(d.id);
+    if (d.kind === 'agent' && !agent) agent = await fif.getPrincipal(d.id);
+  }
+  const grants = fif.listGrants();
+  if (grants.length) grant = grants[grants.length - 1].grant;
+
+  $('fifNote').className = 'note ok';
+  $('fifNote').textContent = hasOpfs
+    ? `FIF ${how} — encrypted with AES-256-GCM in OPFS on this device.`
+    : `FIF ${how} — in memory only (no OPFS in this browser).`;
+  facts($('fifFacts'), [['principals', String(principals.length)], ['grants', String(grants.length)]]);
+  stepDone('s1');
+  stepDone('s2', !!grant);
+  enable('btnGrant', true);
+  enable('btnRevoke', !!grant);
+  enable('btnAct', !!grant);
+  enable('btnViolateTool', !!grant);
+  enable('btnViolateCommit', false);
+  if (grant) showGrant();
+  await refresh();
+}
+
+function showGrant() {
+  const tools = (grant.caveats.find((c) => c.type === 'tools') || {}).value || [];
+  const ttl = (grant.caveats.find((c) => c.type === 'ttl') || {}).value;
+  const budget = (grant.caveats.find((c) => c.type === 'budget') || {}).value;
+  facts($('grantFacts'), [
+    ['agent', short(agent && agent.descriptor.id)],
+    ['minted by', short(agent && agent.descriptor.mintedBy)],
+    ['tools', tools.join(' + ')],
+    ['expires', ttl ? new Date(ttl).toLocaleTimeString() : '—'],
+    ['budget', budget ? `${budget.calls} calls` : '—'],
+    ['commit', 'person-only'],
+  ]);
+}
+
+$('btnGrant').addEventListener('click', async () => {
+  person = person || await mintPrincipal(null, { kind: 'person', label: 'You' });
+  await fif.putPrincipal(person);
+  agent = await mintPrincipal(person, { kind: 'agent', label: 'summariser' });
+  await fif.putPrincipal(agent);
+  grant = await issueGrant(fif.rootKey(), {
+    caveats: [
+      caveat.principal(agent.descriptor.id),
+      caveat.tools(['reckon.setRange', 'draft.replaceRange']),
+      caveat.ttl(Date.now() + 600_000),
+      caveat.budget({ calls: 50 }),
+    ],
+  });
+  await fif.putGrant(grant, { label: 'summariser session', principal: agent.descriptor.id });
+  showGrant();
+  stepDone('s2');
+  enable('btnRevoke', true); enable('btnAct', true); enable('btnViolateTool', true);
+  await refresh();
+});
+
+$('btnRevoke').addEventListener('click', async () => {
+  await fif.revoke(grant.identifier);
+  $('violNote').textContent = 'Grant revoked — the agent stops mid-session; every later call is refused and logged.';
+  $('violNote').className = 'note warn';
+  await refresh();
+});
+
+$('btnAct').addEventListener('click', async () => {
+  const who = { principal: agent.descriptor.id, grant };
+  try {
+    await session.stage({ ...who, app: 'reckon', tool: 'reckon.setRange', diff: RECKON_DIFF });
+    await session.stage({ ...who, app: 'draft', tool: 'draft.replaceRange', diff: DRAFT_DIFF });
+    stepDone('s3');
+    enable('btnViolateCommit', true);
+  } catch (e) {
+    $('violNote').textContent = `Refused: ${e.reason || e.message}`;
+    $('violNote').className = 'note bad';
+  }
+  await refresh();
+});
+
+$('btnViolateTool').addEventListener('click', async () => {
+  try {
+    await session.stage({ principal: agent.descriptor.id, grant, app: 'reckon', tool: 'kanzen.cardMove', diff: RECKON_DIFF });
+    $('violNote').textContent = 'Unexpected: the ungranted call was allowed.';
+    $('violNote').className = 'note bad';
+  } catch (e) {
+    $('violNote').textContent = `Refused — ${e instanceof StagingDenied ? e.reason : e.message}. The refusal is in the ledger below.`;
+    $('violNote').className = 'note ok';
+    stepDone('s5');
+  }
+  await refresh();
+});
+
+$('btnViolateCommit').addEventListener('click', async () => {
+  const open = session.pending()[0];
+  if (!open) { $('violNote').textContent = 'Stage something first.'; return; }
+  try {
+    await session.commit(open.proposal_id, { actor: 'agent', principal: agent.descriptor.id, grant });
+    $('violNote').textContent = 'Unexpected: the agent committed.';
+    $('violNote').className = 'note bad';
+  } catch (e) {
+    $('violNote').textContent = `Refused — ${e.reason || e.message}. The proposal survives for a person to review.`;
+    $('violNote').className = 'note ok';
+    stepDone('s5');
+  }
+  await refresh();
+});
+
+await boot();
+</script>
+</body>
+</html>
