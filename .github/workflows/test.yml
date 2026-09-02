@@ -123,6 +123,9 @@ jobs:
       - name: Verify P0 Staging — one reviewer over many apps (real diff types)
         run: node sys/staging/test/reviewer.test.mjs
 
+      - name: Verify P0 end-to-end — mint→grant→act across apps→review→commit
+        run: node sys/staging/test/session.test.mjs
+
       - name: Verify P0 enforcement — agent face capability check
         run: node sys/rig/agent/test/agent-face-capability.test.mjs
 
