@@ -233,6 +233,7 @@
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
   import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, reviseTool } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
+  import { compactConversation } from '../../sys/ai/compaction.mjs';
   import { evolve } from '../../sys/ai/evolve.mjs';
   import { createKiln, createWorkerRuntime } from '../../sys/kiln/index.mjs';
   import { createFsBridge } from '../../sys/kiln/fs-bridge.mjs';
@@ -1151,6 +1152,47 @@
     });
   }
 
+  // What the NEXT run gets to see. t.convo used to accumulate only user prompts
+  // and the final assistant text — never a tool call, a tool result, or the gate
+  // output — so a follow-up send restarted blind. After a few sends the model was
+  // handed a transcript of consecutive user turns (observed 2026-09-03:
+  // [user, user, user, assistant, user, user]) and answered in prose instead of
+  // using tools. The gate feedback an agent needs to fix its own work survived
+  // only INSIDE one run.
+  //
+  // Three constraints:
+  //  - never split a turn: an assistant turn carrying tool_calls must keep its
+  //    matching role:'tool' replies or an OpenAI-compatible endpoint rejects the
+  //    transcript. compactConversation is turn-boundary safe and shakes bulky
+  //    tool bodies into artifact refs rather than dropping them.
+  //  - drop the incoming system prefix: sysMsg() is rebuilt every run, so
+  //    carrying it forward would duplicate it. A summary system message that
+  //    compaction ADDS is kept — it is new information.
+  //  - stay inside localStorage: save() writes one key inside a swallowing
+  //    try/catch, so an oversized convo would silently break ALL persistence,
+  //    tasks included. Hard-cap by serialized size, trimming whole turns.
+  const CONVO_MAX_CHARS = 120000;
+  const startsATurn = (m) => m && m.role !== 'tool';
+  async function carryForward(messages){
+    const msgs = Array.isArray(messages) ? messages.slice() : [];
+    let i = 0; while (i < msgs.length && msgs[i] && msgs[i].role === 'system') i++;
+    let out = msgs.slice(i);
+    try {
+      const r = await compactConversation(out, { threshold: 24000, keepRecentTokens: 10000 });
+      if (Array.isArray(r.messages)) out = r.messages;
+    } catch(_) { /* compaction is best-effort; an uncompacted transcript still works */ }
+    // A trailing assistant turn whose tool replies never arrived (an aborted run)
+    // is malformed as the START of the next request — drop it.
+    while (out.length && out[out.length-1] && out[out.length-1].role === 'assistant'
+           && Array.isArray(out[out.length-1].tool_calls) && out[out.length-1].tool_calls.length) out.pop();
+    // Trim from the front, whole turns only, until it fits.
+    while (out.length && JSON.stringify(out).length > CONVO_MAX_CHARS) {
+      out.shift();
+      while (out.length && !startsATurn(out[0])) out.shift(); // never begin on an orphan tool reply
+    }
+    return out;
+  }
+
   async function inferViaHost({ messages, tools, maxTokens, signal }){
     const ai = nak && nak.ai;
     if(!ai) throw new Error('Agent needs the NakliOS host — open Anvil inside NakliOS (naklios.dev), and set a model in Settings → AI.');
@@ -1461,7 +1503,10 @@
         result = await runAgentLoop({ messages:[sysMsg(''), ...convo], tools, infer: inferViaHost, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:onLoopEvent });
       }
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
-      if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text});
+      // Carry the REAL transcript forward — tool calls, tool results and the gate
+      // feedback — so a follow-up send resumes instead of restarting blind.
+      try{ t.convo = await carryForward(result.messages); }
+      catch(_){ if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text}); }
       // #5 plan→manual: a finished PLAN becomes a durable "plan of record" in project
       // memory (a hypothesis), so the follow-up CODE task starts from it (the memory
       // index is injected at task start) — Agno's explore-then-exploit, made durable.
