@@ -81,6 +81,9 @@ jobs:
       - name: Verify Anvil honesty guards (gate, hooks, single-writer state)
         run: node scripts/test-anvil-guards.mjs
 
+      - name: Verify the NakliOS dialog promise always settles (no wedged consent)
+        run: node scripts/test-host-dialog-settles.mjs
+
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 

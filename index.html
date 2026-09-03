@@ -3297,11 +3297,23 @@ function _nakliosDialog({ title, body, buttons, kind, allowHtmlBody }){
       </form>
     `;
     document.body.appendChild(dlg);
-    dlg.addEventListener('close', () => {
-      const val = dlg.returnValue || 'cancel';
-      dlg.remove();
+    // This promise MUST settle exactly once, on every path. A dialog that leaves
+    // the DOM without firing `close` used to leave the promise pending forever —
+    // and a caller that caches it (aiEnsurePermission's permissionPrompts map)
+    // then handed the same dead promise to every later request, wedging the app
+    // permanently with no error and no timeout. Observed 2026-09-03 against Anvil:
+    // "running" that never ends and "Stopping…" that never completes.
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      try { removalWatch.disconnect(); } catch (_) {}
+      try { dlg.remove(); } catch (_) {}
       resolve(val);
-    }, { once: true });
+    };
+    const removalWatch = new MutationObserver(() => { if (!dlg.isConnected) finish('cancel'); });
+    removalWatch.observe(document.body, { childList: true, subtree: true });
+    dlg.addEventListener('close', () => finish(dlg.returnValue || 'cancel'), { once: true });
     dlg.showModal();
   });
 }

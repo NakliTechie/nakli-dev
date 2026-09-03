@@ -1133,20 +1133,41 @@
   }
 
   // ── The model side — identical transport to Forge (host agent tier) ──
-  async function inferViaHost({ messages, tools, maxTokens }){
+  // An app must never await the host forever. If the host wedges — a permission
+  // prompt that never resolves was the real case (2026-09-03) — an unbounded
+  // await hangs the whole agent with no error, and the loop's wall-clock budget
+  // cannot help because it is only checked between turns. Bound every call and
+  // honour the run's abort signal.
+  const INFER_TIMEOUT_MS = 240000;
+  function withDeadline(promise, signal){
+    return new Promise((resolve, reject)=>{
+      let done=false;
+      const settle=(fn)=>(v)=>{ if(done) return; done=true; clearTimeout(timer); if(onAbort&&signal) signal.removeEventListener('abort', onAbort); fn(v); };
+      const ok=settle(resolve), bad=settle(reject);
+      const timer=setTimeout(()=>bad(new Error('the model did not respond within '+Math.round(INFER_TIMEOUT_MS/1000)+'s — the host or endpoint may be stuck')), INFER_TIMEOUT_MS);
+      const onAbort=signal?()=>bad(new Error('aborted')):null;
+      if(signal){ if(signal.aborted) return bad(new Error('aborted')); signal.addEventListener('abort', onAbort); }
+      promise.then(ok, bad);
+    });
+  }
+
+  async function inferViaHost({ messages, tools, maxTokens, signal }){
     const ai = nak && nak.ai;
     if(!ai) throw new Error('Agent needs the NakliOS host — open Anvil inside NakliOS (naklios.dev), and set a model in Settings → AI.');
     let lastErr;
     for(let a=0;a<3;a++){
+      if(signal && signal.aborted) throw new Error('aborted');
       try{
         // max_tokens is opt-in: a weak model that puts everything in reasoning tokens
         // can hit the default output cap and return empty (finishReason "length").
         const req = { agent:true, messages, tools, tool_choice:'auto', stream:false };
         if(maxTokens){ req.max_tokens = maxTokens; }
-        const r = await ai.chat.completions.create(req);
+        const r = await withDeadline(ai.chat.completions.create(req), signal);
         const ch=r&&r.choices&&r.choices[0]; const m=(ch&&ch.message)||{};
         return { content: typeof m.content==='string'?m.content:'', toolCalls: Array.isArray(m.tool_calls)?m.tool_calls:[], finishReason:(ch&&ch.finish_reason)||'stop' };
-      }catch(e){ lastErr=e; const s=String(e&&e.message||e); if((/\b(405|408|409|425|429|5\d\d)\b/.test(s)||/timeout|network|temporarily|fetch/i.test(s))&&a<2){ await new Promise(r=>setTimeout(r,400*(a+1))); continue; } throw e; }
+      // An abort is the user's decision, never a transient fault — surface it
+      // immediately instead of burning two retries and a backoff on it.
+      }catch(e){ lastErr=e; const s=String(e&&e.message||e); if(/^aborted$/.test(s)) throw e; if((/\b(405|408|409|425|429|5\d\d)\b/.test(s)||/timeout|network|temporarily|fetch/i.test(s))&&a<2){ await new Promise(r=>setTimeout(r,400*(a+1))); continue; } throw e; }
     }
     throw lastErr;
   }
@@ -1399,14 +1420,24 @@
     try{
       let toolCalls=0;
       const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
+      // A turn in flight is the longest silence in a run — on a local model it can
+      // be minutes. Show a placeholder so a working agent and a wedged one are
+      // distinguishable; it is replaced by whatever the turn actually produces.
+      let thinking=null;
+      const clearThinking=()=>{ if(thinking){ const i=t.log.indexOf(thinking); if(i>=0) t.log.splice(i,1); thinking=null; } };
       const onLoopEvent=(e)=>{
-          if(e.type==='tool-call'){ toolCalls++; const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
-          else if(e.type==='tool-result'){ if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); noteChange(t,liveTool.name,liveTool.args); liveTool=null; } renderLog(); }
-          else if(e.type==='tool-error'){ if(liveTool){ liveTool.error=String(e.error); liveTool=null; } renderLog(); }
-          else if(e.type==='assistant' && e.content){ t.log.push({k:'assistant',text:e.content}); renderLog(); }
-          else if(e.type==='verify-pass'){ t.log.push({k:'system',text:'✓ gate passed — `'+verifyCmd+'` exit 0'}); renderLog(); }
-          else if(e.type==='verify-fail'){ t.log.push({k:'system',text:'✗ gate failed (round '+(e.round||1)+') — `'+verifyCmd+'` exit '+((e.verdict&&e.verdict.exit)!=null?e.verdict.exit:'?')+'; agent retrying'}); renderLog(); }
-          else if(e.type==='error'){ t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
+          if(e.type==='turn-start'){ clearThinking(); thinking={k:'system',text:'thinking… (step '+((e.step||0)+1)+')'}; t.log.push(thinking); renderLog(); }
+          else if(e.type==='tool-call'){ clearThinking(); toolCalls++; const a=e.args||{}; const detail=a.command||a.path||a.file||a.old_string||(a.patch?'patch':'')||''; liveTool={k:'tool',name:e.name,detail:String(detail).split('\n')[0].slice(0,120),result:null,error:null,args:a}; t.log.push(liveTool); renderLog(); }
+          // An orphan tool-result/tool-error (no preceding tool-call) is REAL:
+          // task_done is intercepted before executeTool and emits only a result,
+          // and unparseable arguments emit only an error. Dropping them made those
+          // paths invisible — the agent's own completion signal left no trace.
+          else if(e.type==='tool-result'){ clearThinking(); if(liveTool){ liveTool.result=String(e.result==null?'':e.result).slice(0,8000); noteChange(t,liveTool.name,liveTool.args); liveTool=null; } else { t.log.push({k:'tool',name:e.name||'(tool)',detail:'',result:String(e.result==null?'':e.result).slice(0,8000),error:null}); } renderLog(); }
+          else if(e.type==='tool-error'){ clearThinking(); if(liveTool){ liveTool.error=String(e.error); liveTool=null; } else { t.log.push({k:'tool',name:e.name||'(tool)',detail:'(arguments rejected)',result:null,error:String(e.error)}); } renderLog(); }
+          else if(e.type==='assistant' && e.content){ clearThinking(); t.log.push({k:'assistant',text:e.content}); renderLog(); }
+          else if(e.type==='verify-pass'){ clearThinking(); liveTool=null; t.log.push({k:'system',text:'✓ gate passed — `'+verifyCmd+'` exit 0'}); renderLog(); }
+          else if(e.type==='verify-fail'){ clearThinking(); liveTool=null; t.log.push({k:'system',text:'✗ gate failed (round '+(e.round||1)+') — `'+verifyCmd+'` exit '+((e.verdict&&e.verdict.exit)!=null?e.verdict.exit:'?')+'; agent retrying'}); renderLog(); }
+          else if(e.type==='error'){ clearThinking(); t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
       };
       let result = await runAgentLoop({
         messages:[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo],

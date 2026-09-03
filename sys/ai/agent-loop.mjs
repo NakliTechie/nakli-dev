@@ -225,9 +225,17 @@ export async function runAgentLoop({
       onEvent({ type: 'done', reason: 'budget', axis, step });
       return { messages: convo, steps: step, stop: 'budget', budgetAxis: axis, text: lastText };
     }
+    // A turn can be long (a slow local model thinks for minutes) and until it
+    // returns there is NOTHING on screen, so a working run and a wedged one look
+    // identical. Announce the turn before blocking on it.
+    onEvent({ type: 'turn-start', step });
     let reply;
     try {
-      reply = await infer({ messages: convo, tools });
+      // `signal` reaches infer so an in-flight call can actually be cancelled.
+      // Without it Stop only takes effect BETWEEN turns, so a hung inference
+      // ignores both the abort and the wall-clock budget (which is also only
+      // checked between turns) — the run becomes uninterruptible.
+      reply = await infer({ messages: convo, tools, signal });
     } catch (e) {
       onEvent({ type: 'error', error: String(e?.message || e), step });
       return { messages: convo, steps: step, stop: 'error', text: lastText, error: String(e?.message || e) };

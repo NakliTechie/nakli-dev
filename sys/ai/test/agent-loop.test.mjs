@@ -86,6 +86,53 @@ await test('a scripted 3-tool-call loop creates and reads a file, then finishes'
   assert(events.some(e => e.type === 'done'), 'a done event fired');
 });
 
+// ── a turn must be observable and cancellable while it is in flight ──────
+await test('every turn announces itself before blocking on the model', async () => {
+  const shell = freshShell();
+  const events = [];
+  await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: scriptedInfer([
+      { content: '', toolCalls: [call('shell', { command: 'echo a' }, 'c0')] },
+      { content: 'finished.', toolCalls: [] },
+    ]),
+    executeTool: makeShellExecutor(shell),
+    onEvent: e => events.push(e),
+  });
+  // Without this the UI has nothing to draw while a slow model thinks, so a
+  // working run and a wedged one look identical.
+  eq(events.filter(e => e.type === 'turn-start').length, 2, 'one turn-start per model turn');
+  const first = events.findIndex(e => e.type === 'turn-start');
+  const firstCall = events.findIndex(e => e.type === 'tool-call');
+  assert(first >= 0 && first < firstCall, 'turn-start precedes the turn it announces');
+  eq(events.filter(e => e.type === 'turn-start')[0].step, 0, 'turn-start carries its step');
+});
+
+await test('the abort signal reaches infer, so an in-flight call can be cancelled', async () => {
+  const shell = freshShell();
+  const seen = [];
+  const controller = new AbortController();
+  // A hung endpoint: infer never resolves on its own — only the signal ends it.
+  const hangingInfer = ({ signal }) => new Promise((resolve, reject) => {
+    seen.push(signal || null);
+    if (signal) signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  setTimeout(() => controller.abort(), 20);
+  const result = await runAgentLoop({
+    messages: [{ role: 'user', content: 'go' }],
+    tools: [shellTool()],
+    infer: hangingInfer,
+    executeTool: makeShellExecutor(shell),
+    signal: controller.signal,
+  });
+  assert(seen[0], 'infer received a signal');
+  eq(seen[0].aborted, true, 'and it is the run\'s own signal');
+  // Stop must end the run. Before this, abort was only checked BETWEEN turns, so
+  // a hung inference ignored both Stop and the wall-clock budget.
+  assert(result.stop === 'aborted' || result.stop === 'error', `run ended on abort, got ${result.stop}`);
+});
+
 await test('assistant tool-call turns carry null content + tool_calls, paired by id', async () => {
   const shell = freshShell();
   const result = await runAgentLoop({
