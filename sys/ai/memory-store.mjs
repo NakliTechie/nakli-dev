@@ -15,9 +15,13 @@ import { parseFrontmatter } from './skills.mjs';
 
 export const MEMORY_DIR = '.anvil/memory';
 export const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'];
-// Belief-revision (Agno's "learning machine" mechanism): a learning starts as a
-// HYPOTHESIS, is promoted to VERIFIED when a check corroborates it, and is RETRACTED
-// when an observation disproves it — so the agent stops re-paying for a wrong note.
+// Belief-revision: a learning starts as a HYPOTHESIS, is promoted to VERIFIED when a
+// check corroborates it, and is RETRACTED when an observation disproves it — so the
+// agent stops re-paying for a wrong note. The status model is OURS. It was inspired
+// by Agno's "learning machine" framing (learn from corrections, don't just
+// accumulate), but Agno's stores carry no such status — checked against
+// agno/learn/ source 2026-09-04: LearnedKnowledge is {title, learning, context,
+// tags}; the only retraction there is an appended contradicting event in EntityMemory.
 // A fact with no status is a plain durable fact (back-compat).
 export const MEMORY_STATUSES = ['hypothesis', 'verified', 'retracted'];
 

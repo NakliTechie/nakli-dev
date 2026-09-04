@@ -1,4 +1,4 @@
-// Conformance — belief-revising project memory (Agno "learning machine" mechanism):
+// Conformance — belief-revising project memory (our status model; Agno-inspired, not Agno's):
 // a learning is a hypothesis, promoted on corroboration, retracted on disproof.
 //   node sys/ai/test/memory-belief.test.mjs
 import { parseFact, noteToFact, buildMemoryIndex, applyRevision, reviseTool, MEMORY_STATUSES } from '../memory-store.mjs';
