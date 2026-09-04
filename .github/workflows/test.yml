@@ -132,6 +132,9 @@ jobs:
       - name: Verify P0 History — tamper-evident ledger
         run: node sys/history/test/ledger.test.mjs
 
+      - name: Verify the run record — record a real run, fold it, replay it with zero model calls
+        run: node sys/history/test/run-record.test.mjs
+
       - name: Verify P0 Staging — envelope + commit authority
         run: node sys/staging/test/envelope.test.mjs
 
