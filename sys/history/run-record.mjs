@@ -76,7 +76,6 @@ export function createRunRecorder({ app = 'anvil', principal = 'local', grant_id
   const argsHashes = new Map(); // tool-call id -> args_hash (so tool.responded can be keyed for replay)
   let head = null;
   let queue = Promise.resolve();
-  let stopped = false;
 
   let step = null;              // the current turn, as the loop reports it
   async function append(tool, input, output) {
@@ -136,10 +135,11 @@ export function createRunRecorder({ app = 'anvil', principal = 'local', grant_id
       };
     },
 
-    // Record how the run ended, from the loop's return value — the one complete statement.
+    // Record how a loop ended, from its return value — the one complete statement.
+    // Called once per loop; a task that re-runs the loop (Anvil's act-or-nudge)
+    // records two run.stopped events, and foldStatus reads the LAST — honest, since
+    // two loops ran.
     async finish(result) {
-      if (stopped) return;
-      stopped = true;
       await enqueue('run.stopped', () => ({ input: { steps: result?.steps ?? null }, output: {
         stop: result?.stop ?? 'unknown', reason: result?.reason ?? null,
         verified: result?.verified === true, axis: result?.budgetAxis ?? null,

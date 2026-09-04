@@ -250,6 +250,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
+  import { createRunRecorder, foldStatus, foldLog } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -1228,6 +1229,22 @@
     if(running){ (t.queued=t.queued||[]).push(text); save(); renderLog(); return; }
     runTask(t, text);
   }
+  // Run records live in Anvil's OWN OPFS namespace (anvil/runs/<project>/<task>/),
+  // never inside the mounted workspace: an agent will edit whatever it can reach
+  // (khiladi's driver "fixed" its own event log), and a ledger the agent can rewrite
+  // audits nothing. Same posture as the FIF. Returns the saved path, or null.
+  async function saveRunRecord(t, rec){
+    if(!opfsAvailable()) return null;
+    const dir='anvil/runs/'+String(state.activeProject||'local')+'/'+String(t.id);
+    const backend=await createOpfsBackend({ path: dir });
+    const rfs=createFileops({ backend });
+    const name=new Date().toISOString().replace(/[:.]/g,'-')+'.json';
+    const dump=rec.export();
+    const r=await rfs.write(name, JSON.stringify(dump));
+    if(r && r.ok===false) throw new Error(r.error||'write failed');
+    return dir+'/'+name;
+  }
+
   async function runTask(t, text){
     if(!t||running) return;
     if(t.title==='Untitled task'){ t.title=text.slice(0,48); }
@@ -1481,17 +1498,28 @@
           else if(e.type==='verify-fail'){ clearThinking(); liveTool=null; t.log.push({k:'system',text:'✗ gate failed (round '+(e.round||1)+') — `'+verifyCmd+'` exit '+((e.verdict&&e.verdict.exit)!=null?e.verdict.exit:'?')+'; agent retrying'}); renderLog(); }
           else if(e.type==='error'){ clearThinking(); t.log.push({k:'system',text:'agent error: '+e.error}); renderLog(); }
       };
+      // The run record (plan/anvil-event-log-substrate.md, layer 2a): every event of
+      // this run lands on an append-only hash chain and is persisted OUTSIDE the
+      // agent's mount. Dual-write for now — t.log / t.status keep their writers and
+      // the record runs alongside, with a self-check below that the folds agree.
+      // Layer 2b flips the reads to the folds and deletes the writers.
+      const rec = createRunRecorder({ app:'anvil', principal:'anvil:'+String(state.activeProject||'local') });
+      const firstMessages=[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo];
+      const recInfer = rec.wrapInfer(inferViaHost);
+      const recEvent = (e)=>{ onLoopEvent(e); rec.onEvent(e); };
+      await rec.start({ messages: firstMessages, tools });
       let result = await runAgentLoop({
-        messages:[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo],
-        tools, infer: inferViaHost, executeTool, maxSteps:24, signal: abortController.signal,
+        messages: firstMessages,
+        tools, infer: recInfer, executeTool, maxSteps:24, signal: abortController.signal,
         // Wall clock, not step count, is what ends a run on a local model. Measured
         // 2026-09-03 against Ollama qwen3:8b (thinking mode) through this loop: 3
         // steps consumed the whole 240s budget, so the agent never saw its own gate
         // failure and could not act on it — and a re-send does not help, because
         // t.convo carries only prompts and the final text, never the gate output.
         // 900s lets a slow local model actually reach the retry it needs.
-        budget: { tokens: 120000, wallClockMs: 900000 }, verify, maxVerifyRounds: 3, onEvent:onLoopEvent,
+        budget: { tokens: 120000, wallClockMs: 900000 }, verify, maxVerifyRounds: 3, onEvent:recEvent,
       });
+      await rec.finish(result);
       // Act-or-nudge: a CODE-mode run that produced ONLY prose (0 tool calls) gets one
       // firm nudge to actually use the tools — weak endpoints often "answer" instead of
       // doing the work (this stalled ARC tasks 2–3 on the flash model). plan/ask untouched.
@@ -1500,7 +1528,10 @@
         t.log.push({k:'system',text:'No tools were used — nudging the agent to make the change, not just describe it.'}); renderLog();
         if(prose) convo.push({role:'assistant', content:prose.text});
         convo.push({role:'user', content:'You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
-        result = await runAgentLoop({ messages:[sysMsg(''), ...convo], tools, infer: inferViaHost, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:onLoopEvent });
+        const nudgeMessages=[sysMsg(''), ...convo];
+        await rec.start({ messages: nudgeMessages, tools });
+        result = await runAgentLoop({ messages: nudgeMessages, tools, infer: recInfer, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:recEvent });
+        await rec.finish(result);
       }
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
       // Carry the REAL transcript forward — tool calls, tool results and the gate
@@ -1531,6 +1562,20 @@
         : result.stop;
       if(result.stop==='unverified') t.status='error';
       t.log.push({k:'system',text:`agent ${stopLabel} · ${result.steps} steps`});
+      // Persist the record and check it against what the app believes. A fold that
+      // disagrees with the live state is a defect in one of them — say so in the
+      // log rather than let the two quietly drift (the exact failure this substrate
+      // exists to remove).
+      try{
+        await rec.settled();
+        const ev=rec.events();
+        const folded=foldStatus(ev, rec.resolve, { gated });
+        if(folded.status!==t.status) t.log.push({k:'system',text:'⚠ run record disagrees with task status: record says '+folded.status+', app says '+t.status+' — report this'});
+        const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.filter(r=>r.k==='tool').length;
+        if(foldedTools!==liveTools) t.log.push({k:'system',text:'⚠ run record disagrees with the log: record has '+foldedTools+' tool rows, app has '+liveTools+' — report this'});
+        const saved=await saveRunRecord(t, rec);
+        t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+(saved?(' · saved '+saved):' · not saved (no OPFS)')});
+      }catch(e){ t.log.push({k:'system',text:'record: could not persist — '+String(e&&e.message||e)}); }
     }catch(e){
       t.status='error';
       t.log.push({k:'system',text:String(e&&e.message||e)});
