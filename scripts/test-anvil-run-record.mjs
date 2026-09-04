@@ -62,12 +62,13 @@ assert.match(anvil, /showDirectoryPicker\(\{ mode:'readwrite', id:'anvil-home' \
 assert.match(anvil, /const h=await idbGet\(HOME_KEY\); if\(h&&typeof h\.queryPermission==='function'\)\{ homeSaved=true;/, 'boot re-checks the remembered home');
 assert.match(anvil, /opfsPersisted=await navigator\.storage\.persisted\(\)/, 'boot learns whether browser storage is persisted');
 // write-through: both rungs attempted, each reported, neither silently skipped
-const save = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec){'), anvil.indexOf('async function runTask(t, text){'));
+const save = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec'), anvil.indexOf('async function runTask(t, text){'));
+assert.ok(save.length > 200, 'the saveRunRecord slice is non-empty (a stale anchor here once pushed a red test to main)');
 assert.match(save, /createOpfsBackend\(\{ path:'anvil\/'\+rel \}\)/, 'rung 0: OPFS');
 assert.match(save, /if\(homeHandle\)\{/, 'rung 1: the home, when connected');
 assert.match(save, /fh\.createWritable\(\)/, 'the home is written through raw FSA handles, not the agent-facing fs');
 assert.match(save, /'browser storage \(evictable\)'/, 'an unpersisted OPFS copy is labelled evictable');
-assert.match(save, /return \{ path, name, tiers, errors \}/, 'every rung and every failure is returned');
+assert.match(save, /return \{ path, name, tiers, errors(, count)? \}/, 'every rung and every failure is returned');
 assert.ok(!/fs\.write/.test(save), 'saveRunRecord never touches the agent-facing fs');
 // the closing line
 assert.match(runTask, /const where = saved\.tiers\.length \? saved\.tiers\.join\(' \+ '\) : 'NOT saved'/, 'the closing line names every rung the record reached');
