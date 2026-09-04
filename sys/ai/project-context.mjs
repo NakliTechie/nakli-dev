@@ -70,6 +70,9 @@ export function rememberTool() {
         properties: {
           note: { type: 'string', description: 'The learning. First line is the summary shown in the memory index; add detail on following lines if useful.' },
           type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'], description: 'Kind of fact (default: project).' },
+          slot: { type: 'string', description: 'Optional single-valued key this fact fills (e.g. "build-tool", "db", "phase"). A new value for a slot supersedes the current holder.' },
+          derived_from: { type: 'string', description: 'Optional comma-separated fact names this learning rests on. If one is later retracted, this fact drops back to hypothesis.' },
+          supersedes: { type: 'string', description: 'Optional comma-separated fact names this learning replaces.' },
         },
         required: ['note'],
       },

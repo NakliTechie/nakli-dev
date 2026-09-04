@@ -231,7 +231,7 @@
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
-  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, reviseTool } from '../../sys/ai/memory-store.mjs';
+  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, applyDemotion, dependantsOf, slotHolder, reviseTool } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { compactConversation } from '../../sys/ai/compaction.mjs';
   import { evolve } from '../../sys/ai/evolve.mjs';
@@ -632,9 +632,13 @@
   // memory.md; clicking opens whichever exists (memory first) in the preview.
   // Write one durable memory fact (belief-revision: default hypothesis). Returns the
   // slug, or null. Shared by the `remember` tool and the Prime flow.
-  async function recordFact(note, type, status='hypothesis'){
+  // `rel` = { slot, derived_from, supersedes } (A1). A single-valued slot supersedes its
+  // current holder deterministically at write time — no model call, no clock.
+  async function recordFact(note, type, status='hypothesis', rel={}){
     const clean=String(note==null?'':note).trim(); if(!clean) return null;
-    const f=noteToFact(clean, type, status);
+    const r={ ...(rel||{}) };
+    if(r.slot){ const holder=slotHolder(await listFacts(), r.slot); if(holder) r.supersedes=[holder].concat(r.supersedes?String(r.supersedes).split(/[,\s]+/):[]); }
+    const f=noteToFact(clean, type, status, r);
     let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
     try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
     await fs.write(path, f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n'));
@@ -751,7 +755,7 @@
     try{
       const dir=await fs.list(MEMORY_DIR,{recursive:false});
       if(dir&&dir.ok){ for(const e of (dir.entries||[])){ if(e.type==='dir'||!e.name.endsWith('.md')) continue;
-        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type, status:f.status }); } }catch(_){} } }
+        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ ...f, name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type, status:f.status, path:e.path }); } }catch(_){} } }
     }catch(_){}
     return out;
   }
@@ -1475,7 +1479,7 @@
         if(!note) return 'Nothing recorded (empty note).';
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
-        const slug=await recordFact(note, ar&&ar.type, 'hypothesis');
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes });
         if(slug) factMap[slug]=MEMORY_DIR+'/'+slug+'.md';
         return slug?('Recorded fact "'+slug+'" (hypothesis) — promote or retract it with `revise` as evidence arrives.'):'Nothing recorded.';
       }
@@ -1487,7 +1491,22 @@
         if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
         if(status!=='verified' && status!=='retracted') return 'status must be "verified" or "retracted".';
         const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
-        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ await fs.write(p, applyRevision(r.data, { status, reason: ar&&ar.reason })); renderFiles(); return 'Revised "'+name+'" → '+status+(ar&&ar.reason?(' ('+String(ar.reason).slice(0,80)+')'):'')+'.'; } }catch(_){}
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){
+          await fs.write(p, applyRevision(r.data, { status, reason: ar&&ar.reason, cause: ar&&ar.cause, contradicts: ar&&ar.contradicts }));
+          // Revalidation: a retracted basis demotes every fact derived from it (transitively)
+          // back to hypothesis — the dependants keep their derived_from link as the audit trail.
+          let demoted=[];
+          if(status==='retracted'){
+            const all=await listFacts();
+            for(const dn of dependantsOf(all, name)){
+              const d=all.find(x=>x.name===dn); if(!d||!d.path) continue;
+              try{ const dr=await fs.read(d.path,{encoding:'utf-8'}); if(dr&&dr.ok){ await fs.write(d.path, applyDemotion(dr.data, { basis:name })); demoted.push(dn); } }catch(_){}
+            }
+          }
+          renderFiles();
+          return 'Revised "'+name+'" → '+status+(ar&&ar.cause?(' ['+String(ar.cause)+']'):'')+(ar&&ar.reason?(' ('+String(ar.reason).slice(0,80)+')'):'')+'.'
+            +(demoted.length?(' Demoted to hypothesis (basis retracted): '+demoted.join(', ')+'.'):'');
+        } }catch(_){}
         const names=Object.keys(factMap);
         return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':'');
       }
@@ -1579,7 +1598,10 @@
               // `status` MUST ride along: buildMemoryIndex filters on it, so dropping
               // it made every retracted fact survive into the injected context and
               // silenced the hypothesis tag and the "do not re-derive" footer.
-              facts.push({ name, description:f.description, type:f.type, status:f.status }); factMap[name]=e.path; }
+              // Relations ride along too (A1): buildMemoryIndex orders a successor above
+              // the fact it supersedes and tags the stale one — dropping them here would
+              // silence that exactly as dropping `status` once silenced retraction.
+              facts.push({ ...f, name, description:f.description, type:f.type, status:f.status }); factMap[name]=e.path; }
           }catch(_){}
         }
         memoryIndex = buildMemoryIndex(facts);

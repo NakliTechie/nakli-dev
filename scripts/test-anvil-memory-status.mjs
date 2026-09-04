@@ -21,7 +21,15 @@ const pushes = [...anvil.matchAll(/(?:facts|out)\.push\(\{[^}]*description:\s*f\
 assert.equal(pushes.length, 2, `expected 2 fact-index push sites, found ${pushes.length}`);
 for (const p of pushes) {
   assert.match(p, /status:\s*f\.status/, `a fact-index push drops status (the retraction filter goes dead): ${p}`);
+  // A1: relations (supersedes / derived_from / contradicts / slot) must ride along
+  // too — buildMemoryIndex orders a successor above what it supersedes and tags the
+  // stale row; a push that enumerates fields drops them exactly as status was dropped.
+  assert.match(p, /\.\.\.f\b/, `a fact-index push drops the relations (supersession never renders): ${p}`);
 }
+// And the write side can create a related fact: the remember tool offers the relations
+// and the handler passes them through to recordFact.
+assert.match(anvil, /recordFact\(note, ar&&ar\.type, 'hypothesis', \{ slot: ar&&ar\.slot, derived_from: ar&&ar\.derived_from, supersedes: ar&&ar\.supersedes \}\)/, 'the remember handler passes slot/derived_from/supersedes to recordFact');
+assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supersedes its current holder at write time');
 
 // The memory panel must SHOW a retracted fact rather than listing it as live —
 // retract visibly, never silently delete.
