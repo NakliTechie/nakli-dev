@@ -219,6 +219,79 @@ export function applyDemotion(text, { basis } = {}){
   return serializeFact({ ...f, status: 'hypothesis', body: `${f.body.trimEnd()}\n\n${note}` });
 }
 
+// ───────────────────────────────────────────── search before save (A2) ──
+
+// Normalise text for comparison: lower-case, punctuation out, whitespace collapsed.
+function norm(s){ return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9\s]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+function tokens(s){ return new Set(norm(s).split(' ').filter(w => w.length > 2)); }
+function jaccard(a, b){
+  if (!a.size || !b.size) return 0;
+  let inter = 0; for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+export const NEAR_DUPLICATE_JACCARD = 0.8;
+
+// Does this note already exist? Deterministic, no model. Returns null, or a structured
+// refusal the agent can act on (Caura's duplicate_memory: the reason IS the next move):
+//   exact      — same text (normalised) as a live fact          → recall / revise it
+//   near       — first line ≥ 0.8 Jaccard with a live fact's     → recall / revise it
+//   superseded — matches a fact that is retracted or superseded  → do not re-derive it;
+//                `successor` names the replacement when there is one
+// `facts` are parsed facts (parseFact shape). Live facts are checked before stale ones,
+// so a re-recorded disproven note is reported against its live successor when one exists.
+// `exempt` names facts the note is ALLOWED to overlap: the ones it declares it supersedes
+// and the holder of its slot — a correction must be able to say the opposite of the claim
+// it replaces without being refused as its duplicate (the checker's trap, closed).
+export function findDuplicate(facts, note, { exempt = [] } = {}){
+  const clean = String(note == null ? '' : note).trim();
+  if (!clean) return null;
+  const skip = new Set(parseList(Array.isArray(exempt) ? exempt.join(',') : exempt).map(safeSlug));
+  const all = (facts || []).filter(f => f && f.name && !skip.has(f.name));
+  const staleTo = supersededSet(all);
+  const isLive = (f) => f.status !== 'retracted' && !staleTo.has(f.name);
+  const nBody = norm(clean), nFirst = tokens(clean.split('\n')[0] || '');
+  const matchOf = (f) => {
+    if (nBody && (norm(f.body) === nBody || norm(f.description) === nBody)) return 'exact';
+    if (jaccard(nFirst, tokens(f.description)) >= NEAR_DUPLICATE_JACCARD) return 'near';
+    return null;
+  };
+  for (const f of all.filter(isLive)){
+    const m = matchOf(f);
+    if (m) return { reason: m, existing: f.name, status: f.status, successor: null };
+  }
+  for (const f of all.filter(f => !isLive(f))){
+    if (matchOf(f)) return { reason: 'superseded', existing: f.name, status: f.status === 'retracted' ? 'retracted' : 'superseded', successor: staleTo.get(f.name) || null };
+  }
+  return null;
+}
+
+// Render a refusal as the tool's reply — one line, naming the next move.
+export function duplicateReply(dup){
+  if (!dup) return '';
+  if (dup.reason === 'superseded'){
+    return `Refused: this learning was already recorded as "${dup.existing}" and is ${dup.status}` +
+      (dup.successor ? ` (replaced by "${dup.successor}" — prefer it).`
+                     : ` (disproven — do not re-derive it). If this note is the CORRECTION, record it with supersedes: "${dup.existing}".`);
+  }
+  return `Refused: ${dup.reason === 'exact' ? 'this exact learning' : 'a near-identical learning'} already exists as "${dup.existing}"` +
+    (dup.status ? ` (${dup.status})` : '') + ' — use `recall` to read it, `revise` to change its status, or record the replacement with supersedes: "' + dup.existing + '".';
+}
+
+// Per-run cap on new learnings (Agno's max_updates_per_run): the hoard is the failure
+// mode, not the miss. One counter per run; the tool errors when it is spent.
+export const MAX_REMEMBER_PER_RUN = 5;
+export function createRememberBudget(max = MAX_REMEMBER_PER_RUN){
+  let used = 0;
+  return {
+    take(){ if (used >= max) return { ok: false, used, left: 0, max }; used++; return { ok: true, used, left: max - used, max }; },
+    get used(){ return used; },
+    get left(){ return Math.max(0, max - used); },
+  };
+}
+export function budgetSpentReply(b){
+  return `Refused: this run has recorded ${b.max} learnings, its cap — record only what still matters next session; merge or retract before adding more.`;
+}
+
 // OpenAI-style tool: load one fact's full body on demand.
 export function recallTool(){
   return {

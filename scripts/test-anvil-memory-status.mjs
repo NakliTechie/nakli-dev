@@ -30,6 +30,11 @@ for (const p of pushes) {
 // and the handler passes them through to recordFact.
 assert.match(anvil, /recordFact\(note, ar&&ar\.type, 'hypothesis', \{ slot: ar&&ar\.slot, derived_from: ar&&ar\.derived_from, supersedes: ar&&ar\.supersedes \}\)/, 'the remember handler passes slot/derived_from/supersedes to recordFact');
 assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supersedes its current holder at write time');
+// A2: search before save on BOTH remember paths (task loop + prime), and one budget per run.
+assert.equal((anvil.match(/findDuplicate\((?:await listFacts\(\)|all), note(?:, \{ exempt \})?\); if\(dup\) return duplicateReply\(dup\);/g) || []).length, 2, 'both remember paths search before they save');
+assert.match(anvil, /exempt=\[ar&&ar\.supersedes, ar&&ar\.slot\?slotHolder\(all, ar\.slot\):null\]/, 'a declared replacement is exempt from the duplicate check (the correction exit)');
+assert.match(anvil, /const remBudget=createRememberBudget\(\);\n\s*const executeTool = async/, 'the remember budget is created once per run, beside the executor');
+assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\) return budgetSpentReply\(take\);/, 'the remember handler spends the budget and refuses when it is gone');
 
 // The memory panel must SHOW a retracted fact rather than listing it as live —
 // retract visibly, never silently delete.
