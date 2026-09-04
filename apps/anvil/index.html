@@ -175,7 +175,7 @@
   <aside id="left">
     <div class="lhead"><span>Projects</span><span class="spacer"></span><button class="icon" id="new-project" title="New project">＋</button></div>
     <div id="projects"></div>
-    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Viewing scope"></span><span class="spacer"></span><button class="icon" id="hooks-chip" title="Project hooks — .anvil/hooks.json pre/post-tool commands (format, lint, guards). Dimmed until this project has hooks.">⚓</button><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand. Dimmed until this project has skills.">✨</button><button class="icon" id="mem-chip" title="Project memory — the facts the agent records and recalls. Dimmed until this project has memory.">🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="learn-btn" title="Learn this project — a read-only pass surveys the repo and records durable facts into project memory, so future tasks (and weaker models) start informed">🎓</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
+    <div class="lhead"><span>Files</span><span class="ws-tag" id="ws-tag" title="Viewing scope"></span><span class="spacer"></span><button class="icon" id="hooks-chip" title="Project hooks — .anvil/hooks.json pre/post-tool commands (format, lint, guards). Dimmed until this project has hooks.">⚓</button><button class="icon" id="skills-chip" title="Project skills — .anvil/skills/<name>/SKILL.md the agent loads on demand. Dimmed until this project has skills.">✨</button><button class="icon" id="mem-chip" title="Project memory — the facts the agent records and recalls. Dimmed until this project has memory.">🧠</button><button class="icon scope" id="files-scope" title="Scope: this project only vs. the whole store" hidden>proj</button><button class="icon" id="learn-btn" title="Learn this project — a read-only pass surveys the repo and records durable facts into project memory, so future tasks (and weaker models) start informed">🎓</button><button class="icon" id="home-chip" title="Anvil home — a folder on your disk where run records are kept durably">🗄</button><button class="icon" id="refresh-files" title="Refresh">⟳</button></div>
     <div id="files"></div>
     <div class="lfoot"><button id="new-task">＋ New task</button></div>
   </aside>
@@ -362,6 +362,34 @@
   async function idbGet(k){try{const db=await idbOpen();return await new Promise((res)=>{const t=db.transaction(DIR_STORE).objectStore(DIR_STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>res(null);});}catch(_){return null;}}
   async function idbSet(k,v){try{const db=await idbOpen();await new Promise((res)=>{const t=db.transaction(DIR_STORE,'readwrite').objectStore(DIR_STORE).put(v,k);t.oncomplete=res;t.onerror=res;});}catch(_){} }
 
+  // ── Anvil home — rung 1 of the record's storage ladder ────────────────────
+  // OPFS (rung 0) is site storage: on 2026-09-04 navigator.storage.persisted()
+  // was FALSE on naklios.dev even though the host asks for it at boot, so every
+  // record there is eviction-eligible. The home is ONE folder on the user's own
+  // disk, picked once and remembered (like ~/.codex), OUTSIDE every workspace so
+  // no agent mount can reach it — a ledger the agent can rewrite audits nothing.
+  // Records mirror here write-through; the OPFS copy is a cache, never the truth.
+  // Chromium-only (FSA write); elsewhere the ladder degrades to OPFS + Crate.
+  const HOME_KEY='anvil-home';
+  let homeHandle=null;      // granted FileSystemDirectoryHandle, or null
+  let homeSaved=false;      // a handle is remembered but needs a click to re-grant
+  let opfsPersisted=null;   // navigator.storage.persisted() at boot; null = unknown
+  async function connectHome(h){
+    let perm=await h.queryPermission({mode:'readwrite'});
+    if(perm!=='granted') perm=await h.requestPermission({mode:'readwrite'});
+    if(perm!=='granted') return false;
+    homeHandle=h; homeSaved=true; await idbSet(HOME_KEY,h); updateHomeChip(); return true;
+  }
+  function updateHomeChip(){
+    const b=$('home-chip'); if(!b) return;
+    b.classList.toggle('dim', !homeHandle);
+    b.title = homeHandle
+      ? 'Anvil home — run records mirror to "'+homeHandle.name+'" on your disk (durable). Click to change.'
+      : homeSaved
+        ? 'Anvil home — a folder is remembered but needs permission again this session. Click to reconnect.'
+        : 'Anvil home — pick a folder on your disk where run records are kept durably. Until then they live only in browser storage, which the browser may evict.';
+  }
+
   $('open-folder').onclick = async ()=>{
     if(!window.showDirectoryPicker){ pushSystem('This browser has no File System Access — folders unavailable.'); return; }
     try{
@@ -375,6 +403,15 @@
       pushSystem('Workspace → folder "'+h.name+'". The agent now reads/writes your files (this overrides the per-project workspace).');
       renderTaskbar();
     }catch(e){ if(!(e&&e.name==='AbortError')) pushSystem('Open folder: '+(e&&e.message||e)); }
+  };
+  $('home-chip').onclick = async ()=>{
+    if(!window.showDirectoryPicker){ pushSystem('This browser has no File System Access — an Anvil home folder is unavailable here; records stay in browser storage.'); return; }
+    try{
+      const saved = homeSaved && !homeHandle ? await idbGet(HOME_KEY) : null;
+      const h = (saved && typeof saved.queryPermission==='function') ? saved : await window.showDirectoryPicker({ mode:'readwrite', id:'anvil-home' });
+      if(await connectHome(h)) pushSystem('Anvil home → "'+h.name+'". Run records now mirror to your disk.');
+      else pushSystem('Anvil home: permission not granted.');
+    }catch(e){ if(!(e&&e.name==='AbortError')) pushSystem('Anvil home: '+(e&&e.message||e)); }
   };
 
   // ── State: projects → tasks. Persisted to localStorage (minus the live stack) ──
@@ -1234,15 +1271,25 @@
   // (khiladi's driver "fixed" its own event log), and a ledger the agent can rewrite
   // audits nothing. Same posture as the FIF. Returns the saved path, or null.
   async function saveRunRecord(t, rec){
-    if(!opfsAvailable()) return null;
-    const dir='anvil/runs/'+String(state.activeProject||'local')+'/'+String(t.id);
-    const backend=await createOpfsBackend({ path: dir });
-    const rfs=createFileops({ backend });
+    const rel='runs/'+String(state.activeProject||'local')+'/'+String(t.id);
     const name=new Date().toISOString().replace(/[:.]/g,'-')+'.json';
-    const dump=rec.export();
-    const r=await rfs.write(name, JSON.stringify(dump));
-    if(r && r.ok===false) throw new Error(r.error||'write failed');
-    return dir+'/'+name;
+    const text=JSON.stringify(rec.export());
+    const tiers=[], errors=[]; let path=null;
+    // rung 0 — OPFS. Always attempted; labelled by whether the browser promised to keep it.
+    if(opfsAvailable()){
+      try{ const b=await createOpfsBackend({ path:'anvil/'+rel }); const r=await createFileops({ backend:b }).write(name, text);
+        if(r&&r.ok===false) throw new Error(r.error||'write failed');
+        path='anvil/'+rel+'/'+name; tiers.push(opfsPersisted===true?'browser storage (persisted)':'browser storage (evictable)'); }
+      catch(e){ errors.push('browser storage: '+(e&&e.message||e)); }
+    }
+    // rung 1 — the Anvil home on disk. Raw handles, not the agent-facing fs.
+    if(homeHandle){
+      try{ let d=homeHandle; for(const seg of rel.split('/')) d=await d.getDirectoryHandle(seg,{create:true});
+        const fh=await d.getFileHandle(name,{create:true}); const w=await fh.createWritable(); await w.write(text); await w.close();
+        tiers.push('home "'+homeHandle.name+'"'); }
+      catch(e){ errors.push('home: '+(e&&e.message||e)); }
+    }
+    return { path, name, tiers, errors };
   }
 
   async function runTask(t, text){
@@ -1574,7 +1621,11 @@
         const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.filter(r=>r.k==='tool').length;
         if(foldedTools!==liveTools) t.log.push({k:'system',text:'⚠ run record disagrees with the log: record has '+foldedTools+' tool rows, app has '+liveTools+' — report this'});
         const saved=await saveRunRecord(t, rec);
-        t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+(saved?(' · saved '+saved):' · not saved (no OPFS)')});
+        const where = saved.tiers.length ? saved.tiers.join(' + ') : 'NOT saved';
+        // Only browser storage, and the browser has not promised to keep it: say so
+        // every run, and say what fixes it. A user who reads "evictable" picks the home.
+        const nudge = (!homeHandle && opfsPersisted!==true) ? ' — browser storage only; the browser may evict it. Pick an Anvil home (🗄) to keep records on disk.' : '';
+        t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+' · '+where+nudge+(saved.errors.length?(' · errors: '+saved.errors.join('; ')):'')});
       }catch(e){ t.log.push({k:'system',text:'record: could not persist — '+String(e&&e.message||e)}); }
     }catch(e){
       t.status='error';
@@ -1693,6 +1744,10 @@
       if(perm==='granted'){ folderMode=true; mountWorkspace(new FsaBackend(saved), 'folder · '+saved.name); await seedIfEmpty(); }
     }
   }catch(_){}
+  // The remembered home: query only (a re-grant needs a click); the chip says which.
+  try{ const h=await idbGet(HOME_KEY); if(h&&typeof h.queryPermission==='function'){ homeSaved=true; if((await h.queryPermission({mode:'readwrite'}))==='granted') homeHandle=h; } }catch(_){}
+  try{ if(navigator.storage&&navigator.storage.persisted) opfsPersisted=await navigator.storage.persisted(); }catch(_){}
+  updateHomeChip();
   if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
 

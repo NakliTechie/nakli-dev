@@ -43,10 +43,34 @@ assert.match(runTask, /run record disagrees with the log/, 'a log disagreement i
 
 // Persisted OUTSIDE the agent's mount.
 assert.match(anvil, /async function saveRunRecord\(t, rec\)/, 'a run store exists');
-assert.match(anvil, /createOpfsBackend\(\{ path: dir \}\)/, 'records go to OPFS');
-assert.match(anvil, /const dir='anvil\/runs\/'/, 'under anvil/runs/, not the workspace mount');
+assert.match(anvil, /createOpfsBackend\(\{ path:'anvil\/'\+rel \}\)/, 'records go to OPFS');
+assert.match(anvil, /const rel='runs\/'\+String\(state\.activeProject/, 'under anvil/runs/<project>/<task>/, not the workspace mount');
 assert.ok(!/fs\.write\([^)]*runs\//.test(anvil), 'never written through the agent-facing `fs`');
 assert.match(runTask, /await saveRunRecord\(t, rec\)/, 'every run is persisted');
 assert.match(runTask, /record: could not persist/, 'a persistence failure is surfaced');
 
-console.log('anvil-run-record: every loop is recorded, folds are self-checked, records persist outside the mount');
+// ── the storage ladder: rung 1 (Anvil home) and the honest durability line ──
+// navigator.storage.persisted() was FALSE on naklios.dev on 2026-09-04, so OPFS
+// is eviction-eligible; the home is a disk folder outside every workspace.
+assert.match(anvil, /const HOME_KEY='anvil-home'/, 'the home handle has its own IDB key');
+assert.match(anvil, /async function connectHome\(h\)/, 'connectHome exists');
+assert.match(anvil, /h\.requestPermission\(\{mode:'readwrite'\}\)/, 'the home is re-granted through requestPermission');
+assert.match(anvil, /id="home-chip"/, 'the home has a visible affordance');
+assert.match(anvil, /\$\('home-chip'\)\.onclick = async/, 'and a click handler (the picker needs a gesture)');
+assert.match(anvil, /showDirectoryPicker\(\{ mode:'readwrite', id:'anvil-home' \}\)/, 'the picker is keyed so the browser remembers the choice');
+assert.match(anvil, /const h=await idbGet\(HOME_KEY\); if\(h&&typeof h\.queryPermission==='function'\)\{ homeSaved=true;/, 'boot re-checks the remembered home');
+assert.match(anvil, /opfsPersisted=await navigator\.storage\.persisted\(\)/, 'boot learns whether browser storage is persisted');
+// write-through: both rungs attempted, each reported, neither silently skipped
+const save = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec){'), anvil.indexOf('async function runTask(t, text){'));
+assert.match(save, /createOpfsBackend\(\{ path:'anvil\/'\+rel \}\)/, 'rung 0: OPFS');
+assert.match(save, /if\(homeHandle\)\{/, 'rung 1: the home, when connected');
+assert.match(save, /fh\.createWritable\(\)/, 'the home is written through raw FSA handles, not the agent-facing fs');
+assert.match(save, /'browser storage \(evictable\)'/, 'an unpersisted OPFS copy is labelled evictable');
+assert.match(save, /return \{ path, name, tiers, errors \}/, 'every rung and every failure is returned');
+assert.ok(!/fs\.write/.test(save), 'saveRunRecord never touches the agent-facing fs');
+// the closing line
+assert.match(runTask, /const where = saved\.tiers\.length \? saved\.tiers\.join\(' \+ '\) : 'NOT saved'/, 'the closing line names every rung the record reached');
+assert.match(runTask, /browser storage only; the browser may evict it\. Pick an Anvil home/, 'browser-only + unpersisted → the line says so and says what fixes it');
+assert.match(runTask, /saved\.errors\.join/, 'a failed rung is reported, not swallowed');
+
+console.log('anvil-run-record: every loop is recorded, folds are self-checked, records persist outside the mount, and the durability line is honest');
