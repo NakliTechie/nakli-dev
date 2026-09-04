@@ -250,7 +250,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, loadRecord } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -358,7 +358,63 @@
 
   // ── Folder persistence (IndexedDB), lifted from Forge ──
   const DIR_DB='anvil-fs', DIR_STORE='h', DIR_KEY='workspace-dir';
-  function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open(DIR_DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(DIR_STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+  // v2 adds the RUN INDEX — rows derived from run records, so a Runs pane can query
+  // by project/task/time without opening every file. It is never the truth: the
+  // record files are (OPFS + the home). Codex keeps the same split (JSONL rollouts
+  // + a SQLite index with a parity doctor); ours is IndexedDB because the browser
+  // already provides it, and rebuildRunIndex() is the doctor.
+  const RUNS_STORE='runs';
+  function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open(DIR_DB,2);r.onupgradeneeded=()=>{const db=r.result; if(!db.objectStoreNames.contains(DIR_STORE)) db.createObjectStore(DIR_STORE); if(!db.objectStoreNames.contains(RUNS_STORE)){ const st=db.createObjectStore(RUNS_STORE,{keyPath:'id'}); st.createIndex('project','project'); st.createIndex('task','task'); st.createIndex('endedAt','endedAt'); }};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+  async function runsPut(row){try{const db=await idbOpen();await new Promise((res)=>{const t=db.transaction(RUNS_STORE,'readwrite').objectStore(RUNS_STORE).put(row);t.onsuccess=res;t.onerror=res;});}catch(_){} }
+  async function runsForTask(taskId){try{const db=await idbOpen();return await new Promise((res)=>{const q=db.transaction(RUNS_STORE).objectStore(RUNS_STORE).index('task').getAll(taskId);q.onsuccess=()=>res(q.result||[]);q.onerror=()=>res([]);});}catch(_){return [];}}
+  async function runsCount(){try{const db=await idbOpen();return await new Promise((res)=>{const q=db.transaction(RUNS_STORE).objectStore(RUNS_STORE).count();q.onsuccess=()=>res(q.result||0);q.onerror=()=>res(0);});}catch(_){return 0;}}
+  // One index row from one record. `tiers` is where the file was found/written.
+  function runIndexRow({ project, task, name, path, tiers, rec, gated }){
+    const ev=rec.events(); const st=foldStatus(ev, rec.resolve, { gated });
+    return { id: project+'/'+task+'/'+name, project, task, name, path, tiers,
+      head: rec.head ? rec.head() : null, events: ev.length,
+      stop: st.stop, status: st.status, verified: st.verified, steps: st.steps,
+      startedAt: ev.length ? ev[0].ts : null, endedAt: ev.length ? ev[ev.length-1].ts : null };
+  }
+  // The doctor: rebuild the index from the record FILES (OPFS, and the home when
+  // connected). Runs at boot when the index is empty but files exist — Codex's
+  // "startup backfill" — and is the answer whenever the two disagree. Every file
+  // is chain-verified on the way in; a broken chain is indexed as such, not hidden.
+  async function rebuildRunIndex(){
+    const found=new Map(); // id -> { row, tiers }
+    async function scan(rootDir, tier){
+      let projects; try{ projects=rootDir.entries(); }catch(_){ return; }
+      for await (const [project, ph] of projects){ if(ph.kind!=='directory') continue;
+        for await (const [task, th] of ph.entries()){ if(th.kind!=='directory') continue;
+          for await (const [name, fh] of th.entries()){ if(fh.kind!=='file'||!name.endsWith('.json')) continue;
+            try{ const dump=JSON.parse(await (await fh.getFile()).text()); const rec=loadRecord(dump); const v=await rec.verify();
+              const id=project+'/'+task+'/'+name; const prev=found.get(id);
+              if(prev){ prev.tiers.push(tier); continue; }
+              const row=runIndexRow({ project, task, name, path:(tier==='home'?'home:':'anvil/runs/')+project+'/'+task+'/'+name, tiers:[tier], rec:{ events:rec.events, resolve:rec.resolve, head:()=>null }, gated:true });
+              row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers });
+            }catch(_){ /* unreadable file: not indexed, not fatal */ }
+          } } }
+    }
+    try{ if(opfsAvailable()){ let d=await navigator.storage.getDirectory(); d=await d.getDirectoryHandle('anvil'); d=await d.getDirectoryHandle('runs'); await scan(d, opfsPersisted===true?'browser storage (persisted)':'browser storage (evictable)'); } }catch(_){}
+    try{ if(homeHandle){ const d=await homeHandle.getDirectoryHandle('runs'); await scan(d,'home'); } }catch(_){}
+    // rung 2 via fileops (the host store has no directory handles).
+    try{ if(hostFsReady()){
+      const which=String((nak.capabilities&&nak.capabilities.fsBackend)||'host'); const tier = which==='crate' ? 'Crate' : 'host '+which;
+      const hx=createFileops({ backend:new CrateBackend(nak.fs), root:'' });
+      const ls=await hx.list('runs',{recursive:true});
+      for(const e of ((ls&&ls.entries)||[])){ if(e.type==='dir'||!String(e.name||e.path||'').endsWith('.json')) continue;
+        const parts=String(e.path).split('/'); if(parts.length<4) continue; const [ , project, task, name ]=parts;
+        try{ const r=await hx.read(e.path,{encoding:'utf-8'}); if(!(r&&r.ok)) continue; const dump=JSON.parse(r.data); const rec=loadRecord(dump); const v=await rec.verify();
+          const id=project+'/'+task+'/'+name; const prev=found.get(id); if(prev){ prev.tiers.push(tier); continue; }
+          const row=runIndexRow({ project, task, name, path:e.path, tiers:[tier], rec:{ events:rec.events, resolve:rec.resolve, head:()=>null }, gated:true });
+          row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers });
+        }catch(_){}
+      }
+    } }catch(_){}
+    let indexed=0, broken=0;
+    for(const { row } of found.values()){ await runsPut(row); indexed++; if(row.chainOk===false) broken++; }
+    return { indexed, broken };
+  }
   async function idbGet(k){try{const db=await idbOpen();return await new Promise((res)=>{const t=db.transaction(DIR_STORE).objectStore(DIR_STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>res(null);});}catch(_){return null;}}
   async function idbSet(k,v){try{const db=await idbOpen();await new Promise((res)=>{const t=db.transaction(DIR_STORE,'readwrite').objectStore(DIR_STORE).put(v,k);t.oncomplete=res;t.onerror=res;});}catch(_){} }
 
@@ -1270,7 +1326,7 @@
   // never inside the mounted workspace: an agent will edit whatever it can reach
   // (khiladi's driver "fixed" its own event log), and a ledger the agent can rewrite
   // audits nothing. Same posture as the FIF. Returns the saved path, or null.
-  async function saveRunRecord(t, rec){
+  async function saveRunRecord(t, rec, { gated=false }={}){
     const rel='runs/'+String(state.activeProject||'local')+'/'+String(t.id);
     const name=new Date().toISOString().replace(/[:.]/g,'-')+'.json';
     const text=JSON.stringify(rec.export());
@@ -1289,7 +1345,25 @@
         tiers.push('home "'+homeHandle.name+'"'); }
       catch(e){ errors.push('home: '+(e&&e.message||e)); }
     }
-    return { path, name, tiers, errors };
+    // rung 2 — the host store (Crate, or a host-side Folder), when NakliOS has one.
+    // Same flat object store the workspace lives in, but under runs/ while the
+    // agent is rooted at ws/<project> — pathguard refuses '..', so the agent cannot
+    // reach it. This is what roams with the user's Crate; cross-device sync of it
+    // is P1.5. Goes through the same CrateBackend the workspace uses.
+    if(hostFsReady()){
+      const which=String((nak.capabilities&&nak.capabilities.fsBackend)||'host');
+      const tier = which==='crate' ? 'Crate' : 'host '+which;
+      try{ const hx=createFileops({ backend:new CrateBackend(nak.fs), root:'' });
+        try{ await hx.mkdir(rel); }catch(_){ /* object stores need no dirs */ }
+        const r=await hx.write(rel+'/'+name, text); if(r&&r.ok===false) throw new Error(r.error||'write failed');
+        tiers.push(tier); }
+      catch(e){ errors.push(tier+': '+(e&&e.message||e)); }
+    }
+    // The index row — derived from the record, after the files are down.
+    let count=null;
+    try{ await runsPut(runIndexRow({ project:String(state.activeProject||'local'), task:String(t.id), name, path, tiers, rec, gated })); count=(await runsForTask(String(t.id))).length; }
+    catch(e){ errors.push('index: '+(e&&e.message||e)); }
+    return { path, name, tiers, errors, count };
   }
 
   async function runTask(t, text){
@@ -1620,12 +1694,13 @@
         if(folded.status!==t.status) t.log.push({k:'system',text:'⚠ run record disagrees with task status: record says '+folded.status+', app says '+t.status+' — report this'});
         const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.filter(r=>r.k==='tool').length;
         if(foldedTools!==liveTools) t.log.push({k:'system',text:'⚠ run record disagrees with the log: record has '+foldedTools+' tool rows, app has '+liveTools+' — report this'});
-        const saved=await saveRunRecord(t, rec);
+        const saved=await saveRunRecord(t, rec, { gated });
         const where = saved.tiers.length ? saved.tiers.join(' + ') : 'NOT saved';
+        const nth = saved.count ? ' · run '+saved.count+' of this task' : '';
         // Only browser storage, and the browser has not promised to keep it: say so
         // every run, and say what fixes it. A user who reads "evictable" picks the home.
         const nudge = (!homeHandle && opfsPersisted!==true) ? ' — browser storage only; the browser may evict it. Pick an Anvil home (🗄) to keep records on disk.' : '';
-        t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+' · '+where+nudge+(saved.errors.length?(' · errors: '+saved.errors.join('; ')):'')});
+        t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+' · '+where+nth+nudge+(saved.errors.length?(' · errors: '+saved.errors.join('; ')):'')});
       }catch(e){ t.log.push({k:'system',text:'record: could not persist — '+String(e&&e.message||e)}); }
     }catch(e){
       t.status='error';
@@ -1748,6 +1823,8 @@
   try{ const h=await idbGet(HOME_KEY); if(h&&typeof h.queryPermission==='function'){ homeSaved=true; if((await h.queryPermission({mode:'readwrite'}))==='granted') homeHandle=h; } }catch(_){}
   try{ if(navigator.storage&&navigator.storage.persisted) opfsPersisted=await navigator.storage.persisted(); }catch(_){}
   updateHomeChip();
+  // Startup backfill: an empty index over existing record files rebuilds silently.
+  try{ if((await runsCount())===0){ await rebuildRunIndex(); } }catch(_){}
   if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
 

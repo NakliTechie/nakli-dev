@@ -11,8 +11,9 @@ const anvil = await readFile(new URL('../apps/anvil/index.html', import.meta.url
 const runTask = anvil.slice(anvil.indexOf('async function runTask(t, text){'));
 assert.ok(runTask.length > 1000, 'runTask found');
 
-assert.match(anvil, /import \{ createRunRecorder, foldStatus, foldLog \} from '\.\.\/\.\.\/sys\/history\/run-record\.mjs'/,
-  'the run record is imported');
+{ const imp = anvil.match(/import \{([^}]*)\} from '\.\.\/\.\.\/sys\/history\/run-record\.mjs'/);
+  assert.ok(imp, 'the run record is imported');
+  for (const n of ['createRunRecorder','foldStatus','foldLog','loadRecord']) assert.ok(imp[1].includes(n), `imports ${n}`); }
 
 // Every loop in runTask is recorded: started before, finished after, infer wrapped, events chained.
 const loops = [...runTask.matchAll(/runAgentLoop\(\{/g)].length;
@@ -42,11 +43,11 @@ assert.match(runTask, /run record disagrees with task status/, 'a status disagre
 assert.match(runTask, /run record disagrees with the log/, 'a log disagreement is surfaced, not swallowed');
 
 // Persisted OUTSIDE the agent's mount.
-assert.match(anvil, /async function saveRunRecord\(t, rec\)/, 'a run store exists');
+assert.match(anvil, /async function saveRunRecord\(t, rec(, \{[^)]*\})?\)\{/, 'a run store exists');
 assert.match(anvil, /createOpfsBackend\(\{ path:'anvil\/'\+rel \}\)/, 'records go to OPFS');
 assert.match(anvil, /const rel='runs\/'\+String\(state\.activeProject/, 'under anvil/runs/<project>/<task>/, not the workspace mount');
 assert.ok(!/fs\.write\([^)]*runs\//.test(anvil), 'never written through the agent-facing `fs`');
-assert.match(runTask, /await saveRunRecord\(t, rec\)/, 'every run is persisted');
+assert.match(runTask, /await saveRunRecord\(t, rec(, \{ gated \})?\)/, 'every run is persisted');
 assert.match(runTask, /record: could not persist/, 'a persistence failure is surfaced');
 
 // ── the storage ladder: rung 1 (Anvil home) and the honest durability line ──
@@ -73,4 +74,35 @@ assert.match(runTask, /const where = saved\.tiers\.length \? saved\.tiers\.join\
 assert.match(runTask, /browser storage only; the browser may evict it\. Pick an Anvil home/, 'browser-only + unpersisted → the line says so and says what fixes it');
 assert.match(runTask, /saved\.errors\.join/, 'a failed rung is reported, not swallowed');
 
-console.log('anvil-run-record: every loop is recorded, folds are self-checked, records persist outside the mount, and the durability line is honest');
+// ── the index: derived, rebuildable, and actually READ ──
+// An index nobody reads is dead code (today's lesson, twice). The closing line
+// reads it back, so the read path is exercised on every run.
+assert.match(anvil, /indexedDB\.open\(DIR_DB,2\)/, 'the IDB schema is v2');
+assert.match(anvil, /createObjectStore\(RUNS_STORE,\{keyPath:'id'\}\)/, 'a runs store keyed by id');
+for (const ix of ['project','task','endedAt']) assert.match(anvil, new RegExp(`createIndex\\('${ix}','${ix}'\\)`), `indexed by ${ix}`);
+assert.match(anvil, /if\(!db\.objectStoreNames\.contains\(DIR_STORE\)\) db\.createObjectStore\(DIR_STORE\)/, 'the v1 store survives the upgrade');
+assert.match(anvil, /function runIndexRow\(/, 'rows are derived by one function');
+assert.match(anvil, /const st=foldStatus\(ev, rec\.resolve, \{ gated \}\)/, 'a row\'s status is the FOLD, not a copy of t.status');
+const save2 = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec'), anvil.indexOf('async function runTask(t, text){'));
+assert.match(save2, /await runsPut\(runIndexRow\(/, 'saveRunRecord writes the row after the files');
+assert.match(save2, /count=\(await runsForTask\(String\(t\.id\)\)\)\.length/, 'and reads the task\'s run count back');
+assert.match(runTask, /' · run '\+saved\.count\+' of this task'/, 'the closing line is a real reader of the index');
+assert.match(anvil, /async function rebuildRunIndex\(\)/, 'the doctor exists');
+const doctor = anvil.slice(anvil.indexOf('async function rebuildRunIndex(){'), anvil.indexOf('async function saveRunRecord('));
+assert.match(doctor, /const rec=loadRecord\(dump\); const v=await rec\.verify\(\)/, 'every file is chain-verified on the way in');
+assert.match(doctor, /row\.chainOk=v\.ok; row\.brokenAt=v\.brokenAt/, 'a broken chain is indexed as broken, not hidden');
+assert.match(doctor, /getDirectoryHandle\('anvil'\)/, 'scans OPFS');
+assert.match(doctor, /homeHandle\.getDirectoryHandle\('runs'\)/, 'and the home when connected');
+assert.match(anvil, /if\(\(await runsCount\(\)\)===0\)\{ await rebuildRunIndex\(\); \}/, 'boot backfills an empty index from files');
+
+// ── rung 2: the host store (Crate / host Folder) ──
+const save3 = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec'), anvil.indexOf('async function runTask(t, text){'));
+assert.match(save3, /if\(hostFsReady\(\)\)\{/, 'rung 2 is attempted when the host has a store');
+assert.match(save3, /new CrateBackend\(nak\.fs\), root:''/, 'through the same CrateBackend the workspace uses, rooted at the store root');
+assert.match(save3, /hx\.write\(rel\+'\/'\+name, text\)/, 'written under runs/, outside the ws/<project> mount');
+assert.match(save3, /which==='crate' \? 'Crate' : 'host '\+which/, 'the tier is labelled by what the host actually is');
+const doctor2 = anvil.slice(anvil.indexOf('async function rebuildRunIndex(){'), anvil.indexOf('async function saveRunRecord('));
+assert.match(doctor2, /hx\.list\('runs',\{recursive:true\}\)/, 'the doctor scans the host store too');
+assert.match(doctor2, /prev\.tiers\.push\(tier\)/, 'a record found on several rungs is one row with all its tiers');
+
+console.log('anvil-run-record: every loop is recorded, folds are self-checked, records persist outside the mount, the durability line is honest, and the index is derived, rebuildable and read');
