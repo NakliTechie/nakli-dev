@@ -250,7 +250,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog, loadRecord } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, loadRecord, foldStopReasons, stopReasonsLine } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -391,7 +391,7 @@
               const id=project+'/'+task+'/'+name; const prev=found.get(id);
               if(prev){ prev.tiers.push(tier); continue; }
               const row=runIndexRow({ project, task, name, path:(tier==='home'?'home:':'anvil/runs/')+project+'/'+task+'/'+name, tiers:[tier], rec:{ events:rec.events, resolve:rec.resolve, head:()=>null }, gated:true });
-              row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers });
+              row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers, rec });
             }catch(_){ /* unreadable file: not indexed, not fatal */ }
           } } }
     }
@@ -407,13 +407,15 @@
         try{ const r=await hx.read(e.path,{encoding:'utf-8'}); if(!(r&&r.ok)) continue; const dump=JSON.parse(r.data); const rec=loadRecord(dump); const v=await rec.verify();
           const id=project+'/'+task+'/'+name; const prev=found.get(id); if(prev){ prev.tiers.push(tier); continue; }
           const row=runIndexRow({ project, task, name, path:e.path, tiers:[tier], rec:{ events:rec.events, resolve:rec.resolve, head:()=>null }, gated:true });
-          row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers });
+          row.chainOk=v.ok; row.brokenAt=v.brokenAt; found.set(id,{ row, tiers:row.tiers, rec });
         }catch(_){}
       }
     } }catch(_){}
     let indexed=0, broken=0;
     for(const { row } of found.values()){ await runsPut(row); indexed++; if(row.chainOk===false) broken++; }
-    return { indexed, broken };
+    // D1: how runs end, over every record the doctor just read — khiladi's Q3, as a fold.
+    const stops=foldStopReasons([...found.values()].map(f=>f.rec), { gated:true });
+    return { indexed, broken, stops, stopsLine: stopReasonsLine(stops) };
   }
   async function idbGet(k){try{const db=await idbOpen();return await new Promise((res)=>{const t=db.transaction(DIR_STORE).objectStore(DIR_STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>res(null);});}catch(_){return null;}}
   async function idbSet(k,v){try{const db=await idbOpen();await new Promise((res)=>{const t=db.transaction(DIR_STORE,'readwrite').objectStore(DIR_STORE).put(v,k);t.oncomplete=res;t.onerror=res;});}catch(_){} }
@@ -1867,7 +1869,7 @@
   try{ if(navigator.storage&&navigator.storage.persisted) opfsPersisted=await navigator.storage.persisted(); }catch(_){}
   updateHomeChip();
   // Startup backfill: an empty index over existing record files rebuilds silently.
-  try{ if((await runsCount())===0){ await rebuildRunIndex(); } }catch(_){}
+  try{ if((await runsCount())===0){ const r=await rebuildRunIndex(); if(r&&r.indexed) console.info('[anvil] run index rebuilt: '+r.indexed+' record(s)'+(r.broken?(', '+r.broken+' broken chain(s)'):'')+' — '+r.stopsLine); } }catch(_){}
   if(!folderMode) await mountProject(state.activeProject);
   renderAll(); syncMode();
 

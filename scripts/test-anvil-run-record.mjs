@@ -94,7 +94,7 @@ assert.match(doctor, /const rec=loadRecord\(dump\); const v=await rec\.verify\(\
 assert.match(doctor, /row\.chainOk=v\.ok; row\.brokenAt=v\.brokenAt/, 'a broken chain is indexed as broken, not hidden');
 assert.match(doctor, /getDirectoryHandle\('anvil'\)/, 'scans OPFS');
 assert.match(doctor, /homeHandle\.getDirectoryHandle\('runs'\)/, 'and the home when connected');
-assert.match(anvil, /if\(\(await runsCount\(\)\)===0\)\{ await rebuildRunIndex\(\); \}/, 'boot backfills an empty index from files');
+assert.match(anvil, /if\(\(await runsCount\(\)\)===0\)\{ (?:const r=)?await rebuildRunIndex\(\)/, 'boot backfills an empty index from files');
 
 // ── rung 2: the host store (Crate / host Folder) ──
 const save3 = anvil.slice(anvil.indexOf('async function saveRunRecord(t, rec'), anvil.indexOf('async function runTask(t, text){'));
@@ -107,3 +107,10 @@ assert.match(doctor2, /hx\.list\('runs',\{recursive:true\}\)/, 'the doctor scans
 assert.match(doctor2, /prev\.tiers\.push\(tier\)/, 'a record found on several rungs is one row with all its tiers');
 
 console.log('anvil-run-record: every loop is recorded, folds are self-checked, records persist outside the mount, the durability line is honest, and the index is derived, rebuildable and read');
+
+// D1: the doctor folds the stop-reason distribution over every record it read and
+// surfaces it — khiladi's Q3 answered from the record, never from a counter.
+assert.match(anvil, /foldStopReasons\(\[\.\.\.found\.values\(\)\]\.map\(f=>f\.rec\)/, 'rebuildRunIndex folds stop reasons over the records it read');
+assert.match(anvil, /stopsLine: stopReasonsLine\(stops\)/, 'and returns the one-line histogram');
+assert.match(anvil, /run index rebuilt: .*r\.stopsLine/, 'the boot backfill surfaces it');
+

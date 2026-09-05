@@ -99,6 +99,12 @@ jobs:
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 
+      - name: Verify proposal fingerprints (P1–P5 stability) and the poison ledger
+        run: node sys/ai/test/proposal-fingerprint.test.mjs
+
+      - name: Verify the ablation harness — same agent ± capability, recorded, replayed with zero model calls
+        run: node sys/ai/test/ablate.test.mjs
+
       - name: Verify main-thread Kiln snapshot never corrupts the shell's .git repo
         run: node sys/kiln/test/main-thread-runtime.test.mjs
 

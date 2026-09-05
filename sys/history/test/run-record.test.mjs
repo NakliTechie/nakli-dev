@@ -12,7 +12,7 @@ import { createShell } from '../../rig/cli/shell.mjs';
 import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
          replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
-         OUTCOME_SIGNALS, foldOutcome, foldReuse } from '../run-record.mjs';
+         OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -328,6 +328,32 @@ await test('OUTCOME reuse across runs: ≥3 distinct runs recalling a fact → l
   eq(foldReuse([plain, plain, plain]).length, 0, 'injection is not use');
   const one = await recordMemRun();
   eq(foldReuse([one, one, one]).length, 0, 'the same record passed thrice is one run, not three');
+});
+
+// ──────────────────────────────────────────── stop reasons (D1) ──
+await test('STOP REASONS: a histogram over records — by stop, by derived status, by budget axis; unfinished counted', async () => {
+  const pass = (await recordRun({ verify: async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) })).rec;
+  const fail = (await recordRun({ verify: async () => ({ ok: false, exit: 1, stdout: '', stderr: '' }) })).rec;
+  const plain = (await recordRun()).rec; // ungated done → unclaimed under gated:true (the index's reading)
+  const shell = freshShell();
+  const bud = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await bud.start({ messages: MESSAGES, tools: [shellTool()] });
+  const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: bud.wrapInfer(scripted(SCRIPT())), executeTool: makeShellExecutor(shell), onEvent: bud.onEvent, budget: { turns: 1 } });
+  await bud.finish(r); await bud.settled();
+  const dead = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await dead.start({ messages: MESSAGES, tools: [] }); await dead.settled();
+  const h = foldStopReasons([pass, fail, plain, bud, dead, pass /* dup */]);
+  eq(h.runs, 5, 'five distinct records (a duplicate object counts once)');
+  eq(h.unfinished, 1, 'the dead run is unfinished');
+  eq(h.byStop.done, 2, 'two done stops (one gated, one not)');
+  eq(h.byStop.unverified, 1, 'one unverified'); eq(h.byStop.budget, 1, 'one budget');
+  eq(h.byStatus.done, 1, 'only the gated pass is done'); eq(h.byStatus.unclaimed, 1, 'the ungated finish is unclaimed');
+  eq(h.byStatus.error, 1, 'unverified reads as error'); eq(h.byStatus.idle, 1, 'budget reads as idle'); eq(h.byStatus.running, 1, 'dead reads as running');
+  eq(h.byAxis.turns, 1, 'the budget axis is counted');
+  const line = stopReasonsLine(h);
+  assert(/^5 runs · /.test(line) && /budget: turns 1/.test(line), line);
+  eq(stopReasonsLine(foldStopReasons([])), 'no runs recorded', 'empty');
+  eq(JSON.stringify(pass.events()), JSON.stringify(pass.events()), 'read-only: events untouched');
 });
 
 if (failures.length) { console.error(`history/run-record: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
