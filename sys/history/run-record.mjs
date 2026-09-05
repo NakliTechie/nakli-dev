@@ -420,3 +420,34 @@ export function foldReuse(records, { minRuns = 3 } = {}) {
   return [...runsByFact].filter(([, s]) => s.size >= minRuns)
     .map(([name, s]) => ({ name, runs: s.size, kind: 'reuse', polarity: 'neutral', weight: 0.3 }));
 }
+
+// ──────────────────────────────────────────────── stop reasons (D1) ──
+
+// How runs end, across every record on disk — khiladi's Q3 ("instrument the
+// stop-reason distribution first") as a read-only fold. `records` are anything
+// with `events()` + `resolve()` (a recorder, a loadRecord, an index row's rec).
+// Counts by stop (the loop's own word), by derived status (the 139c381 rule), and
+// by budget axis; `unfinished` are records with no run.stopped at all. Nothing
+// here writes; a caller renders the histogram wherever the index is rebuilt.
+export function foldStopReasons(records, { gated = true } = {}) {
+  const byStop = {}, byStatus = {}, byAxis = {};
+  let runs = 0, unfinished = 0;
+  const bump = (m, k) => { m[k] = (m[k] || 0) + 1; };
+  for (const r of [...new Set(records || [])]) {
+    if (!r || typeof r.events !== 'function') continue;
+    const ev = r.events(); runs++;
+    const st = foldStatus(ev, r.resolve, { gated });
+    if (st.phase !== 'stopped') { unfinished++; bump(byStatus, 'running'); continue; }
+    bump(byStop, st.stop || 'unknown'); bump(byStatus, st.status);
+    if (st.stop === 'budget') bump(byAxis, st.axis || 'unknown');
+  }
+  return { runs, unfinished, byStop, byStatus, byAxis };
+}
+
+// One line for a log pane: "12 runs · done 7 · unclaimed 2 · error 2 · idle 1 (budget: wall-clock 1)".
+export function stopReasonsLine(h) {
+  if (!h || !h.runs) return 'no runs recorded';
+  const parts = Object.entries(h.byStatus).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`);
+  const axes = Object.entries(h.byAxis).map(([k, n]) => `${k} ${n}`).join(', ');
+  return `${h.runs} run${h.runs === 1 ? '' : 's'} · ${parts.join(' · ')}${axes ? ` (budget: ${axes})` : ''}`;
+}
