@@ -29,7 +29,22 @@
 import { parseFrontmatter } from './skills.mjs';
 
 export const MEMORY_DIR = '.anvil/memory';
-export const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'];
+export const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference', 'rule'];
+// A RULE is the one fact type injected in full, first, every run (Caura's keystones: fetched
+// deterministically, no search, no gating) — ordered by weight, hard-capped so the agent has
+// to merge or retract before it can add. Rules bind the agent's own choices; the owner's
+// explicit instruction in a task outranks them (the inversion of Caura's fleet posture —
+// here the owner is the top of the trust ladder).
+export const RULES_CAP_CHARS = 4000;
+export const DEFAULT_WEIGHT = 5;
+// The lesson-layer contract (Hermes, "lessons not logs"), quoted verbatim at every call
+// site that decides to write memory — the remember tool and the code-mode system prompt.
+export const LESSON_CONTRACT =
+  'Record lessons, not logs: a fact is what to do differently next time and why — ' +
+  'a convention, a gotcha, where something lives, a rule you were corrected on — ' +
+  'never a narrative of what happened this run. One fact, one lesson, at most three ' +
+  'sentences, grounded in something you inspected. Prefer revising an existing fact ' +
+  'over adding a near-duplicate.';
 // Belief-revision: a learning starts as a HYPOTHESIS, is promoted to VERIFIED when a
 // check corroborates it, and is RETRACTED when an observation disproves it — so the
 // agent stops re-paying for a wrong note. The status model is OURS. It was inspired
@@ -53,6 +68,8 @@ function parseList(val){
   return String(val == null ? '' : val).split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
 }
 function safeSlug(s){ return String(s == null ? '' : s).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, ''); }
+// weight 1–10 (rules order by it, highest first); anything else → the default.
+function clampWeight(v){ const n = Number(v); return Number.isFinite(n) && n >= 1 && n <= 10 ? Math.round(n) : DEFAULT_WEIGHT; }
 
 // Parse a fact file → { name, description, type, status, cause, slot, supersedes,
 // derived_from, contradicts, body }. Unknown/absent type falls back to 'project';
@@ -66,6 +83,7 @@ export function parseFact(text){
     status: MEMORY_STATUSES.includes((meta.status || '').toLowerCase()) ? meta.status.toLowerCase() : null,
     cause: REVISION_CAUSES.includes((meta.cause || '').toLowerCase()) ? meta.cause.toLowerCase() : null,
     slot: meta.slot ? safeSlug(meta.slot) || null : null,
+    weight: clampWeight(meta.weight),
     supersedes: parseList(meta.supersedes),
     derived_from: parseList(meta.derived_from),
     contradicts: parseList(meta.contradicts),
@@ -84,6 +102,7 @@ export function serializeFact(f){
   if (MEMORY_STATUSES.includes(f.status)) lines.push(`status: ${f.status}`);
   if (REVISION_CAUSES.includes(f.cause)) lines.push(`cause: ${f.cause}`);
   if (f.slot) lines.push(`slot: ${safeSlug(f.slot)}`);
+  const w = clampWeight(f.weight); if (w !== DEFAULT_WEIGHT) lines.push(`weight: ${w}`);
   for (const rel of MEMORY_RELATIONS){
     const list = Array.isArray(f[rel]) ? f[rel].map(safeSlug).filter(Boolean) : [];
     if (list.length) lines.push(`${rel}: ${[...new Set(list)].join(', ')}`);
@@ -98,6 +117,23 @@ export function slotHolder(facts, slot){
   const superseded = supersededSet(facts);
   const live = (facts || []).filter(f => f && f.slot === key && f.status !== 'retracted' && !superseded.has(f.name));
   return live.length ? live[live.length - 1].name : null;
+}
+// Live rules, highest weight first (ties keep disk order). Retracted and superseded never bind.
+function liveRules(live, stale){
+  return live.filter(f => f.type === 'rule' && !stale.has(f.name))
+    .map((f, i) => ({ f, i })).sort((a, b) => (clampWeight(b.f.weight) - clampWeight(a.f.weight)) || (a.i - b.i)).map(x => x.f);
+}
+// Would adding `newBody` as a rule exceed the cap? The cap is what makes the agent choose:
+// over it, the tool errors and the agent must merge or retract a rule first (Hermes).
+export function checkRulesCap(facts, newBody){
+  const all = (facts || []).filter(f => f && f.name);
+  const rules = liveRules(all.filter(f => f.status !== 'retracted'), supersededSet(all));
+  const total = rules.reduce((t, r) => t + String(r.body || r.description || '').length, 0);
+  const next = total + String(newBody || '').length;
+  return { ok: next <= RULES_CAP_CHARS, total, next, cap: RULES_CAP_CHARS, count: rules.length };
+}
+export function rulesCapReply(c){
+  return `Refused: project rules are capped at ${c.cap} characters and this one would take them to ${c.next} (${c.count} rule(s), ${c.total} now) — merge or retract a rule with \`revise\` first, or record this as a plain fact.`;
 }
 function supersededSet(facts){
   const out = new Map(); // stale name -> successor name
@@ -114,10 +150,19 @@ function supersededSet(facts){
 // successor, tagged. Retracted facts are hidden and counted.
 export function buildMemoryIndex(facts){
   const all = (facts || []).filter(f => f && (f.name || f.description));
-  const live = all.filter(f => f.status !== 'retracted');
-  const retracted = all.length - live.length;
-  if (!live.length) return '';
-  const stale = supersededSet(live);
+  const liveAll = all.filter(f => f.status !== 'retracted');
+  const retracted = all.length - liveAll.length;
+  if (!liveAll.length) return '';
+  const staleAll = supersededSet(liveAll);
+  const rules = liveRules(liveAll, staleAll);
+  const live = liveAll.filter(f => f.type !== 'rule');
+  const stale = staleAll; // a rule may supersede an ordinary fact too — one stale set for the whole store
+  const rulesBlock = rules.length ? '\n\n# Project rules\n' +
+    'Mandatory for THIS project — they bind your own choices; the owner\'s explicit instruction ' +
+    'in this task overrides them. Read once, obey throughout.\n\n' +
+    rules.map(r => `## ${r.name}${r.status === 'hypothesis' ? ' _(hypothesis)_' : ''}\n${String(r.body || r.description || '').trim()}`).join('\n\n') + '\n' : '';
+  const foot = retracted ? `\n\n${retracted} fact(s) were retracted (disproven) and hidden — do not re-derive them.` : '';
+  if (!live.length) return rulesBlock ? rulesBlock + foot.replace(/^\n\n/, '\n') : '';
   const byName = new Map(live.map(f => [f.name, f]));
   const emitted = new Set();
   const lines = [];
@@ -137,8 +182,7 @@ export function buildMemoryIndex(facts){
     emit(f);
   }
   for (const f of live) emit(f); // any stale fact whose successor is unnamed still renders
-  const foot = retracted ? `\n\n${retracted} fact(s) were retracted (disproven) and hidden — do not re-derive them.` : '';
-  return '\n\n# Project memory\n' +
+  return rulesBlock + '\n\n# Project memory\n' +
     'Durable learnings recorded for THIS project — honor them. A fact marked ' +
     '_hypothesis_ is provisional: when a check corroborates it, promote it with ' +
     '`revise`; when an observation disproves it, retract it with `revise` so you ' +
@@ -166,6 +210,7 @@ export function noteToFact(note, type, status, rel = {}){
   const fact = {
     name: slug, description, type: t, status: st, cause: null,
     slot: rel && rel.slot ? safeSlug(rel.slot) || null : null,
+    weight: clampWeight(rel && rel.weight),
     supersedes: parseList(Array.isArray(rel?.supersedes) ? rel.supersedes.join(',') : rel?.supersedes),
     derived_from: parseList(Array.isArray(rel?.derived_from) ? rel.derived_from.join(',') : rel?.derived_from),
     contradicts: [],

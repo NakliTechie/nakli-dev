@@ -231,7 +231,7 @@
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
-  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, applyDemotion, dependantsOf, slotHolder, reviseTool, findDuplicate, duplicateReply, createRememberBudget, budgetSpentReply } from '../../sys/ai/memory-store.mjs';
+  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, applyDemotion, dependantsOf, slotHolder, reviseTool, findDuplicate, duplicateReply, createRememberBudget, budgetSpentReply, checkRulesCap, rulesCapReply, LESSON_CONTRACT } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { compactConversation } from '../../sys/ai/compaction.mjs';
   import { evolve } from '../../sys/ai/evolve.mjs';
@@ -660,8 +660,10 @@
     const execTool=async(nm,ar,call)=>{
       if(nm==='remember'){
         const note=String((ar&&ar.note)||'').trim();
-        const dup=findDuplicate(await listFacts(), note); if(dup) return duplicateReply(dup); // search before save (A2)
-        const slug=await recordFact(note, ar&&ar.type, 'hypothesis'); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
+        const all=await listFacts();
+        const dup=findDuplicate(all, note); if(dup) return duplicateReply(dup); // search before save (A2)
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); } // rules stay capped here too (A3)
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { weight: ar&&ar.weight }); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
       return await codeExec(nm,ar,call);
     };
     const sys='You are PRIMING this project\'s memory so future tasks start informed. FIRST run `ls`/`find` to see the ACTUAL files and directory layout — record only what you OBSERVE, and do NOT trust the README\'s claims about the workspace over what the files show (a README can be stale). Then explore: skim key source files, note the build/test/run setup and conventions. Record 5–10 short, high-signal DURABLE facts with the `remember` tool: where major things live, naming/style conventions, how to build/test/run, and any gotchas — each grounded in something you actually inspected. One or two specific sentences each. Do NOT edit any files. Stop once you have recorded the key facts.';
@@ -1316,6 +1318,10 @@
   }
 
   const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate one bounded sub-task to a subagent), dispatch (fan out INDEPENDENT sub-tasks to subagents that run in parallel, each in an isolated copy of the workspace — their changes merge back when they touch different files), review (an independent read-only reviewer subagent for a second opinion), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. For work that splits into independent parts, use dispatch to parallelise; after a significant change, consider review before finishing. For a task defined by input→output EXAMPLES (a puzzle), prefer the `synthesize` tool — it evolves and tests candidate solve() programs across generations and writes the best solver.py — over hand-writing one solver. Work in small, verifiable steps; end with a one-line summary.';
+  // The lesson-layer contract rides in the system prompt of every code-mode run (where
+  // `remember` exists) — the first remember of a project happens with an EMPTY memory index,
+  // so the index header alone could never carry it. Same constant as the tool description.
+  const LESSON_NOTE = ' Memory: ' + LESSON_CONTRACT;
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
@@ -1488,10 +1494,13 @@
         const all=await listFacts();
         const exempt=[ar&&ar.supersedes, ar&&ar.slot?slotHolder(all, ar.slot):null].filter(Boolean);
         const dup=findDuplicate(all, note, { exempt }); if(dup) return duplicateReply(dup);
+        // A rule is injected whole every run, so rules are capped (A3): over the cap the tool
+        // errors and the agent has to merge or retract one first.
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); }
         const take=remBudget.take(); if(!take.ok) return budgetSpentReply(take);
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
-        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes });
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes, weight: ar&&ar.weight });
         if(slug) factMap[slug]=MEMORY_DIR+'/'+slug+'.md';
         return slug?('Recorded fact "'+slug+'" (hypothesis) — promote or retract it with `revise` as evidence arrives.'):'Nothing recorded.';
       }
@@ -1633,7 +1642,7 @@
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
     try{
       let toolCalls=0;
-      const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
+      const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+(mode==='code'?LESSON_NOTE:'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
       // A turn in flight is the longest silence in a run — on a local model it can
       // be minutes. Show a placeholder so a working agent and a wedged one are
       // distinguishable; it is replaced by whatever the turn actually produces.

@@ -81,6 +81,9 @@ jobs:
       - name: Verify Anvil honesty guards (gate, hooks, single-writer state)
         run: node scripts/test-anvil-guards.mjs
 
+      - name: Verify the lesson-layer contract at both call sites and rules injected whole
+        run: node scripts/test-anvil-lesson-contract.mjs
+
       - name: Verify the NakliOS dialog promise always settles (no wedged consent)
         run: node scripts/test-host-dialog-settles.mjs
 

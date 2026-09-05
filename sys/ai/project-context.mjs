@@ -9,6 +9,8 @@
 // their text in, and writes back what `appendMemory` returns. That keeps the
 // assembly + append semantics headlessly testable.
 
+import { LESSON_CONTRACT } from './memory-store.mjs';
+
 const DEFAULT_CAP = 8192;
 
 // Assemble the system-prompt prefix from a project's AGENTS.md + memory.md.
@@ -61,15 +63,16 @@ export function rememberTool() {
     type: 'function',
     function: {
       name: 'remember',
-      description: 'Record ONE durable learning about THIS project (a convention, ' +
-        'a gotcha, where something lives, a user preference) so future tasks in ' +
-        'this workspace start with it. Use sparingly, for facts that still matter ' +
-        'next session — not per-step notes.',
+      description: 'Record ONE durable learning about THIS project so future tasks in ' +
+        'this workspace start with it. ' + LESSON_CONTRACT + ' A "rule" is injected in full ' +
+        'every run and binds your own choices (the owner still outranks it) — use it for ' +
+        'what you were corrected on; rules are capped, so keep them few and short.',
       parameters: {
         type: 'object',
         properties: {
           note: { type: 'string', description: 'The learning. First line is the summary shown in the memory index; add detail on following lines if useful.' },
-          type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'], description: 'Kind of fact (default: project).' },
+          type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference', 'rule'], description: 'Kind of fact (default: project). "rule": mandatory, injected in full every run, capped.' },
+          weight: { type: 'integer', minimum: 1, maximum: 10, description: 'Rules only: 1–10, higher renders first (default 5).' },
           slot: { type: 'string', description: 'Optional single-valued key this fact fills (e.g. "build-tool", "db", "phase"). A new value for a slot supersedes the current holder.' },
           derived_from: { type: 'string', description: 'Optional comma-separated fact names this learning rests on. If one is later retracted, this fact drops back to hypothesis.' },
           supersedes: { type: 'string', description: 'Optional comma-separated fact names this learning replaces.' },
