@@ -11,7 +11,8 @@ import { createGrant, createOpLog, createAgentFace } from '../../rig/agent/index
 import { createShell } from '../../rig/cli/shell.mjs';
 import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
-         replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss } from '../run-record.mjs';
+         replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
+         OUTCOME_SIGNALS, foldOutcome, foldReuse } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -213,6 +214,120 @@ await test('the fixed vocabulary is frozen and complete for the loop', () => {
   assert(Object.isFrozen(RUN_EVENTS), 'frozen');
   for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped'])
     assert(RUN_EVENTS.includes(v), `missing verb ${v}`);
+});
+
+// ─────────────────────────────────────────────── outcome (A4) ──
+// Three recorded fixtures — pass / failing gate / budget — plus an ungated finish and
+// a memory-using run. Every label is derived from the record; strict on success.
+
+await test('OUTCOME pass: a gated, verified finish is the ONLY way to earn the success label', async () => {
+  const { rec } = await recordRun({ verify: async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) });
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.label, 'success', 'label'); eq(o.note, null, 'no caveat');
+  const t = o.signals.find((s) => s.kind === 'terminal');
+  eq(t.polarity, 'success', 'terminal polarity'); eq(t.weight, 1.0, 'terminal weight is ground truth (1.0), not a regex guess');
+  assert(o.score > 0, 'positive score');
+  for (const s of o.signals) assert(OUTCOME_SIGNALS.includes(s.kind), `known signal kind ${s.kind}`);
+});
+
+await test('OUTCOME failing gate: unverified stop → failure, and every failed round is counted', async () => {
+  const { rec, result } = await recordRun({ verify: async () => ({ ok: false, exit: 1, stdout: '', stderr: 'nope' }) });
+  eq(result.stop, 'unverified', 'sanity: the loop gave up after maxVerifyRounds');
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.label, 'failure', 'label');
+  eq(o.signals.find((s) => s.kind === 'terminal').weight, 1.0, 'gate never passed is a full-weight failure');
+  const g = o.signals.find((s) => s.kind === 'gate');
+  assert(g && g.polarity === 'failure' && /3 failed gate round/.test(g.detail), `failed rounds counted: ${g && g.detail}`);
+  assert(o.score < 0, 'negative score');
+});
+
+await test('OUTCOME budget: a budget stop is a failure to finish (0.8), never a success', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await rec.start({ messages: MESSAGES, tools: [shellTool()] });
+  const result = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: rec.wrapInfer(scripted(SCRIPT())), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent, budget: { turns: 2 } });
+  await rec.finish(result); await rec.settled();
+  eq(result.stop, 'budget', 'sanity: budget tripped');
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.label, 'failure', 'label');
+  const t = o.signals.find((s) => s.kind === 'terminal');
+  eq(t.weight, 0.8, 'did-not-finish weight'); assert(/budget \(turns\)/.test(t.detail), `names the axis: ${t.detail}`);
+});
+
+await test('OUTCOME unclaimed: an ungated finish yields NO success evidence, and says so', async () => {
+  const { rec } = await recordRun();
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.label, 'unknown', 'not success, not failure');
+  assert(/unclaimed/.test(o.note || ''), `the note explains: ${o.note}`);
+  eq(o.signals.find((s) => s.kind === 'terminal').polarity, 'neutral', 'terminal is neutral');
+  eq(o.score, 0, 'no score either way');
+  // the RECORD must corroborate: a stop claiming verified:true with no verify.passed event
+  // in the chain (an ungated loop says exactly that) earns nothing — a flag cannot mint success.
+  const forged = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await forged.start({ messages: MESSAGES, tools: [] });
+  await forged.finish({ stop: 'done', verified: true, steps: 1 }); await forged.settled();
+  const f = foldOutcome(forged.events(), forged.resolve);
+  eq(f.label, 'unknown', 'verified:true without a verify.passed event is not success'); assert(/unclaimed/.test(f.note), f.note);
+  // a hashes-only audit copy (blobs dropped) says why it has no evidence
+  const audit = loadRecord({ events: rec.export().events });
+  const a = foldOutcome(audit.events(), audit.resolve);
+  eq(a.label, 'unknown', 'no payload → unknown'); assert(/payload is missing/.test(a.note), a.note);
+  // a run that died mid-flight: no run.stopped → no evidence, with a note
+  const dead = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await dead.start({ messages: MESSAGES, tools: [shellTool()] }); await dead.settled();
+  const d = foldOutcome(dead.events(), dead.resolve);
+  eq(d.label, 'unknown', 'dead run is unknown'); assert(/no run\.stopped/.test(d.note), d.note);
+});
+
+// A memory-using run: recall x twice, then retract it — both per-fact failure signals fire.
+const MEM_SCRIPT = () => [
+  { content: '', toolCalls: [call('recall', { name: 'cache-guess' }, 'r1')] },
+  { content: '', toolCalls: [call('recall', { name: 'cache-guess' }, 'r2')] },
+  { content: '', toolCalls: [call('recall', { name: 'db-fact' }, 'r3')] },
+  { content: '', toolCalls: [call('revise', { name: 'cache-guess', status: 'retracted', cause: 'correction' }, 'v1')] },
+  { content: 'done', toolCalls: [] },
+];
+async function recordMemRun({ verify = null } = {}) {
+  const rec = createRunRecorder({ app: 'anvil', principal: 'prin_test' });
+  await rec.start({ messages: MESSAGES, tools: [] });
+  const result = await runAgentLoop({ messages: MESSAGES, tools: [], infer: rec.wrapInfer(scripted(MEM_SCRIPT())), executeTool: async (name, args) => `${name}:${args.name}`, onEvent: rec.onEvent, verify });
+  await rec.finish(result); await rec.settled();
+  return rec;
+}
+
+await test('OUTCOME per-fact: repeat recall and recall-then-retract are failure evidence on the FACT', async () => {
+  const rec = await recordMemRun();
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.recalled.join(','), 'cache-guess,db-fact', 'deliberate recalls, in order, deduped');
+  eq(o.retracted.join(','), 'cache-guess', 'retractions seen');
+  const rr = o.signals.find((s) => s.kind === 'repeat_recall'); assert(rr && /2×/.test(rr.detail), `repeat recall fires: ${rr && rr.detail}`);
+  const c = o.signals.find((s) => s.kind === 'contradiction'); assert(c && /retracted in the same run/.test(c.detail), 'contradiction fires');
+  const ev = o.facts['cache-guess'] || [];
+  assert(ev.some((x) => x.kind === 'repeat_recall') && ev.some((x) => x.kind === 'contradiction'), 'both land on the fact');
+  assert(!o.facts['db-fact'], 'a fact recalled once in an unclaimed run earns nothing');
+  eq(o.label, 'failure', 'the run itself reads as failure (score < 0) even though it "finished"');
+});
+
+await test('OUTCOME strict on success: a fact recalled in a PASSED run earns success evidence; a retracted one never does', async () => {
+  const rec = await recordMemRun({ verify: async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) });
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.label, 'success', 'gate passed');
+  assert((o.facts['db-fact'] || []).some((x) => x.kind === 'terminal' && x.polarity === 'success' && x.weight === 0.5), 'db-fact was load-bearing in a success');
+  assert(!(o.facts['cache-guess'] || []).some((x) => x.polarity === 'success'), 'the retracted fact earns no success');
+});
+
+await test('OUTCOME reuse across runs: ≥3 distinct runs recalling a fact → load-bearing (neutral); injection never counts', async () => {
+  const runs = [await recordMemRun(), await recordMemRun(), await recordMemRun()];
+  const reuse = foldReuse(runs, { minRuns: 3 });
+  const names = reuse.map((r) => r.name).sort().join(',');
+  eq(names, 'cache-guess,db-fact', 'both facts recalled in 3 runs');
+  eq(reuse[0].polarity, 'neutral', 'reuse is neutral — used, not proven');
+  eq(foldReuse(runs.slice(0, 2), { minRuns: 3 }).length, 0, 'two runs are not enough');
+  // a run with NO recall tool calls contributes nothing, however many facts its index injected
+  const { rec: plain } = await recordRun();
+  eq(foldReuse([plain, plain, plain]).length, 0, 'injection is not use');
+  const one = await recordMemRun();
+  eq(foldReuse([one, one, one]).length, 0, 'the same record passed thrice is one run, not three');
 });
 
 if (failures.length) { console.error(`history/run-record: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }

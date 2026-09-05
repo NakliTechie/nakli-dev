@@ -231,7 +231,7 @@
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
-  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, reviseTool } from '../../sys/ai/memory-store.mjs';
+  import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, applyDemotion, dependantsOf, slotHolder, reviseTool, findDuplicate, duplicateReply, createRememberBudget, budgetSpentReply, checkRulesCap, rulesCapReply, LESSON_CONTRACT } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { compactConversation } from '../../sys/ai/compaction.mjs';
   import { evolve } from '../../sys/ai/evolve.mjs';
@@ -632,9 +632,13 @@
   // memory.md; clicking opens whichever exists (memory first) in the preview.
   // Write one durable memory fact (belief-revision: default hypothesis). Returns the
   // slug, or null. Shared by the `remember` tool and the Prime flow.
-  async function recordFact(note, type, status='hypothesis'){
+  // `rel` = { slot, derived_from, supersedes } (A1). A single-valued slot supersedes its
+  // current holder deterministically at write time — no model call, no clock.
+  async function recordFact(note, type, status='hypothesis', rel={}){
     const clean=String(note==null?'':note).trim(); if(!clean) return null;
-    const f=noteToFact(clean, type, status);
+    const r={ ...(rel||{}) };
+    if(r.slot){ const holder=slotHolder(await listFacts(), r.slot); if(holder) r.supersedes=[holder].concat(r.supersedes?String(r.supersedes).split(/[,\s]+/):[]); }
+    const f=noteToFact(clean, type, status, r);
     let slug=f.slug, path=MEMORY_DIR+'/'+slug+'.md', n=1;
     try{ while((await fs.stat(path)).ok){ n++; slug=f.slug+'-'+n; path=MEMORY_DIR+'/'+slug+'.md'; } }catch(_){}
     await fs.write(path, f.file.replace('name: '+f.slug+'\n', 'name: '+slug+'\n'));
@@ -654,7 +658,12 @@
     const codeExec = makeToolExecutor({ shell, face, mode:'ask', infer: inferViaHost }); // read-only survey
     let recorded=0;
     const execTool=async(nm,ar,call)=>{
-      if(nm==='remember'){ const slug=await recordFact(String((ar&&ar.note)||''), ar&&ar.type, 'hypothesis'); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
+      if(nm==='remember'){
+        const note=String((ar&&ar.note)||'').trim();
+        const all=await listFacts();
+        const dup=findDuplicate(all, note); if(dup) return duplicateReply(dup); // search before save (A2)
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); } // rules stay capped here too (A3)
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { weight: ar&&ar.weight }); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
       return await codeExec(nm,ar,call);
     };
     const sys='You are PRIMING this project\'s memory so future tasks start informed. FIRST run `ls`/`find` to see the ACTUAL files and directory layout — record only what you OBSERVE, and do NOT trust the README\'s claims about the workspace over what the files show (a README can be stale). Then explore: skim key source files, note the build/test/run setup and conventions. Record 5–10 short, high-signal DURABLE facts with the `remember` tool: where major things live, naming/style conventions, how to build/test/run, and any gotchas — each grounded in something you actually inspected. One or two specific sentences each. Do NOT edit any files. Stop once you have recorded the key facts.';
@@ -751,7 +760,7 @@
     try{
       const dir=await fs.list(MEMORY_DIR,{recursive:false});
       if(dir&&dir.ok){ for(const e of (dir.entries||[])){ if(e.type==='dir'||!e.name.endsWith('.md')) continue;
-        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type, status:f.status }); } }catch(_){} } }
+        try{ const r=await fs.read(e.path,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); out.push({ ...f, name:f.name||e.name.replace(/\.md$/,''), description:f.description, type:f.type, status:f.status, path:e.path }); } }catch(_){} } }
     }catch(_){}
     return out;
   }
@@ -1309,6 +1318,10 @@
   }
 
   const SYSTEM = 'You are a coding agent working over the user\'s files. Tools: read (line-numbered), write (whole file), edit (surgical old_string→new_string), apply_patch (add/update/delete files), todowrite (checklist), task (delegate one bounded sub-task to a subagent), dispatch (fan out INDEPENDENT sub-tasks to subagents that run in parallel, each in an isolated copy of the workspace — their changes merge back when they touch different files), review (an independent read-only reviewer subagent for a second opinion), shell (bash-style: ls, cat, grep, sed, git, pipes). Read a file before editing it. Prefer edit/apply_patch for changes, write for new files; use shell to explore and verify. For work that splits into independent parts, use dispatch to parallelise; after a significant change, consider review before finishing. For a task defined by input→output EXAMPLES (a puzzle), prefer the `synthesize` tool — it evolves and tests candidate solve() programs across generations and writes the best solver.py — over hand-writing one solver. Work in small, verifiable steps; end with a one-line summary.';
+  // The lesson-layer contract rides in the system prompt of every code-mode run (where
+  // `remember` exists) — the first remember of a project happens with an EMPTY memory index,
+  // so the index header alone could never carry it. Same constant as the tool description.
+  const LESSON_NOTE = ' Memory: ' + LESSON_CONTRACT;
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
@@ -1429,6 +1442,8 @@
     const factMap = {};  // memory-fact name -> .md path, populated below
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
+    // A2: at most MAX_REMEMBER_PER_RUN new learnings per run — the hoard is the failure mode.
+    const remBudget=createRememberBudget();
     const executeTool = async (nm, ar, callObj)=>{
       // Pre-tool hook guard, hoisted to the TOP: skill/recall/remember/revise/
       // synthesize all return below before the old guard site, so a project's
@@ -1473,9 +1488,19 @@
       if(nm==='remember'){
         const note=String((ar&&ar.note)||'').trim();
         if(!note) return 'Nothing recorded (empty note).';
+        // Search before save (A2, Agno/Caura): a deterministic duplicate check against every
+        // fact on disk — exact, near, or a match on a retracted/superseded fact — refuses the
+        // write with the next move, so the store never grows a second copy.
+        const all=await listFacts();
+        const exempt=[ar&&ar.supersedes, ar&&ar.slot?slotHolder(all, ar.slot):null].filter(Boolean);
+        const dup=findDuplicate(all, note, { exempt }); if(dup) return duplicateReply(dup);
+        // A rule is injected whole every run, so rules are capped (A3): over the cap the tool
+        // errors and the agent has to merge or retract one first.
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); }
+        const take=remBudget.take(); if(!take.ok) return budgetSpentReply(take);
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
-        const slug=await recordFact(note, ar&&ar.type, 'hypothesis');
+        const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes, weight: ar&&ar.weight });
         if(slug) factMap[slug]=MEMORY_DIR+'/'+slug+'.md';
         return slug?('Recorded fact "'+slug+'" (hypothesis) — promote or retract it with `revise` as evidence arrives.'):'Nothing recorded.';
       }
@@ -1487,7 +1512,22 @@
         if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
         if(status!=='verified' && status!=='retracted') return 'status must be "verified" or "retracted".';
         const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
-        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ await fs.write(p, applyRevision(r.data, { status, reason: ar&&ar.reason })); renderFiles(); return 'Revised "'+name+'" → '+status+(ar&&ar.reason?(' ('+String(ar.reason).slice(0,80)+')'):'')+'.'; } }catch(_){}
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){
+          await fs.write(p, applyRevision(r.data, { status, reason: ar&&ar.reason, cause: ar&&ar.cause, contradicts: ar&&ar.contradicts }));
+          // Revalidation: a retracted basis demotes every fact derived from it (transitively)
+          // back to hypothesis — the dependants keep their derived_from link as the audit trail.
+          let demoted=[];
+          if(status==='retracted'){
+            const all=await listFacts();
+            for(const dn of dependantsOf(all, name)){
+              const d=all.find(x=>x.name===dn); if(!d||!d.path) continue;
+              try{ const dr=await fs.read(d.path,{encoding:'utf-8'}); if(dr&&dr.ok){ await fs.write(d.path, applyDemotion(dr.data, { basis:name })); demoted.push(dn); } }catch(_){}
+            }
+          }
+          renderFiles();
+          return 'Revised "'+name+'" → '+status+(ar&&ar.cause?(' ['+String(ar.cause)+']'):'')+(ar&&ar.reason?(' ('+String(ar.reason).slice(0,80)+')'):'')+'.'
+            +(demoted.length?(' Demoted to hypothesis (basis retracted): '+demoted.join(', ')+'.'):'');
+        } }catch(_){}
         const names=Object.keys(factMap);
         return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':'');
       }
@@ -1579,7 +1619,10 @@
               // `status` MUST ride along: buildMemoryIndex filters on it, so dropping
               // it made every retracted fact survive into the injected context and
               // silenced the hypothesis tag and the "do not re-derive" footer.
-              facts.push({ name, description:f.description, type:f.type, status:f.status }); factMap[name]=e.path; }
+              // Relations ride along too (A1): buildMemoryIndex orders a successor above
+              // the fact it supersedes and tags the stale one — dropping them here would
+              // silence that exactly as dropping `status` once silenced retraction.
+              facts.push({ ...f, name, description:f.description, type:f.type, status:f.status }); factMap[name]=e.path; }
           }catch(_){}
         }
         memoryIndex = buildMemoryIndex(facts);
@@ -1599,7 +1642,7 @@
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
     try{
       let toolCalls=0;
-      const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
+      const sysMsg=(extra)=>({role:'system',content:SYSTEM+(MODE_NOTE[mode]||'')+(mode==='code'?LESSON_NOTE:'')+projectContext+memoryIndex+skillsIndex+(extra||'')});
       // A turn in flight is the longest silence in a run — on a local model it can
       // be minutes. Show a placeholder so a working agent and a wedged one are
       // distinguishable; it is replaced by whatever the turn actually produces.

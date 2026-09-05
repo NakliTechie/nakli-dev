@@ -332,3 +332,91 @@ export function compareRuns(recorded, live) {
   if (a.length !== b.length) return { ok: false, at: n, why: `length ${a.length} ≠ ${b.length}` };
   return { ok: true, at: -1, why: '' };
 }
+
+// ─────────────────────────────────────────────────────────── outcome ──
+
+// What a run says about itself and about the facts it used — derived, lazily, from
+// the record alone (Caura's "six free signals", with our terminal signal being ground
+// truth rather than a regex, and NOOA's rule that only DELIBERATE recalls count as
+// use). Nothing here runs on the write path; nothing here calls a model.
+//
+// Polarity is asymmetric on purpose (Caura): strict on success, lenient on failure.
+// A false-positive success would promote a bad fact; a false-negative failure only
+// leaves a run unlabelled. So the `success` label is earned ONLY by a passed gate —
+// never by score — and an ungated finish is `unknown` with a note saying why.
+export const OUTCOME_SIGNALS = Object.freeze(['terminal', 'gate', 'repeat_recall', 'contradiction', 'reuse']);
+
+export function foldOutcome(events, resolve) {
+  const ev = joined(events, resolve);
+  // The RECORD corroborates a pass — a verify.passed event — never a caller's flag. An
+  // ungated loop returns verified:true (agent-loop.mjs, the gateGreen path), so the flag
+  // alone could mint success evidence for facts; the event cannot be faked into a record.
+  const passedInRecord = ev.some((e) => e.tool === 'verify.passed');
+  const signals = []; const facts = {};
+  const push = (kind, polarity, weight, detail, names = []) => {
+    signals.push({ kind, polarity, weight, detail });
+    for (const n of names) (facts[n] ||= []).push({ kind, polarity, weight });
+  };
+  let note = null;
+
+  // 1. terminal — how the loop ended is the strongest signal we have, and we have it
+  //    exactly (run.stopped is recorded from the loop's return value).
+  const stopEv = [...ev].reverse().find((e) => e.tool === 'run.stopped');
+  if (!stopEv) {
+    note = 'no run.stopped — still running or died mid-flight; no outcome evidence';
+  } else if (!stopEv.output) {
+    note = 'run.stopped is in the chain but its payload is missing (hashes-only copy) — no outcome evidence';
+    push('terminal', 'neutral', 0, 'stop payload unresolved');
+  } else {
+    const o = stopEv.output; const stop = o.stop;
+    if (stop === 'done') {
+      if (o.verified === true && passedInRecord) push('terminal', 'success', 1.0, 'gate passed and the loop finished');
+      else { note = 'unclaimed: the loop finished but no gate corroborated it — no success evidence'; push('terminal', 'neutral', 0, 'finished without a gate'); }
+    } else if (stop === 'unverified') push('terminal', 'failure', 1.0, 'gate never passed');
+    else if (stop === 'error') push('terminal', 'failure', 1.0, `error: ${o.error || ''}`);
+    else if (stop === 'budget' || stop === 'max-steps' || stop === 'no-progress') push('terminal', 'failure', 0.8, `did not finish: ${stop}${o.axis ? ` (${o.axis})` : ''}`);
+    else if (stop === 'aborted') { note = 'aborted by the owner — no evidence either way'; push('terminal', 'neutral', 0, 'aborted'); }
+    else push('terminal', 'neutral', 0, `unknown stop: ${stop}`);
+  }
+
+  // 2. gate rounds — every failed round is a small failure signal even on a run that
+  //    eventually passed (the first answer did not land).
+  const failedRounds = ev.filter((e) => e.tool === 'verify.failed').length;
+  if (failedRounds) push('gate', 'failure', Math.min(0.5, 0.2 * failedRounds), `${failedRounds} failed gate round(s)`);
+
+  // 3. + 4. per-fact evidence from deliberate tool calls: repeat recall, and a fact
+  //    recalled then retracted in the same run.
+  const recalls = new Map(); const recalled = []; const retracted = [];
+  for (const e of ev) {
+    if (e.tool !== 'tool.called') continue;
+    const name = e.input?.name; const a = e.input?.args || {};
+    if (name === 'recall' && a.name) { recalls.set(a.name, (recalls.get(a.name) || 0) + 1); if (!recalled.includes(a.name)) recalled.push(a.name); }
+    if (name === 'revise' && a.status === 'retracted' && a.name && !retracted.includes(a.name)) retracted.push(a.name);
+  }
+  for (const [n, c] of recalls) if (c >= 2) push('repeat_recall', 'failure', 0.3, `"${n}" recalled ${c}× — the first answer did not land`, [n]);
+  for (const n of retracted) if (recalls.has(n)) push('contradiction', 'failure', 0.5, `"${n}" was recalled, then retracted in the same run`, [n]);
+
+  // A fact recalled in a run whose gate passed was load-bearing in a success — the
+  // only success evidence a fact can earn here (strict: a passed gate, nothing less).
+  const terminal = signals.find((s) => s.kind === 'terminal');
+  if (terminal?.polarity === 'success') for (const n of recalled) if (!retracted.includes(n)) (facts[n] ||= []).push({ kind: 'terminal', polarity: 'success', weight: 0.5 });
+
+  const score = Math.round(signals.reduce((t, s) => t + (s.polarity === 'success' ? s.weight : s.polarity === 'failure' ? -s.weight : 0), 0) * 100) / 100;
+  const label = terminal?.polarity === 'success' ? 'success' : score < 0 ? 'failure' : 'unknown';
+  return { label, score, signals, facts, recalled, retracted, note };
+}
+
+// 5. reuse, across runs: a fact recalled in ≥ minRuns distinct runs is load-bearing
+//    (polarity NEUTRAL — it says the fact is used, not that any run succeeded).
+//    Deliberate `recall` calls only; injection into the index never counts (NOOA).
+export function foldReuse(records, { minRuns = 3 } = {}) {
+  const runsByFact = new Map();
+  [...new Set(records || [])].forEach((r, i) => { // the same record thrice is one run
+    for (const n of foldOutcome(r.events(), r.resolve).recalled) {
+      if (!runsByFact.has(n)) runsByFact.set(n, new Set());
+      runsByFact.get(n).add(i);
+    }
+  });
+  return [...runsByFact].filter(([, s]) => s.size >= minRuns)
+    .map(([name, s]) => ({ name, runs: s.size, kind: 'reuse', polarity: 'neutral', weight: 0.3 }));
+}

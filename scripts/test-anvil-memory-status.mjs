@@ -21,7 +21,21 @@ const pushes = [...anvil.matchAll(/(?:facts|out)\.push\(\{[^}]*description:\s*f\
 assert.equal(pushes.length, 2, `expected 2 fact-index push sites, found ${pushes.length}`);
 for (const p of pushes) {
   assert.match(p, /status:\s*f\.status/, `a fact-index push drops status (the retraction filter goes dead): ${p}`);
+  // A1: relations (supersedes / derived_from / contradicts / slot) must ride along
+  // too — buildMemoryIndex orders a successor above what it supersedes and tags the
+  // stale row; a push that enumerates fields drops them exactly as status was dropped.
+  assert.match(p, /\.\.\.f\b/, `a fact-index push drops the relations (supersession never renders): ${p}`);
 }
+// And the write side can create a related fact: the remember tool offers the relations
+// and the handler passes them through to recordFact.
+assert.match(anvil, /recordFact\(note, ar&&ar\.type, 'hypothesis', \{ slot: ar&&ar\.slot, derived_from: ar&&ar\.derived_from, supersedes: ar&&ar\.supersedes, weight: ar&&ar\.weight \}\)/, 'the remember handler passes slot/derived_from/supersedes/weight to recordFact');
+assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supersedes its current holder at write time');
+// A2: search before save on BOTH remember paths (task loop + prime), and one budget per run.
+assert.equal((anvil.match(/findDuplicate\(all, note(?:, \{ exempt \})?\); if\(dup\) return duplicateReply\(dup\);/g) || []).length, 2, 'both remember paths search before they save');
+assert.equal((anvil.match(/const cap=checkRulesCap\(all, note\); if\(!cap\.ok\) return rulesCapReply\(cap\);/g) || []).length, 2, 'both remember paths cap rules');
+assert.match(anvil, /exempt=\[ar&&ar\.supersedes, ar&&ar\.slot\?slotHolder\(all, ar\.slot\):null\]/, 'a declared replacement is exempt from the duplicate check (the correction exit)');
+assert.match(anvil, /const remBudget=createRememberBudget\(\);\n\s*const executeTool = async/, 'the remember budget is created once per run, beside the executor');
+assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\) return budgetSpentReply\(take\);/, 'the remember handler spends the budget and refuses when it is gone');
 
 // The memory panel must SHOW a retracted fact rather than listing it as live —
 // retract visibly, never silently delete.
