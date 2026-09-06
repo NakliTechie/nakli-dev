@@ -53,7 +53,7 @@ assert.ok(guardIdx < firstToolIdx,
 assert.equal((anvil.match(/preToolDecision\(hooksCfg/g) || []).length, 1,
   'the hook guard is not evaluated twice per call');
 // Write-capable tools are refused outright outside code mode.
-assert.match(anvil, /mode!=='code' && \(nm==='remember'\|\|nm==='revise'\|\|nm==='synthesize'\)/,
+assert.match(anvil, /mode!=='code' && \(nm==='remember'\|\|nm==='revise'\|\|nm==='synthesize'\|\|nm==='skill_manage'\)/,
   'the write-capable tools are mode-gated defensively');
 
 // ── priming is visible ──────────────────────────────────────────────────

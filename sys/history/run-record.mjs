@@ -451,3 +451,26 @@ export function stopReasonsLine(h) {
   const axes = Object.entries(h.byAxis).map(([k, n]) => `${k} ${n}`).join(', ');
   return `${h.runs} run${h.runs === 1 ? '' : 's'} · ${parts.join(' · ')}${axes ? ` (budget: ${axes})` : ''}`;
 }
+
+// ────────────────────────────────────────────────── skill usage (C4) ──
+
+// How often each skill was DELIBERATELY loaded — `skill` tool calls, per run — the
+// telemetry the curator ages skills by. Injection into the index never counts
+// (NOOA: spontaneous injection is logged but must never self-reinforce); only a call
+// the model chose to make does. `records` are anything with events() + resolve().
+// Returns Map name -> { views, runs, lastUsed (ms ts of the latest call), firstUsed }.
+export function foldSkillUsage(records) {
+  const out = new Map();
+  [...new Set(records || [])].forEach((r, i) => {
+    if (!r || typeof r.events !== 'function') return;
+    for (const e of joined(r.events(), r.resolve)) {
+      if (e.tool !== 'tool.called' || e.input?.name !== 'skill') continue;
+      const name = e.input?.args?.name; if (!name) continue;
+      const u = out.get(name) || { views: 0, runs: new Set(), lastUsed: 0, firstUsed: Infinity };
+      u.views++; u.runs.add(i); u.lastUsed = Math.max(u.lastUsed, e.ts || 0); u.firstUsed = Math.min(u.firstUsed, e.ts || Infinity);
+      out.set(name, u);
+    }
+  });
+  for (const [k, u] of out) out.set(k, { views: u.views, runs: u.runs.size, lastUsed: u.lastUsed, firstUsed: u.firstUsed === Infinity ? null : u.firstUsed });
+  return out;
+}

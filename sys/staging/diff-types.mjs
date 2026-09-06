@@ -9,6 +9,9 @@
 //                                 builds (apps/draft buildStageHunks:
 //                                 {index, kind:'replace'|'delete'|'insert',
 //                                 delText, insText}).
+//   anvil   'anvil-skill'       <- a skill write planned by sys/ai/skill-manage.mjs
+//                                 ({skill, op, path, before, after, status,
+//                                 sentinel, lint}) — the first agent-produced diff.
 //
 // EVERY normalizer emits ONE renderer-agnostic shape:
 //   { kind, summary, rows:[{ label, before, after, change }] }
@@ -123,6 +126,22 @@ export function normalizeProsemirrorSteps(diff) {
   };
 }
 
+// ----------------------------------------------------------------- anvil ----
+
+// An Anvil skill write -> review rows (C1). The native diff is what skill-manage
+// plans: { skill, op, path, before, after, status, sentinel:[findings], lint:[warnings] }.
+// One row for the file, one per Sentinel finding and lint warning — a reviewer
+// must SEE why a skill landed quarantined, on the card, not in a log.
+export function normalizeAnvilSkill(diff) {
+  const d = diff && typeof diff === 'object' ? diff : {};
+  const before = String(d.before ?? ''), after = String(d.after ?? '');
+  const rows = [{ label: `${d.skill || '(skill)'}/${d.path || 'SKILL.md'}`, before, after, change: classify(before, after) }];
+  for (const f of (Array.isArray(d.sentinel) ? d.sentinel : [])) rows.push({ label: `sentinel: ${f.check} [${f.severity}]`, before: '', after: `${f.where}: ${f.detail}`, change: 'edit' });
+  for (const w of (Array.isArray(d.lint) ? d.lint : [])) rows.push({ label: 'lint', before: '', after: String(w), change: 'edit' });
+  const status = d.status ? ` → ${d.status}` : '';
+  return { kind: 'skill', summary: `${d.skill || '(skill)'} — ${d.op || 'write'} ${d.path || 'SKILL.md'}${status}`, rows };
+}
+
 // -------------------------------------------------------------- register ----
 
 // The production registrations. Called once per realm that OWNS the reviewer —
@@ -132,6 +151,7 @@ export function normalizeProsemirrorSteps(diff) {
 export const APP_DIFF_TYPES = Object.freeze([
   { app: 'reckon', key: 'cell-range', normalize: normalizeCellRange },
   { app: 'draft', key: 'prosemirror-steps', normalize: normalizeProsemirrorSteps },
+  { app: 'anvil', key: 'anvil-skill', normalize: normalizeAnvilSkill },
 ]);
 
 export function registerAppDiffTypes(only = null) {

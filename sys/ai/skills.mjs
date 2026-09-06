@@ -34,19 +34,33 @@ export function parseFrontmatter(text){
   return { meta, body: body.trim() };
 }
 
-// Parse a SKILL.md — frontmatter (name/description) + body.
+// Lifecycle (C1/C4): a skill written by hand is the owner's — ACTIVE. One the agent
+// writes lands STAGED until a person activates it; Sentinel can land it QUARANTINED;
+// the curator ages an unused one STALE then ARCHIVED (never deleted). Only active and
+// stale skills are injected; `pinned: true` exempts a skill from aging.
+export const SKILL_STATUSES = Object.freeze(['active', 'staged', 'quarantined', 'stale', 'archived']);
+export const INJECTED_STATUSES = Object.freeze(['active', 'stale']);
+
+// Parse a SKILL.md — frontmatter (name/description + lifecycle fields) + body.
 export function parseSkill(text){
   const { meta, body } = parseFrontmatter(text);
-  return { name: meta.name || '', description: meta.description || '', body };
+  return {
+    name: meta.name || '', description: meta.description || '',
+    status: SKILL_STATUSES.includes((meta.status || '').toLowerCase()) ? meta.status.toLowerCase() : 'active',
+    pinned: /^(true|yes|1)$/i.test(String(meta.pinned || '')),
+    created: meta.created || null, updated: meta.updated || null,
+    body,
+  };
 }
 
-// Build the injected index from [{name, description}]. Descriptions only, one per
-// line. Returns '' when there are no named skills (caller concatenates blindly).
+// Build the injected index from [{name, description, status?}]. Descriptions only,
+// one per line; a staged, quarantined or archived skill is NOT injected (it does not
+// bind); a stale one is, tagged. Returns '' when nothing is injectable.
 export function buildSkillsIndex(skills){
-  const list = (skills || []).filter(s => s && s.name);
+  const list = (skills || []).filter(s => s && s.name && INJECTED_STATUSES.includes(s.status || 'active'));
   if (!list.length) return '';
   const lines = list.map(s =>
-    `- **${s.name}**: ${String(s.description || '(no description)').replace(/\s+/g, ' ').trim()}`);
+    `- **${s.name}**: ${String(s.description || '(no description)').replace(/\s+/g, ' ').trim()}${s.status === 'stale' ? ' _(stale — unused for a while; still valid until archived)_' : ''}`);
   return '\n\n# Skills\n' +
     'These named skills are available for THIS project. When a task matches one, ' +
     'call the `skill` tool with its exact name to load its full instructions ' +
