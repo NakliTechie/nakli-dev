@@ -84,6 +84,15 @@ jobs:
       - name: Verify the lesson-layer contract at both call sites and rules injected whole
         run: node scripts/test-anvil-lesson-contract.mjs
 
+      - name: Verify skill_manage (read-before-write, staged never active) and the Sentinel scan
+        run: node sys/ai/test/skill-manage.test.mjs
+
+      - name: Verify Anvil stages skill writes through P0 and never injects a staged or quarantined skill
+        run: node scripts/test-anvil-skills.mjs
+
+      - name: Verify skill usage as a fold and the curator lifecycle (30/90 days, pinned exempt, never deletes)
+        run: node sys/ai/test/skill-lifecycle.test.mjs
+
       - name: Verify the NakliOS dialog promise always settles (no wedged consent)
         run: node scripts/test-host-dialog-settles.mjs
 
