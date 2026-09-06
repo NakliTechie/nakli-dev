@@ -13,7 +13,7 @@ import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
          replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
          OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine,
-         searchRecords, readEvent, historyTool, HISTORY_ROLES } from '../run-record.mjs';
+         searchRecords, readEvent, historyTool, HISTORY_ROLES, foldRecovery, recoveryNote } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -278,6 +278,73 @@ await test('HISTORY never inlines base64/data-URI payloads; the tool advertises 
   assert(/binary\/base64 — not inlined/.test(read.text) && !read.text.includes(bigB64), 'a base64 blob is summarised, never inlined');
   const t = historyTool(); eq(t.function.name, 'history', 'named history');
   assert(t.function.parameters.properties.op.enum.join(',') === 'search,read', 'search + read');
+});
+
+// ─────────────────────────────────────────── recovery record (B3) ──
+// A run that RESUMES after a gate pass, with two owner inputs (the original ask and a steer).
+async function recordSteered({ gatePass }) {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  // First run.started carries the original ask; a nudge-style second run.started adds the steer.
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }], tools: [shellTool()] });
+  const verify = gatePass ? async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) : null;
+  const r1 = await runAgentLoop({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }], tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'echo built' }, 'c0')] }, { content: 'built it', toolCalls: [] }])),
+    executeTool: makeShellExecutor(shell), onEvent: rec.onEvent, verify });
+  await rec.finish(r1);
+  // the steer, as a second recorded run.started
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }, { role: 'assistant', content: 'built it' }, { role: 'user', content: 'also handle comments' }], tools: [shellTool()] });
+  const r2 = await runAgentLoop({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'also handle comments' }], tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: 'ok', toolCalls: [] }])), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent });
+  await rec.finish(r2); await rec.settled();
+  return rec;
+}
+
+await test('RECOVERY is a pure fold: the SAME record yields an identical recovery record (strict-replay)', async () => {
+  const rec = await recordSteered({ gatePass: true });
+  const a = foldRecovery(rec.events(), rec.resolve), b = foldRecovery(rec.events(), rec.resolve);
+  eq(JSON.stringify(a), JSON.stringify(b), 'deterministic — the annotation is a function of the record, not of when it ran');
+  // and stable across an export/reload round-trip (the record is the whole input)
+  const back = loadRecord(rec.export());
+  eq(JSON.stringify(foldRecovery(back.events(), back.resolve)), JSON.stringify(a), 'same after export/load');
+});
+
+await test('RECOVERY resolution: a gate pass marks an EARLIER owner input likely-satisfied; the latest stays open; ungated stays open', async () => {
+  const passed = foldRecovery((await recordSteered({ gatePass: true })).events(), (await recordSteered({ gatePass: true })).resolve);
+  // rebuild cleanly (resolve must match the same record)
+  const rp = await recordSteered({ gatePass: true }); const p = foldRecovery(rp.events(), rp.resolve);
+  eq(p.ownerInputs.length, 2, 'two owner inputs: the ask and the steer');
+  eq(p.ownerInputs[0].resolution, 'likely-satisfied', 'the original ask, with a gate pass after it, is likely handled');
+  eq(p.ownerInputs[p.ownerInputs.length - 1].resolution, 'open', 'the LATEST owner input is always open — never marked satisfied');
+  const ru = await recordSteered({ gatePass: false }); const u = foldRecovery(ru.events(), ru.resolve);
+  assert(u.ownerInputs.every((x) => x.resolution === 'open'), 'no gate pass → everything stays open (never a false satisfied — the BLOCKS failure)');
+  assert(/likely handled.*verify before redoing/.test(recoveryNote(p)), 'the note HEDGES: verify, do not blindly redo'); void passed;
+});
+
+await test('RECOVERY: coordination (a carried gate verdict) is tagged and never reads as an owner turn', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'fix the build' }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  let n = 0;
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'false' }, 'c0')] }, { content: '', toolCalls: [call('shell', { command: 'true' }, 'c1')] }, { content: 'fixed', toolCalls: [] }])),
+    executeTool: makeShellExecutor(shell), onEvent: rec.onEvent, verify: async () => (++n >= 2 ? { ok: true, exit: 0 } : { ok: false, exit: 1 }), maxVerifyRounds: 3 });
+  await rec.finish(r); await rec.settled();
+  const t = foldTranscript(rec.events(), rec.resolve);
+  const gate = t.find((m) => m.role === 'user' && /Gate failed/.test(m.content || ''));
+  assert(gate && /^\[coordination\]/.test(gate.content), 'a carried gate verdict is tagged [coordination]');
+  const ownerAt = t.findIndex((m) => m.role === 'user' && /fix the build/.test(m.content || ''));
+  const coordAt = t.findIndex((m) => /^\[coordination\]/.test(m.content || ''));
+  assert(ownerAt >= 0 && (coordAt === -1 || coordAt > ownerAt), 'coordination never precedes the owner intent');
+  // a [coordination]-tagged user turn (a nudge or gate verdict) is NOT an owner input in the recovery record
+  const nudged = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await nudged.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'real ask' }] });
+  await nudged.finish({ stop: 'done', steps: 0 });
+  await nudged.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'real ask' }, { role: 'user', content: '[coordination] You described the work but did not do it.' }] });
+  await nudged.finish({ stop: 'done', steps: 0 }); await nudged.settled();
+  const rec2 = foldRecovery(nudged.events(), nudged.resolve);
+  eq(rec2.ownerInputs.length, 1, 'the nudge is not counted as an owner request'); eq(rec2.ownerInputs[0].text, 'real ask', 'only the real ask');
 });
 
 await test('a checkpoint is recorded on the chain and reads back through the history tool (B4)', async () => {

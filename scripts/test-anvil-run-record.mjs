@@ -123,3 +123,9 @@ assert.match(anvil, /run index rebuilt: .*r\.stopsLine/, 'the boot backfill surf
 // it from the record). The record is the tamper-evident source of truth and what history searches.
 assert.match(anvil, /t\.log stays a written array/, 'the code is honest: t.log is written, the record is the source of truth');
 
+// B3: the recovery record. A resumed run is prefaced with a note built from the PRIOR run's
+// record (foldRecovery), and it rides beside the carried transcript — additive, not a replace.
+assert.match(anvil, /t\.recovery = recoveryNote\(foldRecovery\(recEvents, rec\.resolve\)\)/, 'the recovery note is a pure fold of this run\'s record, stashed for the next run');
+assert.match(anvil, /const recoveryPreface = \(t\.recovery/, 'the next run is prefaced with the recovery note');
+assert.match(anvil, /firstMessages=\[sysMsg\(gateNote\+recoveryPreface\), \.\.\.convo\]/, 'the note rides in the system preface beside the carried transcript, not replacing it');
+

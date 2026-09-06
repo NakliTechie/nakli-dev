@@ -257,7 +257,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -1435,6 +1435,10 @@
       }catch(_){}
       const b=contextBudget({ window:win, used }); b.source=source; return b;
     }
+    // B5: a content-free audit tag for a REFUSED memory write — a short hash + a category,
+    // never the note text (PII-safe). It leaves a durable trail of refusals without leaking.
+    function shortHash(str){ let h=5381; const s=String(str||''); for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))>>>0; return h.toString(16).padStart(8,'0'); }
+    function auditRefusal(category, note){ if(t){ (t.log=t.log||[]).push({ k:'system', text:'memory write refused ['+category+'] · '+shortHash(note)+' (content not logged)' }); renderLog(); } }
     convo.push({role:'user', content:text});
     let liveTool=null;
     // Wrap the executor to snapshot each file's PRE-IMAGE just before a write/edit
@@ -1568,7 +1572,14 @@
         const name=String((ar&&ar.name)||'').trim();
         if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
         const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
-        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); return 'Fact: '+(f.name||name)+'\n\n'+f.body; } }catch(_){}
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); const body=String(f.body||'');
+          // B5: page a long fact to the budget. Unknown budget → a safe fixed cap; an offset past
+          // the end is refused with the offset preserved, never a silent empty read.
+          const bud=await currentBudget(); const cap=bud.usable ? Math.min(8000, Math.max(1000, bud.remaining*4)) : 4000;
+          const off=Math.max(0, Number(ar&&ar.offset)||0);
+          if(off && off>=body.length) return 'recall: offset '+off+' is past the end of "'+name+'" ('+body.length+' chars). Retry from 0.';
+          const slice=body.slice(off, off+cap); const more=(off+cap)<body.length;
+          return 'Fact: '+(f.name||name)+(off?(' [from '+off+']'):'')+'\n\n'+slice+(more?('\n[more — recall name "'+name+'" offset '+(off+cap)+']'):''); } }catch(_){}
         const names=Object.keys(factMap);
         return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.');
       }
@@ -1583,11 +1594,11 @@
         // write with the next move, so the store never grows a second copy.
         const all=await listFacts();
         const exempt=[ar&&ar.supersedes, ar&&ar.slot?slotHolder(all, ar.slot):null].filter(Boolean);
-        const dup=findDuplicate(all, note, { exempt }); if(dup) return duplicateReply(dup);
+        const dup=findDuplicate(all, note, { exempt }); if(dup){ auditRefusal('duplicate:'+dup.reason, note); return duplicateReply(dup); }
         // A rule is injected whole every run, so rules are capped (A3): over the cap the tool
         // errors and the agent has to merge or retract one first.
-        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); }
-        const take=remBudget.take(); if(!take.ok) return budgetSpentReply(take);
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok){ auditRefusal('rules-cap', note); return rulesCapReply(cap); } }
+        const take=remBudget.take(); if(!take.ok){ auditRefusal('per-run-cap', note); return budgetSpentReply(take); }
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
         const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes, weight: ar&&ar.weight });
@@ -1785,11 +1796,14 @@
       };
       // The run record (plan/anvil-event-log-substrate.md, layer 2a): every event of
       // this run lands on an append-only hash chain and is persisted OUTSIDE the
-      // agent's mount. Dual-write for now — t.log / t.status keep their writers and
-      // the record runs alongside, with a self-check below that the folds agree.
-      // Layer 2b flips the reads to the folds and deletes the writers.
+      // Layer 2b (B1): the record is the source of truth — status and the carried transcript
+      // are derived from its folds (below). B3: a resumed run is prefaced with a recovery note
+      // (t.recovery) built from the PRIOR run's record — which owner asks look handled, and that
+      // coordination lines are tagged — so a satisfied steer is not blindly re-applied.
       const rec = createRunRecorder({ app:'anvil', principal:'anvil:'+String(state.activeProject||'local') });
-      const firstMessages=[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo];
+      const gateNote = verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'';
+      const recoveryPreface = (t.recovery && String(t.recovery).trim()) ? ('\n\n'+t.recovery) : '';
+      const firstMessages=[sysMsg(gateNote+recoveryPreface), ...convo];
       const recInfer = rec.wrapInfer(inferViaHost);
       const recEvent = (e)=>{ onLoopEvent(e); rec.onEvent(e); };
       await rec.start({ messages: firstMessages, tools });
@@ -1812,7 +1826,7 @@
         const prose=[...t.log].reverse().find(x=>x.k==='assistant');
         t.log.push({k:'system',text:'No tools were used — nudging the agent to make the change, not just describe it.'}); renderLog();
         if(prose) convo.push({role:'assistant', content:prose.text});
-        convo.push({role:'user', content:'You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
+        convo.push({role:'user', content:'[coordination] You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
         const nudgeMessages=[sysMsg(''), ...convo];
         await rec.start({ messages: nudgeMessages, tools });
         result = await runAgentLoop({ messages: nudgeMessages, tools, infer: recInfer, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:recEvent });
@@ -1828,6 +1842,10 @@
       const recEvents = rec.events();
       try{ t.convo = await carryForward(foldTranscript(recEvents, rec.resolve)); }
       catch(_){ if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text}); }
+      // B3: the recovery note the NEXT run is prefaced with — a pure fold of THIS run's record,
+      // so it never re-applies a steer a gate already verified and never reads coordination as
+      // the owner. Additive: it rides beside the carried transcript, it does not replace it.
+      try{ t.recovery = recoveryNote(foldRecovery(recEvents, rec.resolve)); }catch(_){ t.recovery = ''; }
       // #5 plan→manual: a finished PLAN becomes a durable "plan of record" in project
       // memory (a hypothesis), so the follow-up CODE task starts from it (the memory
       // index is injected at task start) — Agno's explore-then-exploit, made durable.

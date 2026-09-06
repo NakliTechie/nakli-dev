@@ -284,7 +284,9 @@ export function foldTranscript(events, resolve) {
       }
       case 'tool.responded': flushAssistant(); out.push({ role: 'tool', tool_call_id: inp.id, content: String(o.result ?? '') }); break;
       case 'tool.failed': flushAssistant(); out.push({ role: 'tool', tool_call_id: inp.id, content: `Error: ${o.error ?? ''}` }); break;
-      case 'verify.failed': out.push({ role: 'user', content: `Gate failed (exit ${o.verdict?.exit ?? '?'}).\nFix the problem and continue.` }); break;
+      // Coordination, not the owner: a carried gate verdict must never read as the owner's
+      // instruction (B3). The tag survives into the next run's transcript.
+      case 'verify.failed': out.push({ role: 'user', content: `[coordination] Gate failed (exit ${o.verdict?.exit ?? '?'}). Fix the problem and continue.` }); break;
     }
   }
   // An assistant turn whose tool replies never arrived is malformed as the next
@@ -603,4 +605,65 @@ export function historyTool() {
       },
     },
   };
+}
+
+// ─────────────────────────────────────────── recovery record (B3) ──
+
+// The stale-steer fix (the "audit-state" reply): a next turn must not re-apply an
+// instruction it already satisfied, and must not read coordination (a gate verdict, a
+// nudge) as the owner's words. This is a PURE fold over ONE run's record — deterministic,
+// so the annotation is a function of the record, never of when it ran (the strict-replay
+// guarantee). It ANNOTATES; it does not drop the transcript (Anvil still carries the paired
+// transcript so a follow-up resumes — this rides alongside as guidance).
+//
+// Each owner input (a user message in the record's run.started) gets a resolution:
+//   open              — the latest owner input, or one with no completion signal after it
+//   likely-satisfied  — a verified gate pass (verify.passed) was recorded AFTER it; HEDGED,
+//                       never a hard claim, because a task-level gate may not cover a specific
+//                       steer — the next turn should verify, not silently redo (and never
+//                       silently skip). Worst case is a cheap re-verify, never a dropped steer.
+export function foldRecovery(events, resolve) {
+  const ev = joined(events, resolve);
+  // Collect owner (user) inputs across every run.started, deduped by text: a re-entered loop
+  // (nudge) repeats the earlier prompts in its run.started, and a repeat is not a new input.
+  const ownerInputs = []; const seenText = new Set();
+  ev.forEach((e, i) => {
+    if (e.tool !== 'run.started') return;
+    for (const m of ((e.input && e.input.messages) || [])) {
+      if (m.role !== 'user') continue;
+      const text = String(m.content ?? ''); const norm = text.replace(/\s+/g, ' ').trim();
+      if (/^\[coordination\]/.test(norm)) continue; // a tagged gate verdict / nudge is not an owner input
+      if (seenText.has(norm)) continue; seenText.add(norm);
+      ownerInputs.push({ text, atIndex: i, id: `#${i}` });
+    }
+  });
+  // A gate pass anywhere in the record is a completion signal for inputs before it.
+  const passIndex = ev.findIndex((e) => e.tool === 'verify.passed');
+  const lastCheckpoint = [...ev].reverse().find((e) => e.tool === 'run.checkpoint');
+  const coordinationCount = ev.filter((e) => e.tool === 'verify.failed').length;
+  const annotated = ownerInputs.map((inp, k) => {
+    const isLatest = k === ownerInputs.length - 1;
+    const gatePassedAfter = passIndex !== -1 && passIndex > inp.atIndex;
+    const resolution = isLatest ? 'open' : (gatePassedAfter ? 'likely-satisfied' : 'open');
+    return { ...inp, resolution };
+  });
+  return {
+    ownerInputs: annotated,
+    coordinationCount,
+    checkpoint: lastCheckpoint ? String(resolve(lastCheckpoint)?.output?.handoff ?? '') : null,
+  };
+}
+
+// A compact, human/model-readable note from foldRecovery — prepended to a resumed run as
+// guidance (a system line), so the model sees which prior asks are likely handled and that
+// coordination lines are not the owner's.
+export function recoveryNote(rec) {
+  if (!rec || !rec.ownerInputs || !rec.ownerInputs.length) return '';
+  const lines = rec.ownerInputs.map((inp) => {
+    const tag = inp.resolution === 'likely-satisfied' ? ' — likely handled (a gate passed after it); verify before redoing' : ' — open';
+    return `  • "${inp.text.replace(/\s+/g, ' ').slice(0, 100)}"${tag}`;
+  });
+  const foot = rec.coordinationCount ? `\n(${rec.coordinationCount} gate-feedback line(s) in the transcript are marked [coordination] — they are not the owner's instructions.)` : '';
+  const cp = rec.checkpoint ? `\nLast checkpoint: ${rec.checkpoint.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+  return 'Recovery note (from the run record — prior owner requests and whether they look handled):\n' + lines.join('\n') + foot + cp;
 }

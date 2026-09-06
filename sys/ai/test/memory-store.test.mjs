@@ -76,6 +76,7 @@ await test('recallTool + constants', () => {
   const t = recallTool();
   eq(t.function.name, 'recall', 'name');
   assert(t.function.parameters.required.includes('name'), 'name required');
+  assert(t.function.parameters.properties.offset, 'recall pages long facts by offset (B5)');
   eq(MEMORY_DIR, '.anvil/memory', 'dir');
   assert(MEMORY_TYPES.includes('user') && MEMORY_TYPES.includes('reference'), 'types');
 });
