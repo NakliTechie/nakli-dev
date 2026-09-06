@@ -12,7 +12,8 @@ import { createShell } from '../../rig/cli/shell.mjs';
 import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
          replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
-         OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine } from '../run-record.mjs';
+         OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine,
+         searchRecords, readEvent, historyTool, HISTORY_ROLES } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -210,9 +211,93 @@ await test('a run that died mid-flight reads as running, and the record says whe
   eq(result.stop, 'error', 'sanity: the loop did surface the throw');
 });
 
+// ─────────────────────────────────────────── history / retrieval (B2) ──
+// Build three recorded runs; each writes a distinct file so a later run can find an
+// earlier one's tool output — the "audit-state" rehydration the thread describes.
+async function recordFinding(marker) {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: `investigate ${marker}` }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  const script = [{ content: '', toolCalls: [call('shell', { command: `echo ${marker}` }, 'c0')] }, { content: `found ${marker}`, toolCalls: [] }];
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()], infer: rec.wrapInfer(scripted(script)), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  return rec;
+}
+
+await test('HISTORY search: from "run 3" a query finds a tool result recorded in run 1, newest first, with a readable id', async () => {
+  const entries = [
+    { runId: 'run1', record: await recordFinding('WIDGET-ALPHA') },
+    { runId: 'run2', record: await recordFinding('WIDGET-BETA') },
+    { runId: 'run3', record: await recordFinding('WIDGET-GAMMA') },
+  ];
+  const hits = searchRecords(entries, { query: 'widget-alpha' });
+  assert(hits.length >= 1, 'the run-1 finding is searchable from run 3');
+  assert(hits.some((h) => h.runId === 'run1' && /WIDGET-ALPHA/.test(h.excerpt)), 'hit names its run and centres the excerpt on the match');
+  assert(/^run1#\d+$/.test(hits.find((h) => h.runId === 'run1').id), 'the id is runId#index');
+  const all = searchRecords(entries, { query: 'widget', limit: 20 });
+  const ts = all.map((h) => h.ts); assert(ts.every((t, i) => i === 0 || ts[i - 1] >= t), 'newest first');
+  eq(searchRecords(entries, { query: '' }).length, 0, 'an empty query finds nothing');
+  eq(searchRecords(entries, { query: 'widget', limit: 2 }).length, 2, 'limit caps the hits');
+});
+
+await test('HISTORY role slices: reviewer sees tool events, supervisor sees the trajectory, neither leaks the other', async () => {
+  const entries = [{ runId: 'r', record: await recordFinding('SLICE-X') }];
+  const rev = searchRecords(entries, { query: 'slice-x', role: 'reviewer' });
+  assert(rev.length >= 1 && rev.every((h) => HISTORY_ROLES.reviewer.has(h.tool)), 'reviewer hits are tool/verify events');
+  const sup = searchRecords(entries, { query: 'slice-x', role: 'supervisor' });
+  assert(sup.every((h) => HISTORY_ROLES.supervisor.has(h.tool)), 'supervisor hits are turns/stops/verify only');
+  assert(!sup.some((h) => h.tool === 'tool.responded'), 'the supervisor slice does not carry tool results');
+});
+
+await test('HISTORY read: an event pages by offset and preserves the tail; a bad id is reported, not thrown', async () => {
+  const entries = [{ runId: 'run1', record: await recordFinding('PAGEME') }];
+  const hit = searchRecords(entries, { query: 'pageme', role: 'reviewer' }).find((h) => h.tool === 'tool.responded');
+  assert(hit, 'the tool result is a hit');
+  const p1 = readEvent(entries, hit.id, { offset: 0, limit: 4 });
+  eq(p1.text.length, 4, 'first page is limit-sized'); eq(p1.nextOffset, 4, 'nextOffset points past it');
+  const p2 = readEvent(entries, hit.id, { offset: p1.nextOffset, limit: 4000 });
+  assert(p2.text.length > 0 && p2.nextOffset === null, 'the tail reads to the end');
+  const whole = readEvent(entries, hit.id, { offset: 0, limit: 100000 });
+  eq(p1.text + readEvent(entries, hit.id, { offset: 4, limit: 100000 }).text, whole.text, 'the pages reassemble the whole event');
+  assert(readEvent(entries, 'nope', {}).error, 'a bad id is an error field'); assert(readEvent(entries, 'run1#999', {}).error, 'a missing event is an error');
+});
+
+await test('HISTORY never inlines base64/data-URI payloads; the tool advertises search + read', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'grab the image' }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  const bigB64 = 'A'.repeat(5000);
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'cat img' }, 'c0')] }, { content: 'ok', toolCalls: [] }])),
+    executeTool: async () => bigB64, onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  const entries = [{ runId: 'img', record: rec }];
+  const read = readEvent(entries, 'img#' + rec.events().findIndex((e) => e.tool === 'tool.responded'), { limit: 100000 });
+  assert(/binary\/base64 — not inlined/.test(read.text) && !read.text.includes(bigB64), 'a base64 blob is summarised, never inlined');
+  const t = historyTool(); eq(t.function.name, 'history', 'named history');
+  assert(t.function.parameters.properties.op.enum.join(',') === 'search,read', 'search + read');
+});
+
+await test('a checkpoint is recorded on the chain and reads back through the history tool (B4)', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'long task' }], tools: [] });
+  rec.onEvent({ type: 'turn-start', step: 0 });
+  await rec.checkpoint('goal: ship X. progress: wrote the module. next: the test.');
+  await rec.finish({ stop: 'done', steps: 1, verified: false }); await rec.settled();
+  const ev = rec.events();
+  const cp = ev.find((e) => e.tool === 'run.checkpoint'); assert(cp, 'the checkpoint is on the chain');
+  eq((await verifyChain(ev)).ok, true, 'the chain still verifies with the new verb');
+  eq(rec.resolve(cp).output.handoff, 'goal: ship X. progress: wrote the module. next: the test.', 'the handoff is the payload');
+  const hits = searchRecords([{ runId: 'r', record: rec }], { query: 'ship X', role: 'supervisor' });
+  assert(hits.some((h) => h.tool === 'run.checkpoint'), 'a checkpoint is in the supervisor slice');
+});
+
 await test('the fixed vocabulary is frozen and complete for the loop', () => {
   assert(Object.isFrozen(RUN_EVENTS), 'frozen');
-  for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped'])
+  for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped', 'run.checkpoint'])
     assert(RUN_EVENTS.includes(v), `missing verb ${v}`);
 });
 

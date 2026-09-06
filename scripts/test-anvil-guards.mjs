@@ -15,10 +15,15 @@ import { readFile } from 'node:fs/promises';
 const anvil = await readFile(new URL('../apps/anvil/index.html', import.meta.url), 'utf8');
 
 // ── "done" is the verifier's word ───────────────────────────────────────
-// An UNGATED task_done also returns verified:true (sys/ai/agent-loop.mjs:290-295),
-// so the status MUST be keyed on the gate existing as well.
-assert.match(anvil, /\(gated && result\.verified\) \? 'done' : 'unclaimed'/,
-  'a done stop without a green gate is unclaimed, not done');
+// Layer 2b: the honest-status rule is no longer inline in the app — status is DERIVED
+// from foldStatus, and the rule (gate ∧ verified → done, else unclaimed) lives in
+// statusOf. Pin both: the app reads the fold, and the fold encodes the rule.
+assert.match(anvil, /t\.status = foldStatus\(recEvents, rec\.resolve, \{ gated \}\)\.status/,
+  'the app derives status from the fold, not a parallel computation');
+import { readFile as _rf } from 'node:fs/promises';
+const runRecord = await _rf(new URL('../sys/history/run-record.mjs', import.meta.url), 'utf8');
+assert.match(runRecord, /gated && verified\) \? 'done' : 'unclaimed'/,
+  'the fold keeps the rule: a done stop without a green gate is unclaimed, not done');
 assert.match(anvil, /const gated = !!String\(\(t\.verifyCmd\|\|''\)\)\.trim\(\)/,
   'gated is derived from the task\'s own verify command');
 assert.match(anvil, /\.dot\.unclaimed\{/, 'unclaimed has its own dot style');

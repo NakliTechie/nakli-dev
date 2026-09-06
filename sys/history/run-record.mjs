@@ -40,6 +40,7 @@ export const RUN_EVENTS = Object.freeze([
   'verify.passed',    // input: { step }                       output: { verdict }
   'verify.failed',    // input: { step, round, ran }           output: { verdict }
   'run.stopped',      // input: { steps }                      output: { stop, reason, verified, axis, error }
+  'run.checkpoint',   // input: { step }                        output: { handoff }  (B4: a rollover landmark)
 ]);
 
 // The loop's onEvent types this recorder understands. 'done' and the pre-stop
@@ -148,6 +149,9 @@ export function createRunRecorder({ app = 'anvil', principal = 'local', grant_id
     },
 
     // ---- the record ----
+    // A checkpoint the agent asked for (B4): a capped handoff that becomes the next
+    // projection's landmark. Recorded on the chain like any other event.
+    checkpoint(handoff) { return enqueue('run.checkpoint', () => ({ input: { step }, output: { handoff: String(handoff ?? '') } })); },
     async settled() { await queue; },
     events() { return events.slice(); },
     head() { return head; },
@@ -249,12 +253,28 @@ export function foldTranscript(events, resolve) {
   const flushAssistant = () => {
     if (pendingCalls) { out.push({ role: 'assistant', content: null, tool_calls: pendingCalls }); pendingCalls = null; }
   };
+  let started = 0;
   for (const e of joined(events, resolve)) {
     const inp = e.input || {}, o = e.output || {};
     switch (e.tool) {
-      case 'run.started':
-        for (const m of (inp.messages || [])) if (m.role !== 'system') out.push(m);
+      case 'run.started': {
+        const msgs = (inp.messages || []).filter((m) => m.role !== 'system');
+        if (started === 0) { for (const m of msgs) out.push(m); }
+        else {
+          // A re-entered loop (Anvil's act-or-nudge records a second run.started). Its messages
+          // REPEAT everything the transcript already holds, then add the new turns (the nudge).
+          // Emit only that new tail: skip the longest leading run of `msgs` that already sits as a
+          // contiguous tail of `out` (compared by content), then push the remainder.
+          const key = (m) => JSON.stringify([m.role, m.content ?? null, m.tool_call_id ?? null, (m.tool_calls || []).map((c) => c.id)]);
+          // Largest k where out's last k messages equal msgs' first k — that overlap is the repeat;
+          // msgs.slice(k) is the new tail (the nudge's assistant prose + user turn).
+          let k = Math.min(out.length, msgs.length);
+          for (; k > 0; k--) { let ok = true; for (let i = 0; i < k; i++) if (key(out[out.length - k + i]) !== key(msgs[i])) { ok = false; break; } if (ok) break; }
+          for (const m of msgs.slice(k)) out.push(m);
+        }
+        started++;
         break;
+      }
       case 'llm.responded': {
         flushAssistant();
         const calls = Array.isArray(o.toolCalls) ? o.toolCalls : [];
@@ -473,4 +493,114 @@ export function foldSkillUsage(records) {
   });
   for (const [k, u] of out) out.set(k, { views: u.views, runs: u.runs.size, lastUsed: u.lastUsed, firstUsed: u.firstUsed === Infinity ? null : u.firstUsed });
   return out;
+}
+
+// ────────────────────────────────────────────── history / retrieval (B2) ──
+
+// The retrieval half of the substrate (the "audit-state" thread): a fresh turn
+// rehydrates by SEARCHING its own record, not by inheriting a lossy summary. Pure
+// over the record — a grep across the joined events' payloads, sliced by role, plus
+// a paged read of one event. `entries` are { runId, record } where record is a
+// loadRecord-shaped object (events() + resolve). The id a hit carries — `runId#idx`
+// — reads back through readEvent.
+//
+// Role slices: what each holon recovers (the thread's "different holons recover
+// different slices"). reviewer → what the tools did/changed; supervisor → the
+// trajectory (turns + stops); default → the transcript a next turn needs.
+export const HISTORY_ROLES = Object.freeze({
+  reviewer: new Set(['tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed']),
+  supervisor: new Set(['turn.started', 'run.stopped', 'verify.passed', 'verify.failed', 'run.checkpoint']),
+  default: new Set(['run.started', 'assistant.said', 'llm.responded', 'tool.responded', 'tool.failed', 'verify.failed', 'run.checkpoint']),
+});
+
+// The searchable / readable text of one joined event — never raw base64 or a data:
+// URI (a recorded image or binary result is summarised, never inlined).
+const BINARY_RE = /^data:[^;,]*;base64,|^[A-Za-z0-9+/]{2000,}={0,2}$/;
+function eventText(e) {
+  const inp = e.input || {}, out = e.output || {};
+  const clip = (v) => { const s = String(v ?? ''); return BINARY_RE.test(s.trim()) ? `[${s.length} bytes binary/base64 — not inlined; read the event to page it]` : s; };
+  switch (e.tool) {
+    case 'run.started': return (inp.messages || []).filter((m) => m.role === 'user').map((m) => `[user] ${String(m.content ?? '')}`).join('\n');
+    case 'assistant.said': return `[assistant] ${out.content ?? ''}`;
+    case 'llm.responded': return out.content ? `[assistant] ${out.content}` : '';
+    case 'tool.called': return `[tool ${inp.name}] ${clip(inp.args && (inp.args.command || inp.args.path || inp.args.file || JSON.stringify(inp.args)))}`;
+    case 'tool.responded': return `[result ${inp.name || ''}] ${clip(out.result)}`;
+    case 'tool.failed': return `[error ${inp.name || ''}] ${clip(out.error)}`;
+    case 'verify.passed': return '[gate] passed';
+    case 'verify.failed': return `[gate] failed (round ${inp.round ?? 1}) exit ${out.verdict?.exit ?? '?'}`;
+    case 'run.checkpoint': return `[checkpoint] ${clip(out.handoff)}`;
+    case 'run.stopped': return `[stopped] ${out.stop}${out.reason ? ` (${out.reason})` : ''}${out.axis ? ` [${out.axis}]` : ''}`;
+    case 'turn.started': return `[turn ${inp.step ?? '?'}]`;
+    default: return '';
+  }
+}
+
+function centredExcerpt(text, at, span = 120) {
+  const start = Math.max(0, at - span), end = Math.min(text.length, at + span);
+  return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ').trim() + (end < text.length ? '…' : '');
+}
+
+// Search across records, newest event first. Returns hits [{ id, runId, tool, ts, excerpt }].
+export function searchRecords(entries, { query, role = 'default', limit = 20 } = {}) {
+  const q = String(query ?? '').toLowerCase();
+  if (!q) return [];
+  const slice = HISTORY_ROLES[role] || HISTORY_ROLES.default;
+  const hits = [];
+  for (const { runId, record } of (entries || [])) {
+    if (!record || typeof record.events !== 'function') continue;
+    const evs = joined(record.events(), record.resolve);
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      if (!slice.has(e.tool)) continue;
+      const text = eventText(e); if (!text) continue;
+      const at = text.toLowerCase().indexOf(q); if (at === -1) continue;
+      hits.push({ id: `${runId}#${i}`, runId, tool: e.tool, ts: e.ts ?? null, excerpt: centredExcerpt(text, at) });
+    }
+  }
+  hits.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)); // newest first
+  return hits.slice(0, limit);
+}
+
+// Read one event's full text by id (`runId#idx`), paged. Returns { id, tool, text,
+// nextOffset } — nextOffset is null when the event is fully read. `limit` is the
+// caller's budget (B4); binaries are summarised by eventText, so a read is bounded.
+export function readEvent(entries, id, { offset = 0, limit = 4000 } = {}) {
+  const hash = String(id ?? '').lastIndexOf('#');
+  if (hash < 0) return { id, error: 'bad id — expected runId#index' };
+  const runId = String(id).slice(0, hash), idx = Number(String(id).slice(hash + 1));
+  const entry = (entries || []).find((x) => String(x.runId) === runId);
+  if (!entry || !entry.record) return { id, error: `no record ${runId}` };
+  const evs = joined(entry.record.events(), entry.record.resolve);
+  const e = evs[idx];
+  if (!e) return { id, error: `no event ${idx} in ${runId}` };
+  const full = eventText(e);
+  const start = Math.max(0, offset | 0);
+  const end = Math.min(full.length, start + Math.max(1, limit | 0));
+  return { id, tool: e.tool, ts: e.ts ?? null, text: full.slice(start, end), nextOffset: end < full.length ? end : null, total: full.length };
+}
+
+// The tool the agent calls to search and read its own run history.
+export function historyTool() {
+  return {
+    type: 'function',
+    function: {
+      name: 'history',
+      description: 'Search or read this project\'s run history — your own past runs, recorded event by event. ' +
+        'op "search": find where something happened (query, optional scope run|task|project, optional role reviewer|supervisor); ' +
+        'returns hits with an id, newest first. op "read": load one event\'s full text by id (paged with offset). ' +
+        'Use this to recover what an earlier run did instead of guessing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['search', 'read'] },
+          query: { type: 'string', description: 'search: text to find (case-insensitive)' },
+          scope: { type: 'string', enum: ['run', 'task', 'project'], description: 'search: how far back (default task)' },
+          role: { type: 'string', enum: ['default', 'reviewer', 'supervisor'], description: 'search: which slice of events (default: the transcript)' },
+          id: { type: 'string', description: 'read: the event id from a search hit (runId#index)' },
+          offset: { type: 'integer', description: 'read: character offset to continue from (default 0)' },
+        },
+        required: ['op'],
+      },
+    },
+  };
 }

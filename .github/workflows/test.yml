@@ -105,6 +105,12 @@ jobs:
       - name: Verify Anvil records every run onto the chain and self-checks the folds
         run: node scripts/test-anvil-run-record.mjs
 
+      - name: Verify the history tool — search and read past runs (the retrieval half)
+        run: node scripts/test-anvil-history.mjs
+
+      - name: Verify the honest context budget (Ollama num_ctx, usable floor, handoff cap, reminder)
+        run: node sys/ai/test/context-budget.test.mjs
+
       - name: Verify generational evolutionary loop (AVO crib)
         run: node sys/ai/test/evolve.test.mjs
 
