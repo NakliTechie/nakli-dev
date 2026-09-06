@@ -155,6 +155,21 @@ await test('R2e: find predicates, wc line counting, true/false, comments, ls exi
   eq((await run('cut -d, -f1-2 t.csv')).out, 'a,b\nd,e', 'cut handles a RANGE (it used to read one field)');
 });
 
+// A redirect that wrote nothing must not report success — this batch introduced that bug and
+// the checker caught it, so it gets a test of its own.
+await test('a FAILED redirect is a non-zero exit, and && does not fire', async () => {
+  const fs = createFileops({ backend: new MemoryBackend() });
+  const registry = buildRigRegistry({ fs });
+  const readOnly = createGrant({ prefixes: [''], scopes: ['fs:read'] }); // every write is refused
+  const face = createAgentFace({ registry, grant: readOnly, opLog: createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) }), actor: 'a' });
+  const sh = createShell({ registry, face });
+  const r = await sh.feed('echo ok > denied.txt && echo WRITTEN');
+  const out = String(r.output || '');
+  assert(!/WRITTEN/.test(out), `&& must not run after a failed write: ${JSON.stringify(out)}`);
+  assert(sh.lastCode !== 0, `a failed redirect exits non-zero, got ${sh.lastCode}`);
+  assert(/fs:write|write failed/.test(out), `and says why: ${JSON.stringify(out)}`);
+});
+
 // ── R3b — reachable at all ───────────────────────────────────────────────────────────────
 await test('R3b: git clone/fetch/push actually DISPATCH, not just print usage', async () => {
   const { run } = await shell();
