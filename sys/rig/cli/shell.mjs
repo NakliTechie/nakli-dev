@@ -29,7 +29,8 @@ const RM_FLAGS = { r: 'recursive', R: 'recursive', f: 'force' };
 // ── path helpers: cwd lives inside the fileops root; '' is the root, and a
 // path can never climb above it. ──
 function normalizePath(cwd, arg) {
-  const raw = String(arg == null ? '' : arg);
+  // the quote fix's internal marker is never part of a real path
+  const raw = String(arg == null ? '' : arg).replace(/\u0001/g, '');
   const abs = raw.startsWith('/');
   const base = abs ? [] : cwd.split('/').filter(Boolean);
   for (const seg of raw.split('/')) {
@@ -46,15 +47,16 @@ function normalizePath(cwd, arg) {
 function parseLine(line) {
   const tokens = tokenizeOps(line);
   const statements = [];
-  let stmt = { op: 'first', pipeline: [], redirect: null };
+  let stmt = { op: 'first', pipeline: [], redirect: null, stdinFrom: null };
   let stage = [];
   const pushStage = () => { if (stage.length) { stmt.pipeline.push(stage); stage = []; } };
   const pushStmt = () => { pushStage(); if (stmt.pipeline.length) statements.push(stmt); };
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t === ';' || t === '&&' || t === '||') { pushStmt(); stmt = { op: t, pipeline: [], redirect: null }; }
+    if (t === ';' || t === '&&' || t === '||') { pushStmt(); stmt = { op: t, pipeline: [], redirect: null, stdinFrom: null }; }
     else if (t === '|') { pushStage(); }
     else if (t === '>' || t === '>>') { stmt.redirect = { append: t === '>>', path: tokens[++i] }; }
+    else if (t === '<') { stmt.stdinFrom = tokens[++i]; } // was silently ignored → empty stdin, exit 0 (R2e)
     else stage.push(t);
   }
   pushStmt();
@@ -78,6 +80,8 @@ function tokenizeOps(line) {
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (quote) { out += c; if (c === quote) quote = null; continue; }
+    // an unquoted `#` at a token boundary starts a comment — it used to be a 127 (R2e)
+    if (c === '#' && (out === '' || /\s$/.test(out))) break;
     if (c === '"' || c === "'") { quote = c; out += c; continue; }
     if (c === ';') { out += ` ${c} `; continue; }
     if (c === '|') {
@@ -102,6 +106,7 @@ function tokenizeOps(line) {
       if (s[i + 1] === '>') { out += ' >> '; i++; } else { out += ' > '; }
       continue;
     }
+    if (c === '<') { out += ' < '; continue; }
     if (c === '&') {
       if (s[i + 1] === '&') { out += ' && '; i++; continue; }
       // `&>` / `&>>` — redirect both streams to a file. Already merged, so this
@@ -115,7 +120,7 @@ function tokenizeOps(line) {
     }
     out += c;
   }
-  return tokenize(out);
+  return tokenize(out, { markLiteral: true });
 }
 
 // eslint-disable-next-line no-control-regex
@@ -199,15 +204,18 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   // quotes, so (unlike POSIX) single-quotes don't suppress expansion here — a
   // known simplification tracked under the POSIX-later agenda.
   function expand(token) {
-    return String(token).replace(
-      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$\?/g,
+    // A `$` carrying LITERAL_MARK came from inside single quotes and is NOT a variable.
+    const out = String(token).replace(
+      /\u0001\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$\?/g,
       (m, braced, bare) => {
+        if (m.charCodeAt(0) === 1) return '$';
         if (m === '$?') return String(lastCode);
         const name = braced || bare;
         if (name === 'PWD') return '/' + state.cwd;
         return state.vars.has(name) ? state.vars.get(name) : '';
       },
     );
+    return out; // markers survive until after glob expansion, then stripArgMarks clears them
   }
   let pending = null; // { proposalId, verb }
   let lastCode = 0;
@@ -302,49 +310,97 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       }
       return { text: parts.join(''), code: 0 };
     },
+    // -v INVERTED (it returned exactly the lines it was asked to exclude), -i was ignored so a
+    // match reported none, -c was ignored, -r returned empty exit 1 — all silently (R2b).
     async grep(argv, stdin) {
-      const flags = argv.filter((a) => a.startsWith('-'));
-      const rest = argv.filter((a) => !a.startsWith('-'));
-      const pattern = rest[0] || '';
-      const files = rest.slice(1);
-      const nline = flags.some((f) => f.includes('n'));
-      const re = new RegExp(pattern);
+      const { flags, positionals } = splitArgs(argv);
+      if (flags.some((f) => !f.startsWith('--') && f.slice(1).includes('r'))) {
+        return { text: 'grep: -r is not implemented here — use `rg <pattern>` for a recursive search', code: 2 };
+      }
+      const bad = unsupportedFlag('grep', flags, ['n', 'v', 'i', 'c', 'E', 'F', 'h', 'H']);
+      if (bad) return flagErr('grep', bad);
+      const has = (ch) => flags.some((f) => !f.startsWith('--') && f.slice(1).includes(ch));
+      const nline = has('n'), invert = has('v'), icase = has('i'), count = has('c');
+      const pattern = positionals[0] || '';
+      const files = positionals.slice(1);
+      const fixed = has('F');
+      const re = new RegExp(fixed ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern, icase ? 'i' : '');
       const filter = (text, prefix) => linesOf(text)
         .map((l, i) => ({ l, i }))
-        .filter(({ l }) => re.test(l))
+        .filter(({ l }) => re.test(l) !== invert)
         .map(({ l, i }) => `${prefix ? prefix + ':' : ''}${nline ? (i + 1) + ':' : ''}${l}`);
+      let hits = [];
       if (files.length) {
-        const hits = [];
         for (const f of files) {
           const res = await face.invoke('fs.read', { path: normalizePath(state.cwd, f), encoding: 'utf-8' });
-          if (res.ok) hits.push(...filter(decodeData(res.data), files.length > 1 ? f : ''));
+          if (!res.ok) return { text: `grep: ${f}: ${res.code || 'ENOENT'}`, code: 2 };
+          hits.push(...filter(decodeData(res.data), files.length > 1 ? f : ''));
         }
-        return { text: hits.join('\n'), code: hits.length ? 0 : 1 };
+      } else {
+        hits = filter(stdin || '', '');
       }
-      const hits = filter(stdin || '', '');
+      if (count) return { text: String(hits.length), code: hits.length ? 0 : 1 };
       return { text: hits.join('\n'), code: hits.length ? 0 : 1 };
     },
-    head(argv, stdin) {
+    async head(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv, { valueFlags: ['-n'] });
+      const bad = unsupportedFlag('head', flags, ['n']); if (bad) return flagErr('head', bad);
       const n = flagNum(argv, 10);
-      return { text: linesOf(stdin).slice(0, n).join('\n'), code: 0 };
+      if (n && typeof n === 'object' && n.bad !== undefined) return { text: `head: invalid line count: ${n.bad}`, code: 2 };
+      const inp = await textInput('head', positionals, stdin); if (inp.failed) return inp;
+      return { text: linesOf(inp.text).slice(0, n).join('\n'), code: 0 };
     },
-    tail(argv, stdin) {
+    async tail(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv, { valueFlags: ['-n'] });
+      const bad = unsupportedFlag('tail', flags, ['n']); if (bad) return flagErr('tail', bad);
       const n = flagNum(argv, 10);
-      const lines = linesOf(stdin);
+      if (n && typeof n === 'object' && n.bad !== undefined) return { text: `tail: invalid line count: ${n.bad}`, code: 2 };
+      const inp = await textInput('tail', positionals, stdin); if (inp.failed) return inp;
+      const lines = linesOf(inp.text);
       return { text: lines.slice(Math.max(0, lines.length - n)).join('\n'), code: 0 };
     },
-    wc(argv, stdin) {
-      const text = stdin || '';
-      const lines = (text.match(/\n/g) || []).length;   // newlines, like coreutils
+    async wc(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv);
+      const bad = unsupportedFlag('wc', flags, ['l', 'w', 'c', 'm']); if (bad) return flagErr('wc', bad);
+      const inp = await textInput('wc', positionals, stdin); if (inp.failed) return inp;
+      const text = inp.text;
+      // LINES, not newlines: a pipeline's last line usually has no trailing newline, so counting
+      // "\n" made `grep x | wc -l` undercount by one on every non-empty result (R2e).
+      const lines = text === '' ? 0 : linesOf(text).length;
       const words = text.split(/\s+/).filter(Boolean).length;
+      const has = (ch) => flags.some((f) => f.slice(1).includes(ch));
+      if (has('l')) return { text: String(lines), code: 0 };
+      if (has('w')) return { text: String(words), code: 0 };
+      if (has('c') || has('m')) return { text: String(text.length), code: 0 };
       return { text: `${lines} ${words} ${text.length}`, code: 0 };
     },
-    sort(argv, stdin) { return { text: linesOf(stdin).sort().join('\n'), code: 0 }; },
-    uniq(argv, stdin) {
-      const out = [];
-      let prev;
-      for (const l of linesOf(stdin)) { if (l !== prev) out.push(l); prev = l; }
-      return { text: out.join('\n'), code: 0 };
+    async sort(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv);
+      const bad = unsupportedFlag('sort', flags, ['r', 'n', 'u', 'f']); if (bad) return flagErr('sort', bad);
+      const inp = await textInput('sort', positionals, stdin); if (inp.failed) return inp;
+      const has = (ch) => flags.some((f) => f.slice(1).includes(ch));
+      let lines = linesOf(inp.text);
+      lines = has('n') ? lines.slice().sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0))
+            : has('f') ? lines.slice().sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+            : lines.slice().sort();
+      if (has('r')) lines.reverse();
+      if (has('u')) lines = [...new Set(lines)];
+      return { text: lines.join('\n'), code: 0 };
+    },
+    async uniq(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv);
+      const bad = unsupportedFlag('uniq', flags, ['c', 'd', 'u']); if (bad) return flagErr('uniq', bad);
+      const inp = await textInput('uniq', positionals, stdin); if (inp.failed) return inp;
+      const has = (ch) => flags.some((f) => f.slice(1).includes(ch));
+      const runs = [];
+      for (const l of linesOf(inp.text)) {
+        if (runs.length && runs[runs.length - 1].l === l) runs[runs.length - 1].n++;
+        else runs.push({ l, n: 1 });
+      }
+      let keep = runs;
+      if (has('d')) keep = runs.filter((r) => r.n > 1);
+      if (has('u')) keep = runs.filter((r) => r.n === 1);
+      return { text: keep.map((r) => (has('c') ? `${String(r.n).padStart(7)} ${r.l}` : r.l)).join('\n'), code: 0 };
     },
     async touch(argv) {
       const path = normalizePath(state.cwd, argv[0] || '');
@@ -357,10 +413,12 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     // path routed every `ls X` through fs.list, so `ls afile` threw ENOTDIR and
     // misled callers into thinking a file was a directory.
     async ls(argv) {
+      { const bad = unsupportedFlag('ls', argv.filter((a) => a.startsWith('-')), ['R', 'a', 'l']); if (bad) return flagErr('ls', bad); }
       const long = argv.some((a) => /^-\w*l/.test(a));
       const positionals = argv.filter((a) => !a.startsWith('-'));
       const targets = positionals.length ? positionals : [null];
       const results = [];
+      let failed = false;
       for (const p of targets) {
         const abs = p == null ? state.cwd : normalizePath(state.cwd, p);
         const st = await face.invoke('fs.stat', { path: abs });
@@ -376,13 +434,16 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
           }
         }
         const res = await face.invoke('fs.list', input);
-        if (!res.ok) { results.push(`ls: ${p ?? '.'}: ${res.code || 'error'}`); continue; }
+        if (!res.ok) { results.push(`ls: ${p ?? '.'}: ${res.code || 'error'}`); failed = true; continue; }
         results.push(renderResult('fs.list', res, { long }));
       }
-      return { text: results.filter((s) => s !== '').join('\n'), code: 0 };
+      // a missing path used to still exit 0, so `ls d || mkdir d` never took the fallback (R2e)
+      return { text: results.filter((s) => s !== '').join('\n'), code: failed ? 1 : 0 };
     },
     // printf FORMAT [ARGS] — backslash escapes + %s/%d/%%. Unlike echo it adds no
     // trailing newline of its own; the format supplies it (\n).
+    true() { return { text: '', code: 0 }; },
+    false() { return { text: '', code: 1 }; },
     printf(argv) {
       if (!argv.length) return { text: '', code: 0 };
       const fmt = unescapePrintf(argv[0]);
@@ -406,9 +467,16 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     },
     // sed — the common subset: `s/pat/rep/[g]` substitution, `-n 'Np'` print line
     // N, `-n '/re/p'` print matching lines. Reads stdin.
-    sed(argv, stdin) {
-      const script = argv.filter((a) => !a.startsWith('-'))[0] || '';
-      const lines = linesOf(stdin || '');
+    async sed(argv, stdin) {
+      if (argv.some((a) => a === '-i' || a.startsWith('-i'))) {
+        return { text: 'sed: -i (in-place) is not implemented — use the `edit` tool, which is checked and reversible', code: 2 };
+      }
+      { const bad = unsupportedFlag('sed', argv.filter((a) => a.startsWith('-')), ['n', 'E', 'r']); if (bad) return flagErr('sed', bad); }
+      const pos = argv.filter((a) => !a.startsWith('-'));
+      const script = pos[0] || '';
+      // a file argument used to be IGNORED, so `sed 's/a/b/' f.txt` returned "" exit 0 (R2a)
+      const inp = await textInput('sed', pos.slice(1), stdin); if (inp.failed) return inp;
+      const lines = linesOf(inp.text);
       let m = /^s\/((?:[^/\\]|\\.)*)\/((?:[^/\\]|\\.)*)\/([gips]*)$/.exec(script);
       if (m) {
         const re = new RegExp(m[1], m[3].includes('g') ? 'g' : '');
@@ -449,14 +517,19 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       return { text: out.join('\n'), code: out.length ? 0 : 1 };
     },
     // awk — the common one-liner subset: `awk [-F sep] '{print $N}'` / `'{print}'`.
-    awk(argv, stdin) {
+    async awk(argv, stdin) {
+      { const bad = unsupportedFlag('awk', argv.filter((a) => a.startsWith('-') && !a.startsWith('-F')), ['F']); if (bad) return flagErr('awk', bad); }
       let sep = null; const parts = [];
       for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '-F') { sep = argv[++i]; }
         else if (argv[i].startsWith('-F')) { sep = argv[i].slice(2); }
         else parts.push(argv[i]);
       }
-      const prog = parts.join(' ');
+      // the program is the first positional; anything after it is a FILE, which used to be
+      // swallowed into the program text and then ignored, returning "" exit 0 (R2a)
+      const prog = parts[0] || '';
+      const inp = await textInput('awk', parts.slice(1), stdin); if (inp.failed) return inp;
+      stdin = inp.text;
       const m = /\{\s*print\s*(.*?)\s*\}/.exec(prog);
       const fields = (line) => (sep ? line.split(sep) : line.split(/\s+/).filter(Boolean));
       const spec = m ? m[1].trim() : '$0';
@@ -500,23 +573,61 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       if (path) await face.invoke('fs.write', { path, data: withTrailingNewline(stdin || ''), createParents: true });
       return { text: stdin || '', code: 0 };
     },
-    cut(argv, stdin) {
-      let delim = '\t'; let fieldSpec = '1';
+    async cut(argv, stdin) {
+      // both spellings: `-d: -f2` (attached) and `-d : -f 2` (separate)
+      let delim = '\t', spec = '', mode = 'f', badFlag = null;
+      const files = [];
       for (let i = 0; i < argv.length; i++) {
-        if (argv[i].startsWith('-d')) delim = argv[i].length > 2 ? argv[i].slice(2) : argv[++i];
-        else if (argv[i].startsWith('-f')) fieldSpec = argv[i].length > 2 ? argv[i].slice(2) : argv[++i];
+        const a = argv[i];
+        if (!a.startsWith('-') || a === '-') { files.push(a); continue; }
+        const k = a[1], attached = a.slice(2);
+        if (k === 'd') { delim = attached !== '' ? attached : (argv[++i] ?? '\t'); continue; }
+        if (k === 'f' || k === 'c') { mode = k; spec = attached !== '' ? attached : (argv[++i] ?? ''); continue; }
+        badFlag = `-${k}`; break;
       }
-      const idxs = fieldSpec.split(',').map((n) => Number(n) - 1);
-      const out = linesOf(stdin || '').map((l) => { const f = l.split(delim); return idxs.map((i) => f[i] ?? '').join(delim); });
-      return { text: out.join('\n'), code: 0 };
+      if (badFlag) return flagErr('cut', badFlag);
+      // ranges too: -f1-3 and -f1,3 were both misread as a single field (R2e)
+      const want = [];
+      for (const part of String(spec).split(',')) {
+        const m = /^(\d+)-(\d+)$/.exec(part);
+        if (m) { for (let n = Number(m[1]); n <= Number(m[2]); n++) want.push(n); }
+        else if (/^\d+$/.test(part)) want.push(Number(part));
+      }
+      const inp = await textInput('cut', files, stdin); if (inp.failed) return inp;
+      const pick = (line) => (mode === 'c'
+        ? want.map((n) => line[n - 1] ?? '').join('')
+        : want.map((n) => line.split(delim)[n - 1] ?? '').join(delim));
+      return { text: linesOf(inp.text).map(pick).join('\n'), code: 0 };
     },
-    tr(argv, stdin) {
-      const opts = argv.filter((a) => a.startsWith('-'));
-      const sets = argv.filter((a) => !a.startsWith('-'));
-      let text = String(stdin || '');
-      if (opts.some((o) => o.includes('d'))) { const del = new Set(sets[0] || ''); text = [...text].filter((c) => !del.has(c)).join(''); }
-      else if (sets.length >= 2) { const from = sets[0]; const to = sets[1]; text = [...text].map((c) => { const i = from.indexOf(c); return i >= 0 ? (to[i] ?? to[to.length - 1]) : c; }).join(''); }
-      return { text, code: 0 };
+    async tr(argv, stdin) {
+      const { flags, positionals } = splitArgs(argv);
+      const bad = unsupportedFlag('tr', flags, ['d', 's']); if (bad) return flagErr('tr', bad);
+      const del = flags.some((f) => f.slice(1).includes('d'));
+      // a-z used to be taken LITERALLY (three characters), so `tr a-z A-Z` mapped almost nothing
+      const expandRange = (spec) => {
+        const out = [];
+        const t = String(spec || '');
+        for (let i = 0; i < t.length; i++) {
+          if (t[i + 1] === '-' && t[i + 2] && t.charCodeAt(i) <= t.charCodeAt(i + 2)) {
+            for (let c = t.charCodeAt(i); c <= t.charCodeAt(i + 2); c++) out.push(String.fromCharCode(c));
+            i += 2;
+          } else out.push(t[i]);
+        }
+        return out;
+      };
+      const from = expandRange(positionals[0]);
+      const to = del ? [] : expandRange(positionals[1]);
+      const files = positionals.slice(del ? 1 : 2);
+      const inp = await textInput('tr', files, stdin); if (inp.failed) return inp;
+      const text = inp.text;
+      let out = '';
+      for (const ch of text) {
+        const k = from.indexOf(ch);
+        if (k < 0) { out += ch; continue; }
+        if (del) continue;
+        out += to.length ? (to[Math.min(k, to.length - 1)]) : ch;
+      }
+      return { text: out, code: 0 };
     },
     basename(argv) {
       let b = String(argv[0] || '').replace(/\/+$/, '').split('/').pop() || '/';
@@ -549,13 +660,86 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
         'find', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'xargs', 'basename', 'dirname',
         'test', '[', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'chmod', 'stat', 'git', 'python', 'python3',
         'env', 'export', 'unset', 'clear', 'history', 'which'];
-      return { text: 'commands: ' + cmds.join(' ') + '\noperators: | && || ; > >>\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD', code: 0 };
+      // Say what is ACTUALLY here. `help` used to list these as if they were coreutils, and the
+      // agent believed it — flags it did not implement were ignored rather than refused
+      // (forward-pass R3a). An unsupported flag is now an error, so this text and the behaviour
+      // agree.
+      return { text: 'commands: ' + cmds.join(' ')
+        + '\noperators: | && || ; > >> < 2>&1   globs: * ?   comments: #'
+        + '\nvars: NAME=value, $NAME, ${NAME}, $?, $PWD  (single quotes are literal; double quotes expand)'
+        + '\nThis is a CURATED shell, not coreutils. Each builtin implements a documented subset and'
+        + '\nREFUSES an unsupported flag (exit 2) rather than ignoring it. Notably:'
+        + '\n  grep -n -v -i -c -E -F      (no -r; use `rg` for a recursive search)'
+        + '\n  head/tail -n   wc -l -w -c   sort -r -n -u -f   uniq -c -d -u   cut -d -f -c   tr [-d], ranges'
+        + '\n  find [dir] -name -type -maxdepth       sed s/// on stdin or a file (no -i; use the edit tool)'
+        + '\n  awk -F with {print $N}      ls -R -a -l'
+        + '\nNo subshells, loops, functions, heredocs, background jobs or command substitution.'
+        + '\nPython is a real kernel (`python file.py`); it is the scripting layer, not bash.', code: 0 };
     },
   };
 
+  // ── argv handling for the text builtins ──────────────────────────────────────────────
+  //
+  // These were stdin-only and SILENTLY IGNORED file arguments, returning "" with exit 0 — so the
+  // agent read `head -2 notes.txt` as "the file is empty" and carried that premise forward
+  // (forward-pass R2a). And any flag they did not implement was ignored rather than refused, which
+  // is the same failure in a different costume (R2d). Both are fixed here, once, for all of them.
+  //
+  // A missing command exits 127 and the agent adapts. A wrong exit 0 is believed. So an
+  // unsupported flag is now an ERROR naming the flag, never a silent difference in meaning.
+
+  // Split argv into flags and positionals, knowing which flags consume the next token.
+  function splitArgs(argv, { valueFlags = [] } = {}) {
+    const flags = [], positionals = [], seen = [];
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === '--') { positionals.push(...argv.slice(i + 1)); break; }
+      if (a.startsWith('-') && a !== '-') {
+        flags.push(a); seen.push(a);
+        if (valueFlags.includes(a) && i + 1 < argv.length) { i++; }
+        continue;
+      }
+      positionals.push(a);
+    }
+    return { flags, positionals, seen };
+  }
+
+  // Refuse a flag the builtin does not actually implement. `supported` are single letters (short
+  // flags may be bundled, e.g. -in) plus any long forms.
+  function unsupportedFlag(name, flags, supported) {
+    const longs = new Set(supported.filter((f) => f.startsWith('--')));
+    const shorts = new Set(supported.filter((f) => !f.startsWith('--')));
+    for (const f of flags) {
+      if (f.startsWith('--')) { if (!longs.has(f)) return f; continue; }
+      if (/^-\d+$/.test(f)) continue;                    // -5, the numeric line count
+      for (const ch of f.slice(1)) if (!shorts.has(ch)) return `-${ch}`;
+    }
+    return null;
+  }
+  const flagErr = (name, f) => ({ text: `${name}: unsupported flag ${f} — this shell implements a subset; run \`help\` for what each builtin supports`, code: 2 });
+
+  // Text in: the named files if any, otherwise stdin. Reading is what makes a file argument mean
+  // something instead of being dropped on the floor.
+  async function textInput(name, positionals, stdin) {
+    if (!positionals.length) return { text: stdin || '', code: 0 };
+    const parts = [];
+    for (const f of positionals) {
+      const res = await face.invoke('fs.read', { path: normalizePath(state.cwd, f), encoding: 'utf-8' });
+      if (!res.ok) return { text: `${name}: ${f}: ${res.code || 'ENOENT'}`, code: 1, failed: true };
+      parts.push(decodeData(res.data));
+    }
+    return { text: parts.join(''), code: 0 };
+  }
+
+  // Returns a number, or { bad } when -n was given a non-numeric value — which used to fall back
+  // to the default and quietly return a different amount of text than was asked for.
   function flagNum(argv, dflt) {
     const i = argv.findIndex((a) => a === '-n');
-    if (i >= 0 && argv[i + 1]) return Number(argv[i + 1]) || dflt;
+    if (i >= 0) {
+      const v = argv[i + 1]; const n = Number(v);
+      if (v === undefined || !Number.isFinite(n)) return { bad: v === undefined ? '-n' : v };
+      return n;
+    }
     const m = argv.find((a) => /^-\d+$/.test(a));
     return m ? Number(m.slice(1)) : dflt;
   }
@@ -606,11 +790,15 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
   // (cwd-relative; the glob command returns root-relative, so strip the cwd
   // prefix). No match → the literal token is kept (nullglob off). Flags (-x) and
   // env-looking tokens are left alone.
+  const stripArgMarks = (t) => String(t).replace(/\u0001/g, '');
   async function expandGlobs(tokens) {
     const out = [];
     const prefix = state.cwd ? state.cwd + '/' : '';
     for (const t of tokens) {
-      if (/[*?]/.test(t) && !t.startsWith('-')) {
+      // a glob character carrying LITERAL_MARK was quoted, so it is a pattern for the COMMAND
+      // (find -name '*.txt'), not a filename for the shell to expand
+      const unmarkedGlob = /(^|[^\u0001])[*?]/.test(t);
+      if (unmarkedGlob && !t.startsWith('-')) {
         const res = await face.invoke('fs.glob', { pattern: t, cwd: state.cwd });
         if (res.ok && res.matches.length) {
           out.push(...res.matches.map((m) => (m.startsWith(prefix) ? m.slice(prefix.length) : m)).sort());
@@ -629,7 +817,8 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     let ai = 0;
     while (ai < argv.length && ASSIGN.test(argv[ai])) {
       const eq = argv[ai].indexOf('=');
-      state.vars.set(argv[ai].slice(0, eq), expand(argv[ai].slice(eq + 1)));
+      // strip here too: a stored value keeps its markers otherwise, and `env` prints them
+      state.vars.set(argv[ai].slice(0, eq), stripArgMarks(expand(argv[ai].slice(eq + 1))));
       ai++;
     }
     if (ai > 0) argv = argv.slice(ai);
@@ -637,6 +826,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     // Expand $VARs, then globs (`*.txt`) in the argument tokens.
     argv = argv.map(expand);
     argv = [argv[0], ...(await expandGlobs(argv.slice(1)))];
+    argv = argv.map(stripArgMarks); // markers are internal; no command ever sees one
     const verb = argv[0];
     const args = argv.slice(1);
     if (builtins[verb]) return builtins[verb](args, stdin);
@@ -655,10 +845,58 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       if (r.status === 'unavailable') return { text: 'python: ' + (r.message || 'kernel unavailable'), code: 1 };
       return { text: (r.stdout || '') + (r.stderr || ''), code: r.status === 'ok' ? 0 : 1 };
     }
-    if (verb === 'find') { // find <dir> -> glob dir/** ; keep it simple
-      const base = args[0] ? normalizePath(state.cwd, args[0]) : state.cwd;
-      const res = await face.invoke('fs.glob', { pattern: (base ? base + '/' : '') + '**', cwd: '' });
-      return res.ok ? { text: res.matches.join('\n'), code: 0 } : { text: `find: ${res.message}`, code: 1 };
+    if (verb === 'find') {
+      // -name / -type / -maxdepth were SILENTLY IGNORED, so `find . -name "*.txt"` returned every
+      // file in the tree and the agent believed that was the answer (forward-pass R2e).
+      let base = null, name = null, type = null, maxdepth = null, bad = null;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '-name') { name = args[++i]; continue; }
+        if (a === '-type') {
+          type = args[++i];
+          if (type !== 'f' && type !== 'd') return { text: `find: -type ${type ?? ''}: expected f or d`, code: 2 };
+          continue;
+        }
+        if (a === '-maxdepth') {
+          const v = args[++i]; maxdepth = Number(v);
+          if (!Number.isInteger(maxdepth) || maxdepth < 0) return { text: `find: -maxdepth ${v ?? ''}: expected a non-negative integer`, code: 2 };
+          continue;
+        }
+        if (a.startsWith('-')) { bad = a; break; }
+        if (base == null) base = a;
+      }
+      if (bad) return { text: `find: ${bad} is not implemented — this shell supports -name, -type and -maxdepth`, code: 2 };
+      const root = base ? normalizePath(state.cwd, base) : state.cwd;
+      const res = await face.invoke('fs.glob', { pattern: (root ? root + '/' : '') + '**', cwd: '' });
+      if (!res.ok) return { text: `find: ${res.message}`, code: 1 };
+      // a glob, anchored to the basename, exactly as find's -name means it
+      const rx = name ? new RegExp('^' + String(name).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$') : null;
+      const depthOf = (m) => m.slice(root ? root.length + 1 : 0).split('/').length;
+      // fs.glob yields FILES only, so `-type d` over it alone could never match anything — it
+      // would have returned an empty success, which is the very failure this batch removes.
+      // Directories are the distinct path prefixes of the files found.
+      let candidates = res.matches;
+      if (type === 'd') {
+        const dirs = new Set();
+        for (const m of res.matches) {
+          const parts = m.split('/');
+          for (let k = (root ? root.split('/').length : 0) + 1; k < parts.length; k++) dirs.add(parts.slice(0, k).join('/'));
+        }
+        candidates = [...dirs].sort();
+      }
+      const out = [];
+      for (const m of candidates) {
+        if (rx && !rx.test(m.split('/').pop())) continue;
+        if (maxdepth != null && depthOf(m) > maxdepth) continue;
+        if (type) {
+          const st = await face.invoke('fs.stat', { path: m });
+          const isDir = st.ok && st.stat && st.stat.type === 'dir';
+          if (type === 'f' && isDir) continue;
+          if (type === 'd' && !isDir) continue;
+        }
+        out.push(m);
+      }
+      return { text: out.join('\n'), code: 0 };
     }
     if (verb === 'git') return runGit(args);
     const cmdName = REGISTRY_ALIAS[verb] || (registry.describeCommand(verb) ? verb : null);
@@ -673,8 +911,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     const sub = args[0];
     const rest = args.slice(1);
     const positional = rest.filter((a) => !a.startsWith('-'));
+    const flags = rest.filter((a) => a.startsWith('-'));
     const rel = (p) => normalizePath(state.cwd, p);
-    if (!sub) return { text: 'usage: git <init|add|rm|commit|status|log|diff|branch|checkout>', code: 1 };
+    if (!sub) return { text: 'usage: git <init|add|rm|commit|status|log|diff|branch|checkout|clone|fetch|push>', code: 1 };
 
     let name; let input = {};
     switch (sub) {
@@ -711,6 +950,25 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       case 'diff': name = 'git.diff'; input = positional[0] ? { ref: positional[0] } : {}; break;
       case 'branch': name = 'git.branch'; input = positional[0] ? { name: positional[0] } : {}; break;
       case 'checkout': name = 'git.checkout'; input = { ref: positional[0] || '' }; break;
+      // These three existed in the registry, were tested, and were simply unreachable from the
+      // shell — runGit had no case for them (forward-pass R3b). Network rides the sovereign
+      // egress, so an unconfigured backend fails loudly rather than silently doing nothing.
+      case 'clone': {
+        if (!positional[0]) return { text: 'usage: git clone <url> [ref]', code: 2 };
+        name = 'git.clone'; input = { url: positional[0], ...(positional[1] ? { ref: positional[1] } : {}) }; break;
+      }
+      case 'fetch': {
+        if (!positional[0]) return { text: 'usage: git fetch <url> [ref]', code: 2 };
+        name = 'git.fetch'; input = { url: positional[0], ...(positional[1] ? { ref: positional[1] } : {}) }; break;
+      }
+      case 'push': {
+        if (positional.length < 2) return { text: 'usage: git push <url> <ref> [remoteRef]', code: 2 };
+        name = 'git.push';
+        input = { url: positional[0], ref: positional[1],
+                  ...(positional[2] ? { remoteRef: positional[2] } : {}),
+                  ...(flags.includes('-f') || flags.includes('--force') ? { force: true } : {}) };
+        break;
+      }
       default: return { text: `git: '${sub}' is not a rig git command`, code: 1 };
     }
     if (!registry.describeCommand(name)) return { text: `git: '${sub}' is unavailable (no git core wired)`, code: 1 };
@@ -720,8 +978,19 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     return { text: renderGit(sub, res), code: 0 };
   }
 
-  async function runPipeline(pipeline) {
+  async function runPipeline(pipeline, stdinFrom = null) {
     let stdin = '';
+    if (stdinFrom && pipeline.length > 1) {
+      // bash attaches `<` to the command it is written beside; this shell records it per
+      // STATEMENT and cannot say which stage owns it. A guess is the failure this batch removes.
+      return { text: '<: input redirection combined with a pipe is ambiguous here — feed the file explicitly (`cat FILE | ...`)', code: 2 };
+    }
+    if (stdinFrom) {
+      // `< $F` never expanded the variable and reported the literal name as missing
+      const res = await face.invoke('fs.read', { path: normalizePath(state.cwd, expand(stdinFrom)), encoding: 'utf-8' });
+      if (!res.ok) return { text: `${stdinFrom}: ${res.code || 'ENOENT'}`, code: 1 };
+      stdin = decodeData(res.data);
+    }
     let last = { text: '', code: 0 };
     for (const argv of pipeline) {
       last = await runStage(argv, stdin);
@@ -764,7 +1033,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     for (const stmt of parseLine(raw)) {
       if (stmt.op === '&&' && lastCode !== 0) continue; // short-circuit on failure
       if (stmt.op === '||' && lastCode === 0) continue; // short-circuit on success
-      const res = await runPipeline(stmt.pipeline);
+      const res = await runPipeline(stmt.pipeline, stmt.stdinFrom);
       lastCode = res.code || 0;
       if (res.clear) { cleared = true; continue; }
       if (res.staged) {
@@ -783,7 +1052,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
           data = (cur.ok ? decodeData(cur.data) : '') + chunk;
         }
         const w = await face.invoke('fs.write', { path, data, createParents: true });
-        if (!w.ok) write(`${path}: ${w.message || 'write failed'}`);
+        // a redirect that wrote NOTHING used to leave the pipeline's exit 0, so `cmd > bad && next`
+        // ran `next` as though the write had succeeded
+        if (!w.ok) { write(`${path}: ${w.message || 'write failed'}`); lastCode = 1; }
       } else {
         // Terminal display: drop the single trailing newline (the screen adds
         // its own line break); inner newlines are preserved.
