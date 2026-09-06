@@ -347,7 +347,10 @@ export function recallTool(){
         'Project memory list in your context), when the one-line entry is not enough.',
       parameters: {
         type: 'object',
-        properties: { name: { type: 'string', description: 'The fact name, exactly as listed.' } },
+        properties: {
+          name: { type: 'string', description: 'The fact name, exactly as listed.' },
+          offset: { type: 'integer', description: 'Character offset to continue a long fact from (default 0).' },
+        },
         required: ['name'],
       },
     },

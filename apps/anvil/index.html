@@ -232,6 +232,7 @@
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool, INJECTED_STATUSES } from '../../sys/ai/skills.mjs';
   import { skillManageTool, planSkillWrite, createSkillSession, SKILL_FILE } from '../../sys/ai/skill-manage.mjs';
+  import { contextRemainingTool, checkpointTool, contextBudget, windowFromOllama, windowForPreset, capHandoff } from '../../sys/ai/context-budget.mjs';
   import { sentinelLine } from '../../sys/ai/skill-sentinel.mjs';
   import { makeEnvelope } from '../../sys/staging/envelope.mjs';
   import { registerAppDiffTypes } from '../../sys/staging/diff-types.mjs';
@@ -256,7 +257,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog, loadRecord, foldStopReasons, stopReasonsLine } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -1387,6 +1388,32 @@
     return { path, name, tiers, errors, count };
   }
 
+  // B2: gather run records for the history tool. OPFS is the readable tier in-tab
+  // (rebuildRunIndex scans the same place). scope run = this task's newest record,
+  // task = all of this task's records, project = every project's. The in-flight run
+  // is not here until saveRunRecord writes it — you cannot grep a run that has not
+  // finished, and the tool says so.
+  async function loadTaskRecords(scope){
+    const proj=String(state.activeProject||'local'), task=String((activeTask()||{}).id||'');
+    const entries=[];
+    try{
+      let root=await navigator.storage.getDirectory();
+      const runs=await (await root.getDirectoryHandle('anvil')).getDirectoryHandle('runs');
+      for await (const [p,ph] of runs.entries()){ if(ph.kind!=='directory') continue;
+        if(scope!=='project' && p!==proj) continue;
+        for await (const [tk,th] of ph.entries()){ if(th.kind!=='directory') continue;
+          if(scope!=='project' && tk!==task) continue;
+          const files=[]; for await (const [name,fh] of th.entries()){ if(name.endsWith('.json')) files.push([name,fh]); }
+          files.sort((a,b)=>a[0].localeCompare(b[0]));
+          const pick = scope==='run' ? files.slice(-1) : files;
+          for(const [name,fh] of pick){ try{ const dump=JSON.parse(await (await fh.getFile()).text());
+            const rid=(p===proj&&tk===task)?name.replace(/\.json$/,''):(tk+'/'+name.replace(/\.json$/,''));
+            entries.push({ runId:rid, record:loadRecord(dump) }); }catch(_){}}
+        } }
+    }catch(_){}
+    return entries;
+  }
+
   async function runTask(t, text){
     if(!t||running) return;
     if(t.title==='Untitled task'){ t.title=text.slice(0,48); }
@@ -1395,6 +1422,23 @@
     t.status='running'; running=true; abortController=new AbortController(); setSend(); save(); renderAll();
 
     const convo = (t.convo=t.convo||[]);
+    // B4: the honest budget for this run — one best-effort endpoint probe, shared by
+    // context_remaining and checkpoint. When the app cannot see the endpoint (the common
+    // standalone case) it returns window:null and claims no automatic behaviour.
+    async function currentBudget(){
+      const used=Math.ceil(JSON.stringify(convo||[]).length/4);
+      let win=null, source='the app cannot read the endpoint here', ep=null;
+      try{ ep=(nak&&nak.ai&&nak.ai.endpoint)||null; }catch(_){ ep=null; }
+      try{
+        if(ep&&ep.preset==='ollama'){ const base=String(ep.baseUrl||'').replace(/\/v1\/?$/,''); const r=await fetch(base+'/api/show',{method:'POST',body:JSON.stringify({name:ep.model})}); if(r&&r.ok){ const w=windowFromOllama(await r.json(), ep.numCtx??ep.num_ctx??null); win=w.window; source=w.source; } }
+        else if(ep&&ep.preset){ const w=windowForPreset(ep.preset); win=w.window; source=w.source; }
+      }catch(_){}
+      const b=contextBudget({ window:win, used }); b.source=source; return b;
+    }
+    // B5: a content-free audit tag for a REFUSED memory write — a short hash + a category,
+    // never the note text (PII-safe). It leaves a durable trail of refusals without leaking.
+    function shortHash(str){ let h=5381; const s=String(str||''); for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))>>>0; return h.toString(16).padStart(8,'0'); }
+    function auditRefusal(category, note){ if(t){ (t.log=t.log||[]).push({ k:'system', text:'memory write refused ['+category+'] · '+shortHash(note)+' (content not logged)' }); renderLog(); } }
     convo.push({role:'user', content:text});
     let liveTool=null;
     // Wrap the executor to snapshot each file's PRE-IMAGE just before a write/edit
@@ -1451,10 +1495,6 @@
     const factMap = {};  // memory-fact name -> .md path, populated below
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
-    // The record covers THIS run; the task's log spans every run of the task. The dual-write
-    // self-check below compares tool rows from here on, or a second run on a task would trip
-    // it against the first run's rows (live finding, 2026-09-06 task xsi6h6l9 run 2).
-    const logStart=t.log.length;
     // A2: at most MAX_REMEMBER_PER_RUN new learnings per run — the hoard is the failure mode.
     const remBudget=createRememberBudget();
     // C1: read-before-write — which skills THIS run has loaded through the `skill` tool.
@@ -1492,12 +1532,54 @@
         const names=Object.keys(skillMap).filter(n=>INJECTED_STATUSES.includes(skillStatus[n]||'active'));
         return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
       }
+      // History (B2): search and read this project's own run records — the retrieval half
+      // of the substrate. Read-only, offered in every mode. Reads persisted records; the
+      // in-flight run is searchable only after it is saved.
+      if(nm==='history'){
+        const op=String((ar&&ar.op)||'');
+        const scope=['run','task','project'].includes(ar&&ar.scope)?ar.scope:'task';
+        const entries=await loadTaskRecords(scope);
+        if(op==='search'){
+          const role=['reviewer','supervisor'].includes(ar&&ar.role)?ar.role:'default';
+          const hits=searchRecords(entries,{ query:String((ar&&ar.query)||''), role, limit:20 });
+          return hits.length ? hits.map(h=>h.id+'  ['+h.tool+']  '+h.excerpt).join('\n') : ('No history matches "'+String((ar&&ar.query)||'')+'" in scope '+scope+(entries.length?'':' (no saved runs yet).'));
+        }
+        if(op==='read'){
+          const r=readEvent(entries,String((ar&&ar.id)||''),{ offset:Number(ar&&ar.offset)||0, limit:4000 });
+          if(r.error) return 'history read: '+r.error;
+          return r.text + (r.nextOffset!=null ? ('\n[more — history read id "'+r.id+'" offset '+r.nextOffset+']') : '');
+        }
+        return 'history: op must be "search" or "read".';
+      }
+      // context_remaining (B4): the honest budget. The app cannot always see the endpoint
+      // (the host bifurcation abstracts it); when it cannot, it says so and claims no
+      // automatic behaviour — the module's designed fallback. Ollama's num_ctx defaults to
+      // 4096, so a probed window is what separates 40k on paper from 4k in practice.
+      if(nm==='context_remaining'){
+        const b=await currentBudget(); const used=b.used;
+        return b.window ? ('Context: '+b.remaining+' of '+b.usable+' usable tokens left — window '+b.window+' ('+b.source+'), '+used+' used.'+(b.supported?'':' '+b.reason)) : ('Context: usage not known — '+b.source+'. No automatic rollover; save state with checkpoint/remember.');
+      }
+      // checkpoint (B4): record a capped handoff as the next turn's landmark, on the chain.
+      // Capped at 20k chars AND half the usable window (when the window is known).
+      if(nm==='checkpoint'){
+        const b=await currentBudget();
+        const capped=capHandoff(String((ar&&ar.handoff)||''), { usable: b.usable });
+        try{ await rec.checkpoint(capped); }catch(_){ return 'checkpoint: could not record (no active run record).'; }
+        return 'Checkpoint recorded ('+capped.length+' chars) — it becomes the next turn\'s starting landmark.';
+      }
       // Recall: load one memory fact's full detail on demand.
       if(nm==='recall'){
         const name=String((ar&&ar.name)||'').trim();
         if(!safeSeg(name)){ const names=Object.keys(factMap); return 'Invalid fact name.'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.'); }
         const p = factMap[name] || (MEMORY_DIR+'/'+name+'.md');
-        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); return 'Fact: '+(f.name||name)+'\n\n'+f.body; } }catch(_){}
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const f=parseFact(r.data); const body=String(f.body||'');
+          // B5: page a long fact to the budget. Unknown budget → a safe fixed cap; an offset past
+          // the end is refused with the offset preserved, never a silent empty read.
+          const bud=await currentBudget(); const cap=bud.usable ? Math.min(8000, Math.max(1000, bud.remaining*4)) : 4000;
+          const off=Math.max(0, Number(ar&&ar.offset)||0);
+          if(off && off>=body.length) return 'recall: offset '+off+' is past the end of "'+name+'" ('+body.length+' chars). Retry from 0.';
+          const slice=body.slice(off, off+cap); const more=(off+cap)<body.length;
+          return 'Fact: '+(f.name||name)+(off?(' [from '+off+']'):'')+'\n\n'+slice+(more?('\n[more — recall name "'+name+'" offset '+(off+cap)+']'):''); } }catch(_){}
         const names=Object.keys(factMap);
         return 'No fact named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' No project memory yet.');
       }
@@ -1512,11 +1594,11 @@
         // write with the next move, so the store never grows a second copy.
         const all=await listFacts();
         const exempt=[ar&&ar.supersedes, ar&&ar.slot?slotHolder(all, ar.slot):null].filter(Boolean);
-        const dup=findDuplicate(all, note, { exempt }); if(dup) return duplicateReply(dup);
+        const dup=findDuplicate(all, note, { exempt }); if(dup){ auditRefusal('duplicate:'+dup.reason, note); return duplicateReply(dup); }
         // A rule is injected whole every run, so rules are capped (A3): over the cap the tool
         // errors and the agent has to merge or retract one first.
-        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); }
-        const take=remBudget.take(); if(!take.ok) return budgetSpentReply(take);
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok){ auditRefusal('rules-cap', note); return rulesCapReply(cap); } }
+        const take=remBudget.take(); if(!take.ok){ auditRefusal('per-run-cap', note); return budgetSpentReply(take); }
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.
         const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes, weight: ar&&ar.weight });
@@ -1684,6 +1766,9 @@
     if(mode==='code') tools.push(rememberTool());
     if(mode==='code') tools.push(skillManageTool());
     if(mode==='code') tools.push(synthesizeTool());
+    tools.push(historyTool()); // read-only: search/read past runs, every mode
+    tools.push(contextRemainingTool()); // read-only: the honest budget, every mode
+    if(mode==='code') tools.push(checkpointTool());
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
@@ -1711,11 +1796,14 @@
       };
       // The run record (plan/anvil-event-log-substrate.md, layer 2a): every event of
       // this run lands on an append-only hash chain and is persisted OUTSIDE the
-      // agent's mount. Dual-write for now — t.log / t.status keep their writers and
-      // the record runs alongside, with a self-check below that the folds agree.
-      // Layer 2b flips the reads to the folds and deletes the writers.
+      // Layer 2b (B1): the record is the source of truth — status and the carried transcript
+      // are derived from its folds (below). B3: a resumed run is prefaced with a recovery note
+      // (t.recovery) built from the PRIOR run's record — which owner asks look handled, and that
+      // coordination lines are tagged — so a satisfied steer is not blindly re-applied.
       const rec = createRunRecorder({ app:'anvil', principal:'anvil:'+String(state.activeProject||'local') });
-      const firstMessages=[sysMsg(verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):''), ...convo];
+      const gateNote = verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'';
+      const recoveryPreface = (t.recovery && String(t.recovery).trim()) ? ('\n\n'+t.recovery) : '';
+      const firstMessages=[sysMsg(gateNote+recoveryPreface), ...convo];
       const recInfer = rec.wrapInfer(inferViaHost);
       const recEvent = (e)=>{ onLoopEvent(e); rec.onEvent(e); };
       await rec.start({ messages: firstMessages, tools });
@@ -1738,17 +1826,26 @@
         const prose=[...t.log].reverse().find(x=>x.k==='assistant');
         t.log.push({k:'system',text:'No tools were used — nudging the agent to make the change, not just describe it.'}); renderLog();
         if(prose) convo.push({role:'assistant', content:prose.text});
-        convo.push({role:'user', content:'You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
+        convo.push({role:'user', content:'[coordination] You described the work but did not do it. Use the tools (write / edit / apply_patch / shell) to actually make and run the change in the workspace now, then give a one-line summary. Do not only explain.'});
         const nudgeMessages=[sysMsg(''), ...convo];
         await rec.start({ messages: nudgeMessages, tools });
         result = await runAgentLoop({ messages: nudgeMessages, tools, infer: recInfer, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:recEvent });
         await rec.finish(result);
       }
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
-      // Carry the REAL transcript forward — tool calls, tool results and the gate
-      // feedback — so a follow-up send resumes instead of restarting blind.
-      try{ t.convo = await carryForward(result.messages); }
+      // Layer 2b: the run record is the source of truth. Settle it, then DERIVE the carried
+      // transcript and the status from folds — there is no parallel durable writer left to
+      // drift, so the dual-write self-check is gone. foldTranscript pairs every tool call with
+      // its reply by construction and folds a nudge run's two loops into one clean transcript,
+      // so a follow-up send resumes instead of restarting blind.
+      await rec.settled();
+      const recEvents = rec.events();
+      try{ t.convo = await carryForward(foldTranscript(recEvents, rec.resolve)); }
       catch(_){ if(finalAssistant) convo.push({role:'assistant', content:finalAssistant.text}); }
+      // B3: the recovery note the NEXT run is prefaced with — a pure fold of THIS run's record,
+      // so it never re-applies a steer a gate already verified and never reads coordination as
+      // the owner. Additive: it rides beside the carried transcript, it does not replace it.
+      try{ t.recovery = recoveryNote(foldRecovery(recEvents, rec.resolve)); }catch(_){ t.recovery = ''; }
       // #5 plan→manual: a finished PLAN becomes a durable "plan of record" in project
       // memory (a hypothesis), so the follow-up CODE task starts from it (the memory
       // index is injected at task start) — Agno's explore-then-exploit, made durable.
@@ -1763,27 +1860,23 @@
       // also returns verified:true (sys/ai/agent-loop.mjs:290-295), so
       // result.verified alone would still paint an unearned pass.
       const gated = !!String((t.verifyCmd||'')).trim();
-      t.status = result.stop==='done'
-        ? ((gated && result.verified) ? 'done' : 'unclaimed')
-        : (result.stop==='error' ? 'error' : 'idle');
+      // "done" is the verifier's word: foldStatus is the 139c381 rule (gate ∧ verified → done,
+      // else unclaimed; unverified/error → error) as a pure fold over the record's last
+      // run.stopped. The app no longer computes status in parallel.
+      t.status = foldStatus(recEvents, rec.resolve, { gated }).status;
       const stopLabel = result.stop==='aborted' ? 'stopped'
         : result.stop==='budget' ? ('hit budget ('+(result.budgetAxis||'')+')')
         : result.stop==='unverified' ? 'gate never passed'
         : (result.stop==='done' && !gated) ? 'finished — no gate, so this is the agent\'s own claim'
         : result.stop;
-      if(result.stop==='unverified') t.status='error';
       t.log.push({k:'system',text:`agent ${stopLabel} · ${result.steps} steps`});
-      // Persist the record and check it against what the app believes. A fold that
-      // disagrees with the live state is a defect in one of them — say so in the
-      // log rather than let the two quietly drift (the exact failure this substrate
-      // exists to remove).
+      // Persist the record — the tamper-evident source of truth, and what the history tool
+      // (B2) searches. The status and the carried transcript above are DERIVED from it, so the
+      // dual-write self-check is gone. t.log stays a written array: it is what renderLog draws
+      // and it carries change/diff chips the record cannot yet reproduce (folding the log pane
+      // so reload rebuilds it from the record needs pre-images — a parked follow-up).
       try{
-        await rec.settled();
-        const ev=rec.events();
-        const folded=foldStatus(ev, rec.resolve, { gated });
-        if(folded.status!==t.status) t.log.push({k:'system',text:'⚠ run record disagrees with task status: record says '+folded.status+', app says '+t.status+' — report this'});
-        const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.slice(logStart).filter(r=>r.k==='tool').length;
-        if(foldedTools!==liveTools) t.log.push({k:'system',text:'⚠ run record disagrees with the log: record has '+foldedTools+' tool rows, app has '+liveTools+' — report this'});
+        const ev=recEvents;
         const saved=await saveRunRecord(t, rec, { gated });
         const where = saved.tiers.length ? saved.tiers.join(' + ') : 'NOT saved';
         const nth = saved.count ? ' · run '+saved.count+' of this task' : '';

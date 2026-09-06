@@ -40,6 +40,7 @@ export const RUN_EVENTS = Object.freeze([
   'verify.passed',    // input: { step }                       output: { verdict }
   'verify.failed',    // input: { step, round, ran }           output: { verdict }
   'run.stopped',      // input: { steps }                      output: { stop, reason, verified, axis, error }
+  'run.checkpoint',   // input: { step }                        output: { handoff }  (B4: a rollover landmark)
 ]);
 
 // The loop's onEvent types this recorder understands. 'done' and the pre-stop
@@ -148,6 +149,9 @@ export function createRunRecorder({ app = 'anvil', principal = 'local', grant_id
     },
 
     // ---- the record ----
+    // A checkpoint the agent asked for (B4): a capped handoff that becomes the next
+    // projection's landmark. Recorded on the chain like any other event.
+    checkpoint(handoff) { return enqueue('run.checkpoint', () => ({ input: { step }, output: { handoff: String(handoff ?? '') } })); },
     async settled() { await queue; },
     events() { return events.slice(); },
     head() { return head; },
@@ -249,12 +253,28 @@ export function foldTranscript(events, resolve) {
   const flushAssistant = () => {
     if (pendingCalls) { out.push({ role: 'assistant', content: null, tool_calls: pendingCalls }); pendingCalls = null; }
   };
+  let started = 0;
   for (const e of joined(events, resolve)) {
     const inp = e.input || {}, o = e.output || {};
     switch (e.tool) {
-      case 'run.started':
-        for (const m of (inp.messages || [])) if (m.role !== 'system') out.push(m);
+      case 'run.started': {
+        const msgs = (inp.messages || []).filter((m) => m.role !== 'system');
+        if (started === 0) { for (const m of msgs) out.push(m); }
+        else {
+          // A re-entered loop (Anvil's act-or-nudge records a second run.started). Its messages
+          // REPEAT everything the transcript already holds, then add the new turns (the nudge).
+          // Emit only that new tail: skip the longest leading run of `msgs` that already sits as a
+          // contiguous tail of `out` (compared by content), then push the remainder.
+          const key = (m) => JSON.stringify([m.role, m.content ?? null, m.tool_call_id ?? null, (m.tool_calls || []).map((c) => c.id)]);
+          // Largest k where out's last k messages equal msgs' first k — that overlap is the repeat;
+          // msgs.slice(k) is the new tail (the nudge's assistant prose + user turn).
+          let k = Math.min(out.length, msgs.length);
+          for (; k > 0; k--) { let ok = true; for (let i = 0; i < k; i++) if (key(out[out.length - k + i]) !== key(msgs[i])) { ok = false; break; } if (ok) break; }
+          for (const m of msgs.slice(k)) out.push(m);
+        }
+        started++;
         break;
+      }
       case 'llm.responded': {
         flushAssistant();
         const calls = Array.isArray(o.toolCalls) ? o.toolCalls : [];
@@ -264,7 +284,9 @@ export function foldTranscript(events, resolve) {
       }
       case 'tool.responded': flushAssistant(); out.push({ role: 'tool', tool_call_id: inp.id, content: String(o.result ?? '') }); break;
       case 'tool.failed': flushAssistant(); out.push({ role: 'tool', tool_call_id: inp.id, content: `Error: ${o.error ?? ''}` }); break;
-      case 'verify.failed': out.push({ role: 'user', content: `Gate failed (exit ${o.verdict?.exit ?? '?'}).\nFix the problem and continue.` }); break;
+      // Coordination, not the owner: a carried gate verdict must never read as the owner's
+      // instruction (B3). The tag survives into the next run's transcript.
+      case 'verify.failed': out.push({ role: 'user', content: `[coordination] Gate failed (exit ${o.verdict?.exit ?? '?'}). Fix the problem and continue.` }); break;
     }
   }
   // An assistant turn whose tool replies never arrived is malformed as the next
@@ -473,4 +495,175 @@ export function foldSkillUsage(records) {
   });
   for (const [k, u] of out) out.set(k, { views: u.views, runs: u.runs.size, lastUsed: u.lastUsed, firstUsed: u.firstUsed === Infinity ? null : u.firstUsed });
   return out;
+}
+
+// ────────────────────────────────────────────── history / retrieval (B2) ──
+
+// The retrieval half of the substrate (the "audit-state" thread): a fresh turn
+// rehydrates by SEARCHING its own record, not by inheriting a lossy summary. Pure
+// over the record — a grep across the joined events' payloads, sliced by role, plus
+// a paged read of one event. `entries` are { runId, record } where record is a
+// loadRecord-shaped object (events() + resolve). The id a hit carries — `runId#idx`
+// — reads back through readEvent.
+//
+// Role slices: what each holon recovers (the thread's "different holons recover
+// different slices"). reviewer → what the tools did/changed; supervisor → the
+// trajectory (turns + stops); default → the transcript a next turn needs.
+export const HISTORY_ROLES = Object.freeze({
+  reviewer: new Set(['tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed']),
+  supervisor: new Set(['turn.started', 'run.stopped', 'verify.passed', 'verify.failed', 'run.checkpoint']),
+  default: new Set(['run.started', 'assistant.said', 'llm.responded', 'tool.responded', 'tool.failed', 'verify.failed', 'run.checkpoint']),
+});
+
+// The searchable / readable text of one joined event — never raw base64 or a data:
+// URI (a recorded image or binary result is summarised, never inlined).
+const BINARY_RE = /^data:[^;,]*;base64,|^[A-Za-z0-9+/]{2000,}={0,2}$/;
+function eventText(e) {
+  const inp = e.input || {}, out = e.output || {};
+  const clip = (v) => { const s = String(v ?? ''); return BINARY_RE.test(s.trim()) ? `[${s.length} bytes binary/base64 — not inlined; read the event to page it]` : s; };
+  switch (e.tool) {
+    case 'run.started': return (inp.messages || []).filter((m) => m.role === 'user').map((m) => `[user] ${String(m.content ?? '')}`).join('\n');
+    case 'assistant.said': return `[assistant] ${out.content ?? ''}`;
+    case 'llm.responded': return out.content ? `[assistant] ${out.content}` : '';
+    case 'tool.called': return `[tool ${inp.name}] ${clip(inp.args && (inp.args.command || inp.args.path || inp.args.file || JSON.stringify(inp.args)))}`;
+    case 'tool.responded': return `[result ${inp.name || ''}] ${clip(out.result)}`;
+    case 'tool.failed': return `[error ${inp.name || ''}] ${clip(out.error)}`;
+    case 'verify.passed': return '[gate] passed';
+    case 'verify.failed': return `[gate] failed (round ${inp.round ?? 1}) exit ${out.verdict?.exit ?? '?'}`;
+    case 'run.checkpoint': return `[checkpoint] ${clip(out.handoff)}`;
+    case 'run.stopped': return `[stopped] ${out.stop}${out.reason ? ` (${out.reason})` : ''}${out.axis ? ` [${out.axis}]` : ''}`;
+    case 'turn.started': return `[turn ${inp.step ?? '?'}]`;
+    default: return '';
+  }
+}
+
+function centredExcerpt(text, at, span = 120) {
+  const start = Math.max(0, at - span), end = Math.min(text.length, at + span);
+  return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ').trim() + (end < text.length ? '…' : '');
+}
+
+// Search across records, newest event first. Returns hits [{ id, runId, tool, ts, excerpt }].
+export function searchRecords(entries, { query, role = 'default', limit = 20 } = {}) {
+  const q = String(query ?? '').toLowerCase();
+  if (!q) return [];
+  const slice = HISTORY_ROLES[role] || HISTORY_ROLES.default;
+  const hits = [];
+  for (const { runId, record } of (entries || [])) {
+    if (!record || typeof record.events !== 'function') continue;
+    const evs = joined(record.events(), record.resolve);
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      if (!slice.has(e.tool)) continue;
+      const text = eventText(e); if (!text) continue;
+      const at = text.toLowerCase().indexOf(q); if (at === -1) continue;
+      hits.push({ id: `${runId}#${i}`, runId, tool: e.tool, ts: e.ts ?? null, excerpt: centredExcerpt(text, at) });
+    }
+  }
+  hits.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)); // newest first
+  return hits.slice(0, limit);
+}
+
+// Read one event's full text by id (`runId#idx`), paged. Returns { id, tool, text,
+// nextOffset } — nextOffset is null when the event is fully read. `limit` is the
+// caller's budget (B4); binaries are summarised by eventText, so a read is bounded.
+export function readEvent(entries, id, { offset = 0, limit = 4000 } = {}) {
+  const hash = String(id ?? '').lastIndexOf('#');
+  if (hash < 0) return { id, error: 'bad id — expected runId#index' };
+  const runId = String(id).slice(0, hash), idx = Number(String(id).slice(hash + 1));
+  const entry = (entries || []).find((x) => String(x.runId) === runId);
+  if (!entry || !entry.record) return { id, error: `no record ${runId}` };
+  const evs = joined(entry.record.events(), entry.record.resolve);
+  const e = evs[idx];
+  if (!e) return { id, error: `no event ${idx} in ${runId}` };
+  const full = eventText(e);
+  const start = Math.max(0, offset | 0);
+  const end = Math.min(full.length, start + Math.max(1, limit | 0));
+  return { id, tool: e.tool, ts: e.ts ?? null, text: full.slice(start, end), nextOffset: end < full.length ? end : null, total: full.length };
+}
+
+// The tool the agent calls to search and read its own run history.
+export function historyTool() {
+  return {
+    type: 'function',
+    function: {
+      name: 'history',
+      description: 'Search or read this project\'s run history — your own past runs, recorded event by event. ' +
+        'op "search": find where something happened (query, optional scope run|task|project, optional role reviewer|supervisor); ' +
+        'returns hits with an id, newest first. op "read": load one event\'s full text by id (paged with offset). ' +
+        'Use this to recover what an earlier run did instead of guessing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['search', 'read'] },
+          query: { type: 'string', description: 'search: text to find (case-insensitive)' },
+          scope: { type: 'string', enum: ['run', 'task', 'project'], description: 'search: how far back (default task)' },
+          role: { type: 'string', enum: ['default', 'reviewer', 'supervisor'], description: 'search: which slice of events (default: the transcript)' },
+          id: { type: 'string', description: 'read: the event id from a search hit (runId#index)' },
+          offset: { type: 'integer', description: 'read: character offset to continue from (default 0)' },
+        },
+        required: ['op'],
+      },
+    },
+  };
+}
+
+// ─────────────────────────────────────────── recovery record (B3) ──
+
+// The stale-steer fix (the "audit-state" reply): a next turn must not re-apply an
+// instruction it already satisfied, and must not read coordination (a gate verdict, a
+// nudge) as the owner's words. This is a PURE fold over ONE run's record — deterministic,
+// so the annotation is a function of the record, never of when it ran (the strict-replay
+// guarantee). It ANNOTATES; it does not drop the transcript (Anvil still carries the paired
+// transcript so a follow-up resumes — this rides alongside as guidance).
+//
+// Each owner input (a user message in the record's run.started) gets a resolution:
+//   open              — the latest owner input, or one with no completion signal after it
+//   likely-satisfied  — a verified gate pass (verify.passed) was recorded AFTER it; HEDGED,
+//                       never a hard claim, because a task-level gate may not cover a specific
+//                       steer — the next turn should verify, not silently redo (and never
+//                       silently skip). Worst case is a cheap re-verify, never a dropped steer.
+export function foldRecovery(events, resolve) {
+  const ev = joined(events, resolve);
+  // Collect owner (user) inputs across every run.started, deduped by text: a re-entered loop
+  // (nudge) repeats the earlier prompts in its run.started, and a repeat is not a new input.
+  const ownerInputs = []; const seenText = new Set();
+  ev.forEach((e, i) => {
+    if (e.tool !== 'run.started') return;
+    for (const m of ((e.input && e.input.messages) || [])) {
+      if (m.role !== 'user') continue;
+      const text = String(m.content ?? ''); const norm = text.replace(/\s+/g, ' ').trim();
+      if (/^\[coordination\]/.test(norm)) continue; // a tagged gate verdict / nudge is not an owner input
+      if (seenText.has(norm)) continue; seenText.add(norm);
+      ownerInputs.push({ text, atIndex: i, id: `#${i}` });
+    }
+  });
+  // A gate pass anywhere in the record is a completion signal for inputs before it.
+  const passIndex = ev.findIndex((e) => e.tool === 'verify.passed');
+  const lastCheckpoint = [...ev].reverse().find((e) => e.tool === 'run.checkpoint');
+  const coordinationCount = ev.filter((e) => e.tool === 'verify.failed').length;
+  const annotated = ownerInputs.map((inp, k) => {
+    const isLatest = k === ownerInputs.length - 1;
+    const gatePassedAfter = passIndex !== -1 && passIndex > inp.atIndex;
+    const resolution = isLatest ? 'open' : (gatePassedAfter ? 'likely-satisfied' : 'open');
+    return { ...inp, resolution };
+  });
+  return {
+    ownerInputs: annotated,
+    coordinationCount,
+    checkpoint: lastCheckpoint ? String(resolve(lastCheckpoint)?.output?.handoff ?? '') : null,
+  };
+}
+
+// A compact, human/model-readable note from foldRecovery — prepended to a resumed run as
+// guidance (a system line), so the model sees which prior asks are likely handled and that
+// coordination lines are not the owner's.
+export function recoveryNote(rec) {
+  if (!rec || !rec.ownerInputs || !rec.ownerInputs.length) return '';
+  const lines = rec.ownerInputs.map((inp) => {
+    const tag = inp.resolution === 'likely-satisfied' ? ' — likely handled (a gate passed after it); verify before redoing' : ' — open';
+    return `  • "${inp.text.replace(/\s+/g, ' ').slice(0, 100)}"${tag}`;
+  });
+  const foot = rec.coordinationCount ? `\n(${rec.coordinationCount} gate-feedback line(s) in the transcript are marked [coordination] — they are not the owner's instructions.)` : '';
+  const cp = rec.checkpoint ? `\nLast checkpoint: ${rec.checkpoint.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+  return 'Recovery note (from the run record — prior owner requests and whether they look handled):\n' + lines.join('\n') + foot + cp;
 }

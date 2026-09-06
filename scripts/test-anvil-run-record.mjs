@@ -33,14 +33,17 @@ for (const m of runTask.matchAll(/runAgentLoop\(\{[\s\S]*?\}\);/g)) {
   assert.ok(!/infer: inferViaHost|onEvent:onLoopEvent\b/.test(site), `a loop still uses the unrecorded seams: ${site.slice(0, 80)}…`);
 }
 assert.match(runTask, /const recEvent = ?\(e\)=>\{ onLoopEvent\(e\); rec\.onEvent\(e\); \}/,
-  'the UI handler still runs (dual-write) AND the recorder sees every event');
+  'the live-UI handler runs for in-run feedback AND the recorder sees every event (the record is the durable copy)');
 assert.match(runTask, /rec\.wrapInfer\(inferViaHost\)/, 'the model exchange is content-addressed through wrapInfer');
 
 // The record is read only after it settles, and the folds are checked against the live state.
 assert.match(runTask, /await rec\.settled\(\);/, 'the record is settled before it is read');
-assert.match(runTask, /foldStatus\(ev, rec\.resolve, \{ gated \}\)/, 'status fold uses the same gated rule as the app');
-assert.match(runTask, /run record disagrees with task status/, 'a status disagreement is surfaced, not swallowed');
-assert.match(runTask, /run record disagrees with the log/, 'a log disagreement is surfaced, not swallowed');
+// Layer 2b: status and the carried transcript are DERIVED from the record's folds, not written
+// in parallel — so there is no dual-write to self-check. The two ⚠ lines are gone.
+assert.match(runTask, /t\.status = foldStatus\(recEvents, rec\.resolve, \{ gated \}\)\.status/, 'status IS the fold, not a parallel computation');
+assert.match(runTask, /t\.convo = await carryForward\(foldTranscript\(recEvents, rec\.resolve\)\)/, 'the carried transcript IS the fold, paired by construction');
+assert.ok(!/run record disagrees/.test(anvil), 'the dual-write self-check is deleted (the record is the source of truth, nothing to disagree with)');
+assert.ok(!/logStart/.test(anvil), 'the self-check\'s logStart bookkeeping is gone with it');
 
 // Persisted OUTSIDE the agent's mount.
 assert.match(anvil, /async function saveRunRecord\(t, rec(, \{[^)]*\})?\)\{/, 'a run store exists');
@@ -114,8 +117,15 @@ assert.match(anvil, /foldStopReasons\(\[\.\.\.found\.values\(\)\]\.map\(f=>f\.re
 assert.match(anvil, /stopsLine: stopReasonsLine\(stops\)/, 'and returns the one-line histogram');
 assert.match(anvil, /run index rebuilt: .*r\.stopsLine/, 'the boot backfill surfaces it');
 
-// 2b gate, live finding 2026-09-06: the self-check compares the record (one run) against the
-// task log (every run) — it must count only the rows this run appended, from a run-start index.
-assert.match(anvil, /const logStart=t\.log\.length;/, 'runTask captures where this run\'s log rows begin');
-assert.match(anvil, /liveTools=t\.log\.slice\(logStart\)\.filter\(r=>r\.k==='tool'\)\.length/, 'the dual-write self-check counts tool rows from this run only');
+// Layer 2b (2026-09-06): the writers t.status/t.convo are gone (derived above). t.log stays a
+// written array — it is what renderLog draws and it carries change/diff chips the record cannot
+// reproduce until pre-images are folded (a parked follow-up: fold the log pane so reload rebuilds
+// it from the record). The record is the tamper-evident source of truth and what history searches.
+assert.match(anvil, /t\.log stays a written array/, 'the code is honest: t.log is written, the record is the source of truth');
+
+// B3: the recovery record. A resumed run is prefaced with a note built from the PRIOR run's
+// record (foldRecovery), and it rides beside the carried transcript — additive, not a replace.
+assert.match(anvil, /t\.recovery = recoveryNote\(foldRecovery\(recEvents, rec\.resolve\)\)/, 'the recovery note is a pure fold of this run\'s record, stashed for the next run');
+assert.match(anvil, /const recoveryPreface = \(t\.recovery/, 'the next run is prefaced with the recovery note');
+assert.match(anvil, /firstMessages=\[sysMsg\(gateNote\+recoveryPreface\), \.\.\.convo\]/, 'the note rides in the system preface beside the carried transcript, not replacing it');
 

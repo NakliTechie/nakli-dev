@@ -12,7 +12,8 @@ import { createShell } from '../../rig/cli/shell.mjs';
 import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
          replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
-         OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine } from '../run-record.mjs';
+         OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine,
+         searchRecords, readEvent, historyTool, HISTORY_ROLES, foldRecovery, recoveryNote } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -210,9 +211,160 @@ await test('a run that died mid-flight reads as running, and the record says whe
   eq(result.stop, 'error', 'sanity: the loop did surface the throw');
 });
 
+// ─────────────────────────────────────────── history / retrieval (B2) ──
+// Build three recorded runs; each writes a distinct file so a later run can find an
+// earlier one's tool output — the "audit-state" rehydration the thread describes.
+async function recordFinding(marker) {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: `investigate ${marker}` }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  const script = [{ content: '', toolCalls: [call('shell', { command: `echo ${marker}` }, 'c0')] }, { content: `found ${marker}`, toolCalls: [] }];
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()], infer: rec.wrapInfer(scripted(script)), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  return rec;
+}
+
+await test('HISTORY search: from "run 3" a query finds a tool result recorded in run 1, newest first, with a readable id', async () => {
+  const entries = [
+    { runId: 'run1', record: await recordFinding('WIDGET-ALPHA') },
+    { runId: 'run2', record: await recordFinding('WIDGET-BETA') },
+    { runId: 'run3', record: await recordFinding('WIDGET-GAMMA') },
+  ];
+  const hits = searchRecords(entries, { query: 'widget-alpha' });
+  assert(hits.length >= 1, 'the run-1 finding is searchable from run 3');
+  assert(hits.some((h) => h.runId === 'run1' && /WIDGET-ALPHA/.test(h.excerpt)), 'hit names its run and centres the excerpt on the match');
+  assert(/^run1#\d+$/.test(hits.find((h) => h.runId === 'run1').id), 'the id is runId#index');
+  const all = searchRecords(entries, { query: 'widget', limit: 20 });
+  const ts = all.map((h) => h.ts); assert(ts.every((t, i) => i === 0 || ts[i - 1] >= t), 'newest first');
+  eq(searchRecords(entries, { query: '' }).length, 0, 'an empty query finds nothing');
+  eq(searchRecords(entries, { query: 'widget', limit: 2 }).length, 2, 'limit caps the hits');
+});
+
+await test('HISTORY role slices: reviewer sees tool events, supervisor sees the trajectory, neither leaks the other', async () => {
+  const entries = [{ runId: 'r', record: await recordFinding('SLICE-X') }];
+  const rev = searchRecords(entries, { query: 'slice-x', role: 'reviewer' });
+  assert(rev.length >= 1 && rev.every((h) => HISTORY_ROLES.reviewer.has(h.tool)), 'reviewer hits are tool/verify events');
+  const sup = searchRecords(entries, { query: 'slice-x', role: 'supervisor' });
+  assert(sup.every((h) => HISTORY_ROLES.supervisor.has(h.tool)), 'supervisor hits are turns/stops/verify only');
+  assert(!sup.some((h) => h.tool === 'tool.responded'), 'the supervisor slice does not carry tool results');
+});
+
+await test('HISTORY read: an event pages by offset and preserves the tail; a bad id is reported, not thrown', async () => {
+  const entries = [{ runId: 'run1', record: await recordFinding('PAGEME') }];
+  const hit = searchRecords(entries, { query: 'pageme', role: 'reviewer' }).find((h) => h.tool === 'tool.responded');
+  assert(hit, 'the tool result is a hit');
+  const p1 = readEvent(entries, hit.id, { offset: 0, limit: 4 });
+  eq(p1.text.length, 4, 'first page is limit-sized'); eq(p1.nextOffset, 4, 'nextOffset points past it');
+  const p2 = readEvent(entries, hit.id, { offset: p1.nextOffset, limit: 4000 });
+  assert(p2.text.length > 0 && p2.nextOffset === null, 'the tail reads to the end');
+  const whole = readEvent(entries, hit.id, { offset: 0, limit: 100000 });
+  eq(p1.text + readEvent(entries, hit.id, { offset: 4, limit: 100000 }).text, whole.text, 'the pages reassemble the whole event');
+  assert(readEvent(entries, 'nope', {}).error, 'a bad id is an error field'); assert(readEvent(entries, 'run1#999', {}).error, 'a missing event is an error');
+});
+
+await test('HISTORY never inlines base64/data-URI payloads; the tool advertises search + read', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'grab the image' }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  const bigB64 = 'A'.repeat(5000);
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'cat img' }, 'c0')] }, { content: 'ok', toolCalls: [] }])),
+    executeTool: async () => bigB64, onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  const entries = [{ runId: 'img', record: rec }];
+  const read = readEvent(entries, 'img#' + rec.events().findIndex((e) => e.tool === 'tool.responded'), { limit: 100000 });
+  assert(/binary\/base64 — not inlined/.test(read.text) && !read.text.includes(bigB64), 'a base64 blob is summarised, never inlined');
+  const t = historyTool(); eq(t.function.name, 'history', 'named history');
+  assert(t.function.parameters.properties.op.enum.join(',') === 'search,read', 'search + read');
+});
+
+// ─────────────────────────────────────────── recovery record (B3) ──
+// A run that RESUMES after a gate pass, with two owner inputs (the original ask and a steer).
+async function recordSteered({ gatePass }) {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  // First run.started carries the original ask; a nudge-style second run.started adds the steer.
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }], tools: [shellTool()] });
+  const verify = gatePass ? async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) : null;
+  const r1 = await runAgentLoop({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }], tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'echo built' }, 'c0')] }, { content: 'built it', toolCalls: [] }])),
+    executeTool: makeShellExecutor(shell), onEvent: rec.onEvent, verify });
+  await rec.finish(r1);
+  // the steer, as a second recorded run.started
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'build the parser' }, { role: 'assistant', content: 'built it' }, { role: 'user', content: 'also handle comments' }], tools: [shellTool()] });
+  const r2 = await runAgentLoop({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'also handle comments' }], tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: 'ok', toolCalls: [] }])), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent });
+  await rec.finish(r2); await rec.settled();
+  return rec;
+}
+
+await test('RECOVERY is a pure fold: the SAME record yields an identical recovery record (strict-replay)', async () => {
+  const rec = await recordSteered({ gatePass: true });
+  const a = foldRecovery(rec.events(), rec.resolve), b = foldRecovery(rec.events(), rec.resolve);
+  eq(JSON.stringify(a), JSON.stringify(b), 'deterministic — the annotation is a function of the record, not of when it ran');
+  // and stable across an export/reload round-trip (the record is the whole input)
+  const back = loadRecord(rec.export());
+  eq(JSON.stringify(foldRecovery(back.events(), back.resolve)), JSON.stringify(a), 'same after export/load');
+});
+
+await test('RECOVERY resolution: a gate pass marks an EARLIER owner input likely-satisfied; the latest stays open; ungated stays open', async () => {
+  const passed = foldRecovery((await recordSteered({ gatePass: true })).events(), (await recordSteered({ gatePass: true })).resolve);
+  // rebuild cleanly (resolve must match the same record)
+  const rp = await recordSteered({ gatePass: true }); const p = foldRecovery(rp.events(), rp.resolve);
+  eq(p.ownerInputs.length, 2, 'two owner inputs: the ask and the steer');
+  eq(p.ownerInputs[0].resolution, 'likely-satisfied', 'the original ask, with a gate pass after it, is likely handled');
+  eq(p.ownerInputs[p.ownerInputs.length - 1].resolution, 'open', 'the LATEST owner input is always open — never marked satisfied');
+  const ru = await recordSteered({ gatePass: false }); const u = foldRecovery(ru.events(), ru.resolve);
+  assert(u.ownerInputs.every((x) => x.resolution === 'open'), 'no gate pass → everything stays open (never a false satisfied — the BLOCKS failure)');
+  assert(/likely handled.*verify before redoing/.test(recoveryNote(p)), 'the note HEDGES: verify, do not blindly redo'); void passed;
+});
+
+await test('RECOVERY: coordination (a carried gate verdict) is tagged and never reads as an owner turn', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'fix the build' }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  let n = 0;
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'false' }, 'c0')] }, { content: '', toolCalls: [call('shell', { command: 'true' }, 'c1')] }, { content: 'fixed', toolCalls: [] }])),
+    executeTool: makeShellExecutor(shell), onEvent: rec.onEvent, verify: async () => (++n >= 2 ? { ok: true, exit: 0 } : { ok: false, exit: 1 }), maxVerifyRounds: 3 });
+  await rec.finish(r); await rec.settled();
+  const t = foldTranscript(rec.events(), rec.resolve);
+  const gate = t.find((m) => m.role === 'user' && /Gate failed/.test(m.content || ''));
+  assert(gate && /^\[coordination\]/.test(gate.content), 'a carried gate verdict is tagged [coordination]');
+  const ownerAt = t.findIndex((m) => m.role === 'user' && /fix the build/.test(m.content || ''));
+  const coordAt = t.findIndex((m) => /^\[coordination\]/.test(m.content || ''));
+  assert(ownerAt >= 0 && (coordAt === -1 || coordAt > ownerAt), 'coordination never precedes the owner intent');
+  // a [coordination]-tagged user turn (a nudge or gate verdict) is NOT an owner input in the recovery record
+  const nudged = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await nudged.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'real ask' }] });
+  await nudged.finish({ stop: 'done', steps: 0 });
+  await nudged.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'real ask' }, { role: 'user', content: '[coordination] You described the work but did not do it.' }] });
+  await nudged.finish({ stop: 'done', steps: 0 }); await nudged.settled();
+  const rec2 = foldRecovery(nudged.events(), nudged.resolve);
+  eq(rec2.ownerInputs.length, 1, 'the nudge is not counted as an owner request'); eq(rec2.ownerInputs[0].text, 'real ask', 'only the real ask');
+});
+
+await test('a checkpoint is recorded on the chain and reads back through the history tool (B4)', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec.start({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'long task' }], tools: [] });
+  rec.onEvent({ type: 'turn-start', step: 0 });
+  await rec.checkpoint('goal: ship X. progress: wrote the module. next: the test.');
+  await rec.finish({ stop: 'done', steps: 1, verified: false }); await rec.settled();
+  const ev = rec.events();
+  const cp = ev.find((e) => e.tool === 'run.checkpoint'); assert(cp, 'the checkpoint is on the chain');
+  eq((await verifyChain(ev)).ok, true, 'the chain still verifies with the new verb');
+  eq(rec.resolve(cp).output.handoff, 'goal: ship X. progress: wrote the module. next: the test.', 'the handoff is the payload');
+  const hits = searchRecords([{ runId: 'r', record: rec }], { query: 'ship X', role: 'supervisor' });
+  assert(hits.some((h) => h.tool === 'run.checkpoint'), 'a checkpoint is in the supervisor slice');
+});
+
 await test('the fixed vocabulary is frozen and complete for the loop', () => {
   assert(Object.isFrozen(RUN_EVENTS), 'frozen');
-  for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped'])
+  for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped', 'run.checkpoint'])
     assert(RUN_EVENTS.includes(v), `missing verb ${v}`);
 });
 

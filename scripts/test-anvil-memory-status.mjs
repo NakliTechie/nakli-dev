@@ -31,11 +31,11 @@ for (const p of pushes) {
 assert.match(anvil, /recordFact\(note, ar&&ar\.type, 'hypothesis', \{ slot: ar&&ar\.slot, derived_from: ar&&ar\.derived_from, supersedes: ar&&ar\.supersedes, weight: ar&&ar\.weight \}\)/, 'the remember handler passes slot/derived_from/supersedes/weight to recordFact');
 assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supersedes its current holder at write time');
 // A2: search before save on BOTH remember paths (task loop + prime), and one budget per run.
-assert.equal((anvil.match(/findDuplicate\(all, note(?:, \{ exempt \})?\); if\(dup\) return duplicateReply\(dup\);/g) || []).length, 2, 'both remember paths search before they save');
-assert.equal((anvil.match(/const cap=checkRulesCap\(all, note\); if\(!cap\.ok\) return rulesCapReply\(cap\);/g) || []).length, 2, 'both remember paths cap rules');
+assert.equal((anvil.match(/findDuplicate\(all, note(?:, \{ exempt \})?\); if\(dup\)[\s\S]{0,80}?return duplicateReply\(dup\)/g) || []).length, 2, 'both remember paths search before they save (main path also audits the refusal)');
+assert.equal((anvil.match(/const cap=checkRulesCap\(all, note\); if\(!cap\.ok\)[\s\S]{0,80}?return rulesCapReply\(cap\)/g) || []).length, 2, 'both remember paths cap rules');
 assert.match(anvil, /exempt=\[ar&&ar\.supersedes, ar&&ar\.slot\?slotHolder\(all, ar\.slot\):null\]/, 'a declared replacement is exempt from the duplicate check (the correction exit)');
 assert.match(anvil, /const remBudget=createRememberBudget\(\);[\s\S]{0,400}?const executeTool = async/, 'the remember budget is created once per run, just above the executor');
-assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\) return budgetSpentReply\(take\);/, 'the remember handler spends the budget and refuses when it is gone');
+assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\)[\s\S]{0,80}?return budgetSpentReply\(take\)/, 'the remember handler spends the budget and refuses when it is gone');
 
 // The memory panel must SHOW a retracted fact rather than listing it as live —
 // retract visibly, never silently delete.
@@ -62,5 +62,13 @@ const dropped = buildMemoryIndex([
 ]);
 assert.ok(dropped.includes('dead-idea'),
   'sanity: without status the filter cannot engage — which is why the app must pass it');
+
+// B5: recall pages a long fact to the budget (unknown budget → a safe fixed cap), refusing an
+// offset past the end; a refused memory write leaves a content-free audit row (hash + category).
+assert.match(anvil, /const cap=bud\.usable \? Math\.min\(8000, Math\.max\(1000, bud\.remaining\*4\)\) : 4000/, 'recall pages to the budget, else a fixed cap');
+assert.match(anvil, /recall: offset .* is past the end/, 'an offset past the end is refused, not a silent empty read');
+assert.match(anvil, /function auditRefusal\(category, note\)/, 'a refused write leaves a content-free audit row');
+assert.match(anvil, /'memory write refused \['\+category\+'\] · '\+shortHash\(note\)/, 'the audit row is a hash + category, never the note text');
+assert.equal((anvil.match(/auditRefusal\(/g) || []).length, 4, 'the audit fires at each refusal site (3 in the handler + the definition)');
 
 console.log('anvil-memory-status: belief revision is wired through to the app');
