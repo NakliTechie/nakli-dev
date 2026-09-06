@@ -154,9 +154,13 @@ await test('NAF-01: skill activation is ENFORCED, not advisory', async () => {
   // So: create a quarantined skill, edit one line to `status: active`, and it was served.
   // Defence in depth — refuse the general tools AND re-scan at the point of use.
   assert.match(src, /scanSkill\(/, 'the load path re-scans the skill it is about to serve');
-  const load = src.slice(src.indexOf('skillSession.noteRead') - 1200, src.indexOf('skillSession.noteRead'));
-  assert.match(load, /scanSkill/, 'the re-scan happens BEFORE the body is handed over');
-  assert.ok(/guard\.state===['"]refused['"]|guard\.state===['"]quarantined['"]/.test(load), 'a failing scan refuses to bind');
+  // the scan must precede EVERY path that hands the body over — including the staged-draft one
+  const scanAt = src.indexOf('const guard = scanSkill(');
+  assert.ok(scanAt > 0, 'the load path scans');
+  assert.ok(/guard\.state===['"]refused['"]|guard\.state===['"]quarantined['"]/.test(src), 'a failing scan refuses to bind');
+  for (const m of src.matchAll(/skillSession\.noteRead\(name\)/g)) {
+    assert.ok(m.index > scanAt, 'every path that serves a skill body is downstream of the sentinel re-scan');
+  }
   // and the write guard covers every tool that can put bytes in that directory
   const guard = /\['write','edit','apply_patch','edit_lines','remove','move'\]\.includes\(nm\)/.test(src);
   assert.ok(guard, 'the general file tools are refused against the skills directory');
