@@ -232,8 +232,10 @@
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool, INJECTED_STATUSES } from '../../sys/ai/skills.mjs';
   import { skillManageTool, planSkillWrite, createSkillSession, SKILL_FILE } from '../../sys/ai/skill-manage.mjs';
+  import { createProposalLedger } from '../../sys/ai/proposal-fingerprint.mjs';
+  import { skillLifecycle, applySkillStatus } from '../../sys/ai/skill-lifecycle.mjs';
   import { contextRemainingTool, checkpointTool, contextBudget, windowFromOllama, windowForPreset, capHandoff } from '../../sys/ai/context-budget.mjs';
-  import { runLearnReview, shouldAutoReview } from '../../sys/ai/learn.mjs';
+  import { runLearnReview, shouldAutoReview, learnReviewTool, AUTO_REVIEW_IDLE_MS } from '../../sys/ai/learn.mjs';
   import { sentinelLine } from '../../sys/ai/skill-sentinel.mjs';
   import { makeEnvelope } from '../../sys/staging/envelope.mjs';
   import { registerAppDiffTypes } from '../../sys/staging/diff-types.mjs';
@@ -1335,6 +1337,7 @@
   const MODE_NOTE = { code:'', plan:' PLAN mode: read and think only — no writes/edits/shell; produce a concise plan.', ask:' ASK mode: read-only; answer the question, do not modify anything.' };
 
   let running=false;
+  let autoReviewTimer=null; // the idle-deferred post-run review (C5)
   let abortController=null;   // aborts the in-flight run (the Stop button)
   // Enter sends; while a run is in flight, Enter/Send QUEUES the prompt (Codex-
   // style) and it runs automatically when the current run finishes.
@@ -1353,22 +1356,37 @@
   // STAGES any proposed skill (planSkillWrite → status staged) or fact (recordFact → hypothesis).
   // Nothing lands active. Poison-checked (C3) via a per-project proposal ledger so a rejected
   // proposal is not re-proposed. `rec` is the just-finished recorder.
-  let learnLedger = null; // reused across a task so a rejection sticks within the session
+  // A rejected proposal must not be re-proposed. This was declared null and never assigned, so
+  // every review ran against nothing and the poison check was a no-op (forward-pass NAF-09).
+  // One ledger per project, rebuilt when the project changes — rejections stick for the session.
+  let learnLedger = null, learnLedgerProject = null;
+  function projectLedger(){
+    const proj = String(state.activeProject||'local');
+    if(learnLedgerProject !== proj){ learnLedgerProject = proj; learnLedger = createProposalLedger({ app:'anvil', principal:'anvil:'+proj }); }
+    return learnLedger;
+  }
   async function learnThisRun(t, rec){
     if(!(nak && nak.capabilities && nak.capabilities.ai)) return null;
     const propose = async (pr)=>{
       try{
         if(pr.kind==='skill'){
-          const plan = planSkillWrite({ op:'create', name:pr.name, description:pr.description||'', content:pr.content||pr.description||pr.name }, { existing:null, session:createSkillSession(), now:new Date().toISOString() });
-          if(!plan.ok) return { ok:false };
-          const dir = SKILLS_DIR+'/'+pr.name; await fs.write(dir+'/'+SKILL_FILE, plan.skillText);
+          // Tell the planner what is actually on disk. Passing existing:null bypassed its
+          // refusal, so a review proposal silently overwrote an owner's own skill (NAF-05).
+          const dir = SKILLS_DIR+'/'+pr.name;
+          let existing = null;
+          try{ const cur = await fs.read(dir+'/'+SKILL_FILE,{encoding:'utf-8'}); if(cur&&cur.ok) existing = parseSkill(cur.data); }catch(_){}
+          const plan = planSkillWrite({ op:'create', name:pr.name, description:pr.description||'', content:pr.content||pr.description||pr.name }, { existing, session:createSkillSession(), now:new Date().toISOString() });
+          if(!plan.ok) return { ok:false, error:plan.error||'refused' };
+          // A write that failed is not a staged skill (NAF-11).
+          const w = await fs.write(dir+'/'+SKILL_FILE, plan.skillText);
+          if(!(w&&w.ok)) return { ok:false, error:(w&&w.error)||'write failed' };
           return { ok:true, staged:'skill:'+pr.name+' ('+plan.status+')' };
         }
         if(pr.kind==='fact'){ const slug=await recordFact(pr.note||pr.description||pr.name, 'project', 'hypothesis'); return { ok: !!slug, staged:'fact:'+slug }; }
       }catch(_){}
       return { ok:false };
     };
-    const rep = await runLearnReview({ record:{ events:rec.events, resolve:rec.resolve }, infer:inferViaHost, ledger:learnLedger, propose, now:Date.now() });
+    const rep = await runLearnReview({ record:{ events:rec.events, resolve:rec.resolve }, infer:inferViaHost, ledger:projectLedger(), propose, now:Date.now() });
     if(rep.staged.length) (t.log=t.log||[]).push({ k:'system', text:'Learned from this run — staged for your approval: '+rep.staged.map(x=>x.staged).join(', ')+'. Nothing was saved active.' });
     else (t.log=t.log||[]).push({ k:'system', text:'Reviewed this run — nothing new worth staging.'+(rep.dropped.length?(' ('+rep.dropped.length+' already-rejected proposal(s) skipped.)'):'') });
     renderFiles(); renderLog();
@@ -1420,14 +1438,17 @@
   // task = all of this task's records, project = every project's. The in-flight run
   // is not here until saveRunRecord writes it — you cannot grep a run that has not
   // finished, and the tool says so.
-  async function loadTaskRecords(scope){
-    const proj=String(state.activeProject||'local'), task=String((activeTask()||{}).id||'');
+  // `callerTaskId` names the task that ASKED. Falling back to activeTask() bound history to
+  // whatever the user had selected, so a task running in the background read another task's
+  // records the moment someone clicked away (forward-pass NAF-07).
+  async function loadTaskRecords(scope, callerTaskId){
+    const proj=String(state.activeProject||'local'), task=String(callerTaskId||(activeTask()||{}).id||'');
     const entries=[];
     try{
       let root=await navigator.storage.getDirectory();
       const runs=await (await root.getDirectoryHandle('anvil')).getDirectoryHandle('runs');
       for await (const [p,ph] of runs.entries()){ if(ph.kind!=='directory') continue;
-        if(scope!=='project' && p!==proj) continue;
+        if(p!==proj) continue; // EVERY scope stays inside the active project (NAF-02: 'project' skipped this filter and read every project's records)
         for await (const [tk,th] of ph.entries()){ if(th.kind!=='directory') continue;
           if(scope!=='project' && tk!==task) continue;
           const files=[]; for await (const [name,fh] of th.entries()){ if(name.endsWith('.json')) files.push([name,fh]); }
@@ -1526,6 +1547,11 @@
     const remBudget=createRememberBudget();
     // C1: read-before-write — which skills THIS run has loaded through the `skill` tool.
     const skillSession=createSkillSession();
+    // The run this executor is serving. executeTool is defined long before runTask creates the
+    // recorder, so it could not see either: checkpoint referenced `rec` out of scope and threw
+    // into a swallowing catch (NAF-08), and history fell back to the selected task (NAF-07).
+    // runTask sets this for the duration of a run and clears it after.
+    let runCtx = null;
     const executeTool = async (nm, ar, callObj)=>{
       // Pre-tool hook guard, hoisted to the TOP: skill/recall/remember/revise/
       // synthesize all return below before the old guard site, so a project's
@@ -1565,7 +1591,7 @@
       if(nm==='history'){
         const op=String((ar&&ar.op)||'');
         const scope=['run','task','project'].includes(ar&&ar.scope)?ar.scope:'task';
-        const entries=await loadTaskRecords(scope);
+        const entries=await loadTaskRecords(scope, runCtx && runCtx.t && runCtx.t.id);
         if(op==='search'){
           const role=['reviewer','supervisor'].includes(ar&&ar.role)?ar.role:'default';
           const hits=searchRecords(entries,{ query:String((ar&&ar.query)||''), role, limit:20 });
@@ -1588,10 +1614,22 @@
       }
       // checkpoint (B4): record a capped handoff as the next turn's landmark, on the chain.
       // Capped at 20k chars AND half the usable window (when the window is known).
+      // learn_this_run (C2): the EXPLICIT fork. It was advertised as shipped but never registered
+      // or handled, so the only way in was the automatic trigger (forward-pass NAF-04).
+      if(nm==='learn_this_run'){
+        if(!(runCtx && runCtx.rec && runCtx.t)) return 'learn_this_run: no active run to review.';
+        const rep = await learnThisRun(runCtx.t, runCtx.rec);
+        if(!rep) return 'learn_this_run: no AI capability available for the review.';
+        return rep.staged.length
+          ? ('Staged for your approval: '+rep.staged.map(x=>x.staged).join(', ')+'. Nothing was saved active.')
+          : ('Reviewed this run — nothing new worth staging.'+(rep.dropped.length?(' ('+rep.dropped.length+' already-rejected proposal(s) skipped.)'):''));
+      }
       if(nm==='checkpoint'){
         const b=await currentBudget();
         const capped=capHandoff(String((ar&&ar.handoff)||''), { usable: b.usable });
-        try{ await rec.checkpoint(capped); }catch(_){ return 'checkpoint: could not record (no active run record).'; }
+        const cpRec = runCtx && runCtx.rec;
+        if(!cpRec) return 'checkpoint: could not record (no active run record).';
+        try{ await cpRec.checkpoint(capped); }catch(e){ return 'checkpoint: could not record ('+String((e&&e.message)||e)+').'; }
         return 'Checkpoint recorded ('+capped.length+' chars) — it becomes the next turn\'s starting landmark.';
       }
       // Recall: load one memory fact's full detail on demand.
@@ -1795,7 +1833,7 @@
     if(mode==='code') tools.push(synthesizeTool());
     tools.push(historyTool()); // read-only: search/read past runs, every mode
     tools.push(contextRemainingTool()); // read-only: the honest budget, every mode
-    if(mode==='code') tools.push(checkpointTool());
+    if(mode==='code'){ tools.push(checkpointTool()); tools.push(learnReviewTool()); }
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());
     if(mode==='code' && memoryIndex) tools.push(reviseTool()); // belief revision over existing facts
@@ -1828,6 +1866,9 @@
       // (t.recovery) built from the PRIOR run's record — which owner asks look handled, and that
       // coordination lines are tagged — so a satisfied steer is not blindly re-applied.
       const rec = createRunRecorder({ app:'anvil', principal:'anvil:'+String(state.activeProject||'local') });
+      // Hand the executor this run's identity: which task asked, and where to record. Without it
+      // checkpoint silently never recorded and history followed the UI selection (NAF-07/NAF-08).
+      runCtx = { t, rec };
       const gateNote = verify?(' A verify gate is set: `'+verifyCmd+'`. You are not done until it exits 0 — call task_done when you believe the work is complete and it will run.'):'';
       const recoveryPreface = (t.recovery && String(t.recovery).trim()) ? ('\n\n'+t.recovery) : '';
       const firstMessages=[sysMsg(gateNote+recoveryPreface), ...convo];
@@ -1934,14 +1975,23 @@
         // (running flips true). Fire-and-forget; a review failure never fails the task.
         try{
           let isLocal=true; try{ const ep=(nak&&nak.ai&&nak.ai.endpoint)||null; isLocal = ep ? ['ollama','lmstudio','llamacpp'].includes(ep.preset) : true; }catch(_){ isLocal=true; }
-          const decision=shouldAutoReview({ outcome: foldOutcome(ev, rec.resolve).label, stop: result.stop, idleMs: 0, isLocalModel: isLocal });
-          if(decision.review) learnThisRun(t, rec).catch(()=>{});
+          // C5: idleMs was hardcoded 0, so `isLocalModel && idleMs < AUTO_REVIEW_IDLE_MS` stayed
+          // permanently true and a local model NEVER reviewed — the scheduler skipped rather than
+          // deferred (NAF-04). Defer for real: wait for quiet, and drop it if a new run began.
+          const outcomeLabel = foldOutcome(ev, rec.resolve).label;
+          const decide=(idleMs)=>shouldAutoReview({ outcome: outcomeLabel, stop: result.stop, idleMs, isLocalModel: isLocal });
+          if(decide(0).review) learnThisRun(t, rec).catch(()=>{});
+          else if(decide(AUTO_REVIEW_IDLE_MS).review){
+            clearTimeout(autoReviewTimer);
+            autoReviewTimer=setTimeout(()=>{ if(!running) learnThisRun(t, rec).catch(()=>{}); }, AUTO_REVIEW_IDLE_MS);
+          }
         }catch(_){}
       }catch(e){ t.log.push({k:'system',text:'record: could not persist — '+String(e&&e.message||e)}); }
     }catch(e){
       t.status='error';
       t.log.push({k:'system',text:String(e&&e.message||e)});
     }finally{
+      runCtx = null; // the executor serves no run between tasks
       const wasAborted = abortController && abortController.signal.aborted;
       running=false; abortController=null; setSend(); save(); renderAll();
       if(nak&&nak.title) nak.title('Anvil — '+t.title);

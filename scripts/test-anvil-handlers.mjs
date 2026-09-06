@@ -1,0 +1,156 @@
+// Drive Anvil's REAL inline handlers headlessly — the check the grep anchors could not be.
+//   node scripts/test-anvil-handlers.mjs
+//
+// The 2026-09-07 forward pass found four items marked SHIPPED that did not work, plus a set of
+// app-seam bugs, all under a green 76-step gate. Every one of them is invisible to a grep: a
+// variable that is never assigned, a binding referenced out of scope, an import that does not
+// exist, a filter whose condition is inverted. This file extracts the actual functions and calls
+// them, so those failures are loud.
+import assert from 'node:assert/strict';
+import { inlineModule, extractFunction, instantiate, memFs, failingFs } from './anvil-harness.mjs';
+
+const src = await inlineModule();
+let passed = 0; const failures = [];
+async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
+
+// ── a fake OPFS tree: { project: { task: { 'file.json': dumpObject } } } ──────────────
+function opfs(tree) {
+  const dirHandle = (obj) => ({
+    kind: 'directory',
+    async getDirectoryHandle(name) { if (!(name in obj)) throw new Error('NotFound ' + name); return dirHandle(obj[name]); },
+    async *entries() {
+      for (const [k, v] of Object.entries(obj)) {
+        yield [k, k.endsWith('.json')
+          ? { kind: 'file', async getFile() { return { async text() { return JSON.stringify(v); } }; } }
+          : dirHandle(v)];
+      }
+    },
+  });
+  return { storage: { async getDirectory() { return dirHandle({ anvil: { runs: tree } }); } } };
+}
+const DUMP = { events: [], blobs: {} };
+
+// ── NAF-02 + NAF-07 — history scope ───────────────────────────────────────────────────
+await test('NAF-02: history "project" scope reads ONLY the active project', async () => {
+  const fn = instantiate(extractFunction(src, 'loadTaskRecords'), 'loadTaskRecords', {
+    state: { activeProject: 'A' },
+    activeTask: () => ({ id: 'a1' }),
+    navigator: opfs({ A: { a1: { '1.json': DUMP } }, B: { b1: { '1.json': DUMP } } }),
+    loadRecord: (d) => d,
+  });
+  const got = await fn('project');
+  assert.equal(got.length, 1, `project scope must not cross projects — got ${got.length} records: ${JSON.stringify(got.map((e) => e.runId))}`);
+});
+
+await test('NAF-02: task scope stays within the active project and task', async () => {
+  const fn = instantiate(extractFunction(src, 'loadTaskRecords'), 'loadTaskRecords', {
+    state: { activeProject: 'A' },
+    activeTask: () => ({ id: 'a1' }),
+    navigator: opfs({ A: { a1: { '1.json': DUMP }, a2: { '1.json': DUMP } }, B: { b1: { '1.json': DUMP } } }),
+    loadRecord: (d) => d,
+  });
+  assert.equal((await fn('task')).length, 1, 'task scope is one task of one project');
+});
+
+await test('NAF-07: history binds to the CALLING task, not the selected UI task', async () => {
+  // The UI has moved on to a2 while task a1 is still running and calls history.
+  const fn = instantiate(extractFunction(src, 'loadTaskRecords'), 'loadTaskRecords', {
+    state: { activeProject: 'A' },
+    activeTask: () => ({ id: 'a2' }),          // the user clicked away
+    navigator: opfs({ A: { a1: { 'r.json': { mine: 'a1' } }, a2: { 'r.json': { mine: 'a2' } } } }),
+    loadRecord: (d) => d,
+  });
+  const got = await fn('task', 'a1');           // the CALLER names its own task
+  assert.equal(got.length, 1, 'one task');
+  assert.equal(got[0].record.mine, 'a1', `history followed the SELECTED task (a2) instead of the calling task (a1) — got ${got[0].record.mine}`);
+});
+
+// ── NAF-05 / NAF-09 / NAF-11 — the review sink ────────────────────────────────────────
+function learnCtx(over = {}) {
+  const staged = [];
+  const fs = over.fs || memFs();
+  return {
+    ctx: {
+      nak: { capabilities: { ai: true } },
+      fs,
+      SKILLS_DIR: '.anvil/skills', SKILL_FILE: 'SKILL.md',
+      planSkillWrite: (spec, opts) => { staged.push({ spec, opts }); return opts.existing ? { ok: false, error: 'exists' } : { ok: true, status: 'staged', skillText: '---\nname: ' + spec.name + '\n---\n' + spec.content }; },
+      createSkillSession: () => ({}),
+      recordFact: async () => 'slug',
+      inferViaHost: async () => ({ content: '' }),
+      runLearnReview: async (a) => { if (over.onReview) await over.onReview(a); return over.report || { staged: [], dropped: [] }; },
+      renderFiles: () => {}, renderLog: () => {},
+      state: { activeProject: 'A' },
+      parseSkill: (t) => ({ name: /name:\s*(\S+)/.exec(t || '')?.[1] || '', body: String(t || '') }),
+      projectLedger: () => over.ledger || { reject: async () => {} },
+      ...over.ctx,
+    },
+    staged, fs,
+  };
+}
+
+await test('NAF-09: the rejection ledger is assigned, not permanently null', async () => {
+  // The defect is structural: `let learnLedger = null` is declared and only ever READ, so every
+  // review runs against an empty ledger and a rejected proposal is re-proposed forever.
+  assert.match(src, /learnLedger/, 'the ledger binding exists');
+  const assigned = /learnLedger\s*=(?!=)/g;
+  const writes = (src.match(assigned) || []).filter((m) => true).length;
+  assert.ok(writes >= 2, `learnLedger is written ${writes} time(s) — declaration only. It must be assigned a real ledger (load/create per project) or the poison check is a no-op`);
+});
+
+await test('NAF-05: the review sink does not overwrite an existing owner skill', async () => {
+  const fs = memFs({ '.anvil/skills/deploy/SKILL.md': '---\nname: deploy\n---\nOWNER ORIGINAL' });
+  const { ctx, staged } = learnCtx({ fs, report: { staged: [], dropped: [] },
+    onReview: async (a) => { await a.propose({ kind: 'skill', name: 'deploy', content: 'REVIEW REPLACEMENT' }); } });
+  const fn = instantiate(extractFunction(src, 'learnThisRun'), 'learnThisRun', ctx);
+  await fn({ log: [] }, { events: [], resolve: () => ({}) });
+  assert.ok(staged.length, 'the planner was consulted');
+  assert.ok(staged[0].opts.existing, 'the planner must be told the skill EXISTS; existing:null bypasses its refusal');
+  assert.match(fs.store['.anvil/skills/deploy/SKILL.md'], /OWNER ORIGINAL/, "the owner's skill was overwritten by a review proposal");
+});
+
+await test('NAF-11: a failed skill write is reported, not swallowed as staged', async () => {
+  let result = null;
+  const { ctx } = learnCtx({ fs: failingFs('disk full'),
+    onReview: async (a) => { result = await a.propose({ kind: 'skill', name: 'x', content: 'body' }); } });
+  const fn = instantiate(extractFunction(src, 'learnThisRun'), 'learnThisRun', ctx);
+  await fn({ log: [] }, { events: [], resolve: () => ({}) });
+  assert.ok(result && result.ok === false, `a failing fs.write must not report success — got ${JSON.stringify(result)}`);
+});
+
+// ── NAF-04 / NAF-08 / NAF-19 — wiring the grep anchors could not see ───────────────────
+await test('NAF-08: the checkpoint handler can actually reach the run recorder', async () => {
+  // The defect was a SCOPE error a grep cannot see: executeTool referenced a binding declared
+  // 236 lines later, the ReferenceError was swallowed by catch(_), and checkpoint silently
+  // never recorded. Assert the binding it uses is declared BEFORE the executor, and assigned.
+  const decl = src.search(/\n\s*let runCtx\s*=/);
+  const exec = src.search(/const executeTool\s*=/);
+  assert.ok(decl >= 0, 'the executor has a run-context binding');
+  assert.ok(decl < exec, 'the run context must be declared before executeTool, not after it');
+  assert.ok(/runCtx\s*=\s*\{[^}]*rec/.test(src), 'runTask assigns the recorder into the run context');
+  assert.ok(/runCtx\s*=\s*null/.test(src), 'the run context is cleared between runs');
+  const cp = src.slice(src.indexOf("nm==='checkpoint'"), src.indexOf("nm==='checkpoint'") + 900);
+  assert.ok(/runCtx/.test(cp), 'the checkpoint handler reads the run context rather than an out-of-scope binding');
+  assert.ok(!/\brec\.checkpoint\(/.test(cp), 'it no longer calls the out-of-scope `rec`');
+});
+
+await test('NAF-04: the learn fork is reachable — tool registered, handled, and deferred not skipped', async () => {
+  assert.match(src, /learnReviewTool/, 'learnReviewTool is imported and registered as a tool');
+  assert.ok(/nm===['"]learn_this_run['"]/.test(src), 'executeTool has a learn_this_run branch — without it the advertised entry point does not exist');
+  // the scheduler must DEFER on a local model, not skip forever: idleMs was hardcoded 0, which
+  // made `isLocalModel && idleMs < AUTO_REVIEW_IDLE_MS` permanently true.
+  assert.ok(!/shouldAutoReview\(\{[^}]*idleMs:\s*0\s*,/.test(src), 'the trigger no longer hardcodes idleMs:0');
+  assert.match(src, /AUTO_REVIEW_IDLE_MS/, 'the trigger uses the idle constant');
+  assert.match(src, /autoReviewTimer\s*=\s*setTimeout/, 'a deferred review is actually scheduled');
+});
+
+await test('NAF-19: skill lifecycle is wired into the app, not merely exported', async () => {
+  assert.match(src, /skill-lifecycle\.mjs/, 'the app imports the lifecycle module — aging and revival cannot run otherwise');
+});
+
+if (failures.length) {
+  console.error(`anvil-handlers: ${passed} passed, ${failures.length} FAILED`);
+  for (const f of failures) console.error(`  FAIL ${f.n}\n        ${f.message}`);
+  process.exit(1);
+}
+console.log(`anvil-handlers: ${passed}/${passed} passed — the inline module's handlers were driven, not grepped`);

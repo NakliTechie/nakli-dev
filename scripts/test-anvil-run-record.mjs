@@ -141,8 +141,10 @@ assert.match(anvil, /content: stagnationNudge\(stag\)/, 'the redirect message is
 // guarded by the scheduler — a local model defers, an aborted run is skipped.
 assert.match(anvil, /async function learnThisRun\(t, rec\)/, 'the explicit review fork exists');
 assert.match(anvil, /runLearnReview\(\{ record:\{ events:rec\.events, resolve:rec\.resolve \}, infer:inferViaHost/, 'it reviews the finished record through the model');
-assert.match(anvil, /const decision=shouldAutoReview\(\{ outcome: foldOutcome\(ev, rec\.resolve\)\.label, stop: result\.stop/, 'C5 gates the auto-review on the scheduler');
-assert.match(anvil, /if\(decision\.review\) learnThisRun\(t, rec\)\.catch\(\(\)=>\{\}\)/, 'the auto-review is fire-and-forget after the record is saved');
+assert.match(anvil, /shouldAutoReview\(\{[^}]*outcome:[^}]*stop:/, 'C5 gates the auto-review on the scheduler');
+// forward-pass NAF-04: a local model must DEFER, not skip forever (idleMs was hardcoded 0).
+assert.match(anvil, /autoReviewTimer=setTimeout/, 'the deferred review is actually scheduled');
+assert.match(anvil, /learnThisRun\(t, rec\)\.catch\(\(\)=>\{\}\)/, 'the auto-review is fire-and-forget after the record is saved');
 // and it sits AFTER saveRunRecord (the review reads the saved record)
-assert.ok(anvil.indexOf('const saved=await saveRunRecord') < anvil.indexOf('if(decision.review) learnThisRun'), 'the auto-review runs after the record is saved');
+assert.ok(anvil.indexOf('const saved=await saveRunRecord') < anvil.indexOf('decide(0).review'), 'the auto-review runs after the record is saved');
 
