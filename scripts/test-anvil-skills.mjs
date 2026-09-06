@@ -16,8 +16,15 @@ assert.match(anvil, /planSkillWrite\(ar\|\|\{\}, \{ existing, existingFiles, ses
 assert.match(anvil, /makeEnvelope\(\{ app:'anvil', tool:'skill_manage', diff: plan\.diff/, 'every skill write is a P0 envelope');
 assert.match(anvil, /if\(mode==='code'\) tools\.push\(skillManageTool\(\)\);/, 'skill_manage is offered in code mode');
 assert.match(anvil, /nm==='skill_manage'\)\)\{/, 'skill_manage is refused outside code mode');
-assert.match(anvil, /metas\.push\(\{ name, description: sk\.description, status: sk\.status \}\)/, 'the index push carries status (a staged skill must not bind)');
-assert.match(anvil, /if\(!INJECTED_STATUSES\.includes\(sk\.status\)\) return 'Skill/, 'the skill tool refuses to serve a staged or quarantined skill');
+// shape, not signature: the push also carries the pinned/created/updated stamps the lifecycle reads
+assert.match(anvil, /metas\.push\(\{ name, description: sk\.description, status: sk\.status/, 'the index push carries status (a staged skill must not bind)');
+// A non-active skill must never BIND. Since forward-pass NAF-12 a STAGED draft may be shown for
+// revision — it was otherwise unrevisable (skill refused it as staged, skill_manage as unread) —
+// but only downstream of the sentinel re-scan, and labelled as not-instructions.
+assert.match(anvil, /if\(!INJECTED_STATUSES\.includes\(sk\.status\)\)\{/, 'the skill tool branches on a non-binding status');
+assert.match(anvil, /does not bind until the owner sets status: active/, 'a non-active skill still does not bind');
+assert.match(anvil, /NOT active, these are not instructions to follow/, 'a staged draft is served labelled, never as instructions');
+assert.ok(anvil.indexOf('const guard = scanSkill(') < anvil.indexOf('if(!INJECTED_STATUSES.includes(sk.status)){'), 'the sentinel re-scan runs BEFORE any status branch, so a hand-edited status cannot serve unscanned text');
 assert.equal((anvil.match(/Object\.keys\(skillMap\)\.filter\(n=>INJECTED_STATUSES\.includes\(skillStatus\[n\]\|\|'active'\)\)/g) || []).length, 2, 'both listings hide non-binding skills');
 
 // The contract the app depends on, in the pure module: staged / quarantined never injected.

@@ -79,5 +79,20 @@ await test('dedupeSkills: same normalised description → one keep (pinned wins,
   eq(dedupeSkills([S('a', { description: '' }), S('b', { description: '' })]).length, 0, 'empty descriptions do not group');
 });
 
+await test('NAF-18: an automatic transition does not reset the clock that drives aging', () => {
+  const DAY = 86400000, t0 = Date.parse('2026-01-01T00:00:00Z');
+  const file = (updated) => `---\nname: old\nstatus: active\ndescription: d\nupdated: ${new Date(updated).toISOString()}\n---\nbody`;
+  // never used, written on day 0. At day 31 the curator proposes stale and APPLIES it.
+  const staled = applySkillStatus(file(t0), 'stale', { now: t0 + 31 * DAY, automatic: true });
+  // at day 91 it must archive — the automatic stale must not have bought it another 30 days
+  const parsed = { name: 'old', status: 'stale', updated: /updated:\s*(\S+)/.exec(staled)?.[1] || null, pinned: false };
+  const props = skillLifecycle([parsed], new Map(), { now: t0 + 91 * DAY });
+  const p = props.find((x) => x.name === 'old');
+  assert(p && p.to === 'archived', `a never-used skill archives at 90 days, got ${JSON.stringify(props)}`);
+  // an OWNER edit is still a relevance signal and does reset it
+  const edited = applySkillStatus(file(t0), 'active', { now: t0 + 31 * DAY });
+  assert(/2026-02-01/.test(edited), `a hand edit still stamps updated: ${edited.slice(0, 120)}`);
+});
+
 if (failures.length) { console.error(`skill-lifecycle: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
 console.log(`skill-lifecycle conformance: ${passed}/${passed} passed — usage fold (deliberate loads only), 30/90-day aging, pinned exempt, never deletes, dedupe proposals`);

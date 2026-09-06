@@ -107,6 +107,8 @@ jobs:
 
       - name: Verify Anvil's inline module actually parses (not just greps)
         run: node scripts/test-anvil-parses.mjs
+      - name: anvil handlers run (not just parse)
+        run: node scripts/test-anvil-handlers.mjs
 
       - name: Verify the history tool — search and read past runs (the retrieval half)
         run: node scripts/test-anvil-history.mjs

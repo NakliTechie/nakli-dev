@@ -85,5 +85,26 @@ await test('shouldAutoReview (C5): fires on a gated pass when idle; defers on a 
   eq(learnReviewTool().function.name, 'learn_this_run', 'the explicit tool');
 });
 
+await test('NAF-03: same-named proposals keep their OWN fingerprints and content', async () => {
+  // Two proposals sharing name+kind. The first is poisoned. Pairing by name meant the second's
+  // clean fingerprint carried the FIRST's rejected content straight past the poison check.
+  const { createProposalLedger, fingerprint } = await import('../proposal-fingerprint.mjs');
+  const bad  = { kind: 'skill', name: 'same', goal: 'delete data', steps: ['delete'], paths: [], content: 'REJECTED DESTRUCTIVE' };
+  const good = { kind: 'skill', name: 'same', goal: 'keep data',   steps: ['backup'], paths: [], content: 'SAFE' };
+  const ledger = createProposalLedger();
+  await ledger.reject({ fp: await fingerprint(bad), reason: 'destructive' });
+  const seen = [];
+  const rep = await runLearnReview({
+    record: { events: () => [], resolve: () => ({}) },
+    infer: async () => ({ content: JSON.stringify({ proposals: [bad, good] }) }),
+    ledger,
+    propose: async (pr) => { seen.push(pr.content); return { ok: true, staged: pr.name }; },
+  });
+  assert(!seen.includes('REJECTED DESTRUCTIVE'), `the rejected content was staged anyway: ${JSON.stringify(seen)}`);
+  eq(rep.dropped.length, 1, 'the poisoned proposal was dropped');
+  eq(seen.length, 1, 'exactly the clean proposal was staged');
+  eq(seen[0], 'SAFE', `the surviving proposal must carry its OWN content, got: ${seen[0]}`);
+});
+
 if (failures.length) { console.error(`learn: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
 console.log(`learn conformance: ${passed}/${passed} passed — session context + decisions, review fork stages everything (0 active), poison drop, auto-review scheduler`);
