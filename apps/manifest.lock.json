@@ -75,13 +75,13 @@
       "id": "tijori",
       "repo": "NakliTechie/Tijori",
       "requestedRef": "main",
-      "resolvedCommit": "3c58d27ece3647ba5baf53fce623c5260756a589",
+      "resolvedCommit": "9e4c59722b33d666a7be9d3447b10fe21c45c7b3",
       "files": [
         {
           "source": "index.html",
           "destination": "index.html",
-          "sha256": "71a5602fd9bd19797a4b49bd8036036a98f6e9b7c097f43851c6097cb712aeb5",
-          "bytes": 455023
+          "sha256": "09618bbcb78601c1b77d592d7de26599a3f2dc61b7b87e3412950497787deb01",
+          "bytes": 479296
         }
       ]
     },
@@ -117,7 +117,7 @@
       "id": "sheaf",
       "repo": "NakliTechie/sheaf",
       "requestedRef": "main",
-      "resolvedCommit": "e38555bf7ac2abc972edc21e40794c512755d6a7",
+      "resolvedCommit": "327865c5f54484615230b0cc5d35c579e1839aed",
       "files": [
         {
           "source": "index.html",
