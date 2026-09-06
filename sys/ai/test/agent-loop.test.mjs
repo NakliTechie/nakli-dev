@@ -451,7 +451,15 @@ await test('estimateTokens and boundedText behave as monotonic, capping primitiv
   assert(/elided/.test(both), 'the pruned middle is marked');
   // sliced by code point, so a surrogate pair is never split
   const wide = boundedText('\u{1F600}'.repeat(3000), { maxLines: 10, maxBytes: 100 });
-  assert(![...wide].some((c) => c.codePointAt(0) === 0xFFFD), 'no replacement character — the slice respects code points');
+  // isWellFormed is the real check: a lone surrogate is not U+FFFD, so the old assertion
+  // passed on malformed output (checker mutation).
+  assert(wide.isWellFormed(), 'no lone surrogate — the slice respects code points');
+  for (const n of [1, 2, 5, 37, 120]) {
+    assert(boundedText('\u{1F600}'.repeat(500), { maxLines: 4, maxBytes: n }).isWellFormed(), `well-formed at maxBytes ${n}`);
+  }
+  // the byte tail must also be clamped — removing that clamp survived before
+  const tinyBytes = boundedText('x'.repeat(5000), { maxLines: 9999, maxBytes: 20 });
+  assert([...tinyBytes].length <= 20 + 80, `a small byte cap stays small: ${[...tinyBytes].length}`);
   // and the tail can never outgrow the cap it enforces
   const tiny = boundedText(Array.from({ length: 300 }, (_, i) => `L${i}`).join('\n'), { maxLines: 6, maxBytes: 9999 });
   assert(tiny.split('\n').length <= 8, `a small cap stays small: ${tiny.split('\n').length} lines`);

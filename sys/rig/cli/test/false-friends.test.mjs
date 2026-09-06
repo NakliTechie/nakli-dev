@@ -60,6 +60,9 @@ await test('R2b: grep -v excludes, -i matches, -c counts, -r refuses', async () 
   eq((await run('grep banana f.txt')).out, 'banana\nbanana', 'a plain grep is unchanged');
   const none = await run('grep zebra f.txt');
   assert(none.out === '' && none.code !== 0, 'a genuine non-match is still an empty non-zero');
+  const zc = await run('grep -c zebra f.txt');
+  eq(zc.out, '0', '-c on no matches reports 0');
+  assert(zc.code !== 0, '-c on no matches still exits non-zero');
 });
 
 // ── R2c — single quotes protected nothing ────────────────────────────────────────────────
@@ -73,7 +76,11 @@ await test('R2c: single quotes are literal; double quotes still expand', async (
   const found = (await run("find . -name '*.txt'")).out.split('\n').sort();
   assert(found.includes('sub/two.txt'), `a quoted glob reaches the command: ${JSON.stringify(found)}`);
   // an UNquoted glob still expands as a filename
-  eq((await run('cat *.txt')).out.includes('a'), true, 'an unquoted glob still expands');
+  const globbed = await run('cat one.txt');
+  eq(globbed.out, 'a', 'sanity: the file holds exactly "a"');
+  const star = await run('cat one*.txt');
+  eq(star.code, 0, 'an unquoted glob expands to a real file, not an ENOENT');
+  eq(star.out, 'a', 'and yields its CONTENT (an error message would also contain "a")');
 });
 
 // The quote fix works by marking literal characters internally. That marker is an implementation
@@ -92,15 +99,22 @@ await test('R2c: the internal literal marker never reaches a command, a value, o
 // ── R2d — an unimplemented flag was ignored rather than refused ───────────────────────────
 await test('R2d: an unsupported flag is refused, never silently ignored', async () => {
   const { run } = await shell();
-  for (const cmd of ['head -q f.txt', 'sort -Z f.txt', 'wc -Q f.txt', 'uniq -Z f.txt', 'grep -Z x f.txt']) {
+  for (const [cmd, flag] of [['head -q f.txt', '-q'], ['sort -Z f.txt', '-Z'], ['wc -Q f.txt', '-Q'],
+                             ['uniq -Y f.txt', '-Y'], ['grep -Z x f.txt', '-Z'],
+                             ['sed --color s/a/b/ f.txt', '--color'], ['ls --color', '--color'],
+                             ["awk --color '{print $1}' f.txt", '--color']]) {
     const r = await run(cmd);
     eq(r.code, 2, `${cmd} must exit 2`);
-    assert(/unsupported flag/.test(r.out), `${cmd} names the flag: ${r.out}`);
+    assert(r.out.includes(flag), `${cmd} must name ${flag}, got: ${r.out}`);
   }
+  // a value that looks like a flag is not silently swallowed into a default
+  const badn = await run('head -n -Z f.txt');
+  eq(badn.code, 2, '-n with a non-numeric value is refused'); assert(/-Z/.test(badn.out), badn.out);
   // benign: the flags each builtin DOES implement still work
   eq((await run('sort -r f.txt')).out.split('\n')[0], 'banana', 'sort -r works');
   eq((await run('sort -u f.txt')).out.split('\n').length, 3, 'sort -u works');
-  eq((await run('uniq -c f.txt | wc -l')).out, '4', 'uniq -c works');
+  const uc = (await run('sort f.txt | uniq -c')).out.split('\n').map((l) => l.trim());
+  eq(uc.join('|'), '1 Apple|1 Cherry|2 banana', 'uniq -c reports the actual RUN COUNTS');
 });
 
 // ── R2e — the remaining silent wrongs ────────────────────────────────────────────────────
@@ -110,11 +124,21 @@ await test('R2e: find predicates, wc line counting, true/false, comments, ls exi
   const named = (await run("find . -name '*.log'")).out;
   eq(named, 'drop.log', `-name filters (it used to return everything): ${named}`);
   assert(!(await run("find . -name '*.log'")).out.includes('keep.txt'), '-name really excludes');
-  await run("printf 'z\\n' > d/deep.txt");
-  assert((await run('find . -type d')).out.includes('d'), '-type d finds a directory');
-  assert(!(await run('find . -type f')).out.split('\n').includes('d'), '-type f excludes directories');
-  const badp = await run('find . -newer x');
-  eq(badp.code, 2, 'an unimplemented predicate is refused, not ignored');
+  await run("printf 'z\\n' > nested/deep.txt");
+  const dirs = (await run('find . -type d')).out.split('\n').sort();
+  eq(dirs.join('|'), 'nested', '-type d returns exactly the directories');
+  const files = (await run('find . -type f')).out.split('\n').sort();
+  assert(files.includes('nested/deep.txt') && !files.includes('nested'), `-type f returns files and no directory: ${files}`);
+  assert(files.length >= 3, `-type f is not empty — returning nothing must not pass: ${files}`);
+  // -maxdepth had no assertion at all; a mutation disabling it survived
+  const d1 = (await run('find . -maxdepth 1')).out.split('\n').sort();
+  assert(!d1.includes('nested/deep.txt'), `-maxdepth 1 excludes a deeper file: ${d1}`);
+  assert(d1.includes('keep.txt'), `-maxdepth 1 keeps a top-level file: ${d1}`);
+  for (const [cmd, why] of [['find . -newer x', 'an unimplemented predicate'],
+                            ['find . -type X', 'an invalid -type value'],
+                            ['find . -maxdepth nope', 'a non-numeric -maxdepth']]) {
+    eq((await run(cmd)).code, 2, `${why} is refused, not ignored`);
+  }
   // wc counts LINES, so a pipeline no longer undercounts by one
   eq((await run('grep banana f.txt | wc -l')).out, '2', 'a pipeline count is right');
   eq((await run('true && echo yes')).out, 'yes', 'true exists');
@@ -132,14 +156,41 @@ await test('R2e: find predicates, wc line counting, true/false, comments, ls exi
 });
 
 // ── R3b — reachable at all ───────────────────────────────────────────────────────────────
-await test('R3b: git clone/fetch/push are reachable from the shell', async () => {
+await test('R3b: git clone/fetch/push actually DISPATCH, not just print usage', async () => {
   const { run } = await shell();
+  // usage is the shallow half — the checker showed all three could be pointed at a bogus
+  // registry command and the old test still passed, because it never called them with arguments.
   for (const [cmd, word] of [['git clone', 'clone'], ['git fetch', 'fetch'], ['git push', 'push']]) {
     const r = await run(cmd);
     assert(!/is not a rig git command/.test(r.out), `${cmd} is wired: ${r.out}`);
     assert(new RegExp(`usage: git ${word}`).test(r.out), `${cmd} states its usage: ${r.out}`);
   }
   assert(/clone\|fetch\|push/.test((await run('git')).out), 'the usage line advertises them');
+
+  // and the real half: with a git core wired, the right registry command is invoked with the
+  // right input. Without this the three cases above pass even if runGit points at a bogus name.
+  const calls = [];
+  const fakeGit = {
+    clone: async (i) => { calls.push(['clone', i]); return { ok: true }; },
+    fetch: async (i) => { calls.push(['fetch', i]); return { ok: true }; },
+    push: async (i) => { calls.push(['push', i]); return { ok: true }; },
+  };
+  const fs2 = createFileops({ backend: new MemoryBackend() });
+  const reg2 = buildRigRegistry({ fs: fs2, git: fakeGit });
+  const grant2 = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write', 'git:remote', 'git:push'] });
+  const face2 = createAgentFace({ registry: reg2, grant: grant2, opLog: createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) }), actor: 'a' });
+  const sh2 = createShell({ registry: reg2, face: face2 });
+  const feed = async (c) => { const r = await sh2.feed(c); if (sh2.awaitingConfirm) await sh2.feed('y'); return r; };
+  await feed('git clone https://example.test/r.git main');
+  await feed('git fetch https://example.test/r.git main');
+  await feed('git push https://example.test/r.git refs/heads/main');
+  const got = (n) => calls.find((c) => c[0] === n);
+  assert(got('clone'), `git clone reached the git core, saw: ${JSON.stringify(calls.map((c) => c[0]))}`);
+  assert(got('fetch'), `git fetch reached the git core, saw: ${JSON.stringify(calls.map((c) => c[0]))}`);
+  assert(got('push'), `git push reached the git core, saw: ${JSON.stringify(calls.map((c) => c[0]))}`);
+  eq(got('clone')[1].url, 'https://example.test/r.git', 'clone carries the url');
+  eq(got('fetch')[1].ref, 'main', 'fetch carries the ref');
+  eq(got('push')[1].ref, 'refs/heads/main', 'push carries the ref');
 });
 
 // ── R3a — the advertised surface matches the built one ───────────────────────────────────
