@@ -17,11 +17,11 @@ assert.ok(runTask.length > 1000, 'runTask found');
 
 // Every loop in runTask is recorded: started before, finished after, infer wrapped, events chained.
 const loops = [...runTask.matchAll(/runAgentLoop\(\{/g)].length;
-assert.equal(loops, 2, 'runTask runs the loop in exactly two places (main + act-or-nudge)');
-assert.equal([...runTask.matchAll(/await rec\.start\(\{ messages: \w+, tools \}\)/g)].length, 2, 'each loop is preceded by rec.start');
-assert.equal([...runTask.matchAll(/await rec\.finish\(result\)/g)].length, 2, 'each loop is followed by rec.finish');
-assert.equal([...runTask.matchAll(/infer: recInfer/g)].length, 2, 'each loop infers through the recorder');
-assert.equal([...runTask.matchAll(/onEvent:recEvent/g)].length, 2, 'each loop reports through the recorder');
+assert.equal(loops, 3, 'runTask runs the loop in exactly three places (main + act-or-nudge + D2 supervisor)');
+assert.equal([...runTask.matchAll(/await rec\.start\(\{ messages: \w+, tools \}\)/g)].length, 3, 'each loop is preceded by rec.start (main + act-or-nudge + D2 supervisor)');
+assert.equal([...runTask.matchAll(/await rec\.finish\(result\)/g)].length, 3, 'each loop is followed by rec.finish (main + act-or-nudge + D2 supervisor)');
+assert.equal([...runTask.matchAll(/infer: recInfer/g)].length, 3, 'each loop infers through the recorder (main + act-or-nudge + D2 supervisor)');
+assert.equal([...runTask.matchAll(/onEvent:recEvent/g)].length, 3, 'each loop reports through the recorder (main + act-or-nudge + D2 supervisor)');
 // Check each runAgentLoop CALL SITE itself — the subagent executor
 // (makeToolExecutor({ infer: inferViaHost })) is deliberately unrecorded in this
 // layer (tree-scoped subagent records are a later move), so a file-wide grep for
@@ -128,4 +128,21 @@ assert.match(anvil, /t\.log stays a written array/, 'the code is honest: t.log i
 assert.match(anvil, /t\.recovery = recoveryNote\(foldRecovery\(recEvents, rec\.resolve\)\)/, 'the recovery note is a pure fold of this run\'s record, stashed for the next run');
 assert.match(anvil, /const recoveryPreface = \(t\.recovery/, 'the next run is prefaced with the recovery note');
 assert.match(anvil, /firstMessages=\[sysMsg\(gateNote\+recoveryPreface\), \.\.\.convo\]/, 'the note rides in the system preface beside the carried transcript, not replacing it');
+
+// D2 supervisor: after a loop, a record-fold (foldStagnation) catches spinning the loop's own
+// consecutive-identical guard misses, and injects ONE capped redirect — fired at most once per
+// run, never on a 'done' run, and not for no-tools (the act-or-nudge above owns that).
+assert.match(anvil, /const stag=foldStagnation\(rec\.events\(\), rec\.resolve\)/, 'the supervisor folds stagnation over the record');
+assert.match(anvil, /if\(stag\.stalled && stag\.signal!=='no-tools'\)/, 'it redirects on repeat/gate-stuck, not the act-or-nudge case');
+assert.match(anvil, /if\(mode==='code' && result\.stop!=='done' &&/, 'the supervisor never second-guesses a run that finished done');
+assert.match(anvil, /content: stagnationNudge\(stag\)/, 'the redirect message is the tagged coordination nudge');
+
+// C2/C5: the post-run review fork stages skills/facts (never active) and the automatic trigger is
+// guarded by the scheduler — a local model defers, an aborted run is skipped.
+assert.match(anvil, /async function learnThisRun\(t, rec\)/, 'the explicit review fork exists');
+assert.match(anvil, /runLearnReview\(\{ record:\{ events:rec\.events, resolve:rec\.resolve \}, infer:inferViaHost/, 'it reviews the finished record through the model');
+assert.match(anvil, /const decision=shouldAutoReview\(\{ outcome: foldOutcome\(ev, rec\.resolve\)\.label, stop: result\.stop/, 'C5 gates the auto-review on the scheduler');
+assert.match(anvil, /if\(decision\.review\) learnThisRun\(t, rec\)\.catch\(\(\)=>\{\}\)/, 'the auto-review is fire-and-forget after the record is saved');
+// and it sits AFTER saveRunRecord (the review reads the saved record)
+assert.ok(anvil.indexOf('const saved=await saveRunRecord') < anvil.indexOf('if(decision.review) learnThisRun'), 'the auto-review runs after the record is saved');
 

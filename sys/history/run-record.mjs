@@ -27,6 +27,7 @@
 // run with any loop, and replays through any loop, by wrapping infer/executeTool.
 
 import { appendEvent, contentHash, verifyChain, toNDJSON, fromNDJSON } from './ledger.mjs';
+import { parseExpect, gradeExpect, stripExpect } from '../ai/expect.mjs';
 
 export const RUN_EVENTS = Object.freeze([
   'run.started',      // input: { messages, tools }            output: {}
@@ -366,7 +367,7 @@ export function compareRuns(recorded, live) {
 // A false-positive success would promote a bad fact; a false-negative failure only
 // leaves a run unlabelled. So the `success` label is earned ONLY by a passed gate —
 // never by score — and an ungated finish is `unknown` with a note saying why.
-export const OUTCOME_SIGNALS = Object.freeze(['terminal', 'gate', 'repeat_recall', 'contradiction', 'reuse']);
+export const OUTCOME_SIGNALS = Object.freeze(['terminal', 'gate', 'repeat_recall', 'contradiction', 'reuse', 'expectation']);
 
 export function foldOutcome(events, resolve) {
   const ev = joined(events, resolve);
@@ -406,6 +407,23 @@ export function foldOutcome(events, resolve) {
   const failedRounds = ev.filter((e) => e.tool === 'verify.failed').length;
   if (failedRounds) push('gate', 'failure', Math.min(0.5, 0.2 * failedRounds), `${failedRounds} failed gate round(s)`);
 
+  // 2b. expectations (D3) — a shell call that carried an `expect` and MISSED it. Graded from the
+  //     record: the prediction is in the tool.called args, the outcome in the paired tool.responded
+  //     (its [exit N] suffix + the output, with any live [expect] line stripped so absent-misses
+  //     never grade against their own message). A miss is a small failure signal; a hit is neutral.
+  let expTotal = 0, expMissed = 0;
+  const respById = new Map();
+  for (const e of ev) if (e.tool === 'tool.responded' && e.input?.id) respById.set(e.input.id, e);
+  for (const e of ev) {
+    if (e.tool !== 'tool.called') continue;
+    const exp = parseExpect(e.input?.args?.expect); if (!exp) continue;
+    const resp = respById.get(e.input.id); if (!resp) continue; // no paired result — the run died there, not a miss
+    expTotal++;
+    const result = stripExpect(resp?.output?.result ?? '');
+    const m = /\[exit (-?\d+)\]\s*$/.exec(result); const exitCode = m ? Number(m[1]) : null;
+    if (!gradeExpect(exp, { exitCode, output: result }).ok) { expMissed++; push('expectation', 'failure', 0.3, `predicted "${exp.kind} ${exp.value}" — missed`); }
+  }
+
   // 3. + 4. per-fact evidence from deliberate tool calls: repeat recall, and a fact
   //    recalled then retracted in the same run.
   const recalls = new Map(); const recalled = []; const retracted = [];
@@ -425,7 +443,7 @@ export function foldOutcome(events, resolve) {
 
   const score = Math.round(signals.reduce((t, s) => t + (s.polarity === 'success' ? s.weight : s.polarity === 'failure' ? -s.weight : 0), 0) * 100) / 100;
   const label = terminal?.polarity === 'success' ? 'success' : score < 0 ? 'failure' : 'unknown';
-  return { label, score, signals, facts, recalled, retracted, note };
+  return { label, score, signals, facts, recalled, retracted, note, expectations: { total: expTotal, missed: expMissed } };
 }
 
 // 5. reuse, across runs: a fact recalled in ≥ minRuns distinct runs is load-bearing
@@ -666,4 +684,98 @@ export function recoveryNote(rec) {
   const foot = rec.coordinationCount ? `\n(${rec.coordinationCount} gate-feedback line(s) in the transcript are marked [coordination] — they are not the owner's instructions.)` : '';
   const cp = rec.checkpoint ? `\nLast checkpoint: ${rec.checkpoint.replace(/\s+/g, ' ').slice(0, 200)}` : '';
   return 'Recovery note (from the run record — prior owner requests and whether they look handled):\n' + lines.join('\n') + foot + cp;
+}
+
+// ──────────────────────────────────────── supervisor / stagnation (D2) ──
+
+// A supervisor that REDIRECTS, as a pure fold over one run's record (AVO's stagnation
+// detector; khiladi item 4). It fires only on UNAMBIGUOUS spinning, never on legitimate
+// repetition (reading many different files is not a stall):
+//   repeat      the SAME tool signature (name + exact args) run ≥ repeatN times
+//   gate-stuck  ≥2 failed gate rounds with NO new file touched between the last two
+//   no-tools    the latest loop segment produced turns but zero tool calls
+// Returns { stalled, signal, detail } — the caller injects ONE capped nudge and re-loops.
+// Key-order-stable JSON: the model may emit the same args with keys in a different order, and a
+// stall is a stall regardless (D2 checker finding). Sort object keys recursively before compare.
+function stableArgs(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableArgs).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableArgs(v[k])).join(',') + '}';
+  return JSON.stringify(v ?? null);
+}
+
+export function foldStagnation(events, resolve, { repeatN = 3, noToolTurns = 1 } = {}) {
+  const ev = joined(events, resolve);
+  // 1. identical tool signatures (name + exact args), across the whole run.
+  const sig = new Map();
+  const touchedFile = (a) => a && (a.path || a.file) ? String(a.path || a.file) : null;
+  for (const e of ev) {
+    if (e.tool !== 'tool.called') continue;
+    const k = `${e.input?.name}:${stableArgs(e.input?.args ?? {})}`;
+    sig.set(k, (sig.get(k) || 0) + 1);
+  }
+  for (const [k, n] of sig) if (n >= repeatN) return { stalled: true, signal: 'repeat', detail: `the same call ran ${n}× (${k.slice(0, 80)}) — try a different approach` };
+
+  // 2. gate stuck: between the last two failed rounds, no NEW file was written.
+  const failIdx = ev.map((e, i) => (e.tool === 'verify.failed' ? i : -1)).filter((i) => i >= 0);
+  if (failIdx.length >= 2) {
+    const [prev, last] = [failIdx[failIdx.length - 2], failIdx[failIdx.length - 1]];
+    const filesBefore = new Set();
+    for (let i = 0; i < prev; i++) { const e = ev[i]; if (e.tool === 'tool.called') { const f = touchedFile(e.input?.args); if (f) filesBefore.add(f); } }
+    let newFile = false;
+    for (let i = prev; i < last; i++) { const e = ev[i]; if (e.tool === 'tool.called') { const f = touchedFile(e.input?.args); if (f && !filesBefore.has(f)) { newFile = true; break; } } }
+    if (!newFile) return { stalled: true, signal: 'gate-stuck', detail: `${failIdx.length} gate rounds and no new file touched since the last failure — the fix is not landing` };
+  }
+
+  // 3. no tools in the latest loop segment (since the last run.started), but turns happened.
+  let segStart = 0;
+  for (let i = ev.length - 1; i >= 0; i--) if (ev[i].tool === 'run.started') { segStart = i; break; }
+  const seg = ev.slice(segStart);
+  const turns = seg.filter((e) => e.tool === 'turn.started').length;
+  const toolCalls = seg.filter((e) => e.tool === 'tool.called').length;
+  if (turns >= noToolTurns && toolCalls === 0) return { stalled: true, signal: 'no-tools', detail: 'the last run answered in prose with no tool calls — use the tools to make the change' };
+
+  return { stalled: false, signal: null, detail: '' };
+}
+
+// The single redirect message a stalled run is nudged with (D2). Coordination, not the owner —
+// tagged so it can never read as the owner's instruction (B3).
+export function stagnationNudge(stag) {
+  if (!stag || !stag.stalled) return '';
+  return `[coordination] You appear to be stuck: ${stag.detail}. Step back and try a different approach — a different tool, a smaller step, or re-reading the goal — rather than repeating what has not worked.`;
+}
+
+// ─────────────────────────────────── session context + decisions (C2) ──
+
+// The inputs the post-run review fork reasons over (Agno's SessionContext + DecisionLog),
+// derived from ONE run's record. Pure.
+
+// {goal, lastCheckpoint, filesTouched, outcome} — what the run was for and how it went.
+export function foldSessionContext(events, resolve) {
+  const ev = joined(events, resolve);
+  const started = ev.find((e) => e.tool === 'run.started');
+  const goal = started ? String((((started.input && started.input.messages) || []).find((m) => m.role === 'user') || {}).content ?? '') : '';
+  const lastCheckpoint = (() => { const c = [...ev].reverse().find((e) => e.tool === 'run.checkpoint'); return c ? String(c.output?.handoff ?? '') : null; })();
+  const filesTouched = [...new Set(ev.filter((e) => e.tool === 'tool.called').map((e) => e.input?.args?.path || e.input?.args?.file).filter(Boolean).map(String))];
+  const outcome = foldOutcome(events, resolve).label;
+  return { goal, lastCheckpoint, filesTouched, outcome };
+}
+
+// A DecisionLog: each tool call paired with the gate verdict that followed it (the next
+// verify.passed/verify.failed before the next tool call), so the review can see which moves led
+// to a pass and which to a failure. Pure.
+export function foldDecisions(events, resolve) {
+  const ev = joined(events, resolve);
+  const out = [];
+  for (let i = 0; i < ev.length; i++) {
+    const e = ev[i]; if (e.tool !== 'tool.called') continue;
+    const sig = `${e.input?.name}:${stableArgs(e.input?.args ?? {})}`.slice(0, 200);
+    let outcome = 'none';
+    for (let j = i + 1; j < ev.length; j++) {
+      if (ev[j].tool === 'tool.called') break;
+      if (ev[j].tool === 'verify.passed') { outcome = 'passed'; break; }
+      if (ev[j].tool === 'verify.failed') { outcome = 'failed'; break; }
+    }
+    out.push({ toolSignature: sig, name: e.input?.name, outcome });
+  }
+  return out;
 }

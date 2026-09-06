@@ -18,6 +18,7 @@
 //   await runAgentLoop({ messages, tools, infer, executeTool: exec });
 
 import { shellTool, makeShellExecutor, runAgentLoop, taskDoneTool, interceptBashCommand } from './agent-loop.mjs';
+import { parseExpect, gradeExpect, expectLine } from './expect.mjs';
 import {
   dispatchTool, reviewTool, normalizeTasks, planMerge, formatDispatchDigest,
   SUBAGENT_SYSTEM, REVIEW_SYSTEM, SUBAGENT_MAX_STEPS,
@@ -478,7 +479,12 @@ export function makeToolExecutor({ shell, face, mode = 'code', infer = null, sub
         // Without this the model reads a failing build's stdout with no verdict.
         // Appended AFTER capping so truncation can never eat the exit code.
         const capped = await capOutput(result, 'shell output');
-        return code == null ? capped : `${capped}\n[exit ${code}]`;
+        const final = code == null ? capped : `${capped}\n[exit ${code}]`;
+        // D3: an optional prediction, graded live so the agent gets immediate feedback; a shell
+        // call without `expect` is unchanged. The record keeps the expect in the call args, so a
+        // post-hoc fold can re-grade it (foldOutcome).
+        const exp = parseExpect(args?.expect);
+        return exp ? final + expectLine(exp, gradeExpect(exp, { exitCode: code, output: capped })) : final;
       }
 
       if (name === 'read') {
