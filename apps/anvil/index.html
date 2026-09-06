@@ -233,7 +233,7 @@
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool, INJECTED_STATUSES } from '../../sys/ai/skills.mjs';
   import { skillManageTool, planSkillWrite, createSkillSession, SKILL_FILE } from '../../sys/ai/skill-manage.mjs';
   import { createProposalLedger } from '../../sys/ai/proposal-fingerprint.mjs';
-  import { skillLifecycle, applySkillStatus } from '../../sys/ai/skill-lifecycle.mjs';
+  import { skillLifecycle, applySkillStatus, reviveOnUse } from '../../sys/ai/skill-lifecycle.mjs';
   import { contextRemainingTool, checkpointTool, contextBudget, windowFromOllama, windowForPreset, capHandoff } from '../../sys/ai/context-budget.mjs';
   import { runLearnReview, shouldAutoReview, learnReviewTool, AUTO_REVIEW_IDLE_MS } from '../../sys/ai/learn.mjs';
   import { sentinelLine, scanSkill } from '../../sys/ai/skill-sentinel.mjs';
@@ -260,7 +260,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote, foldStagnation, stagnationNudge, foldOutcome } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote, foldStagnation, stagnationNudge, foldOutcome, foldSkillUsage } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -1621,6 +1621,10 @@
             }
             return 'Skill "'+name+'" is '+sk.status+' and does not bind until the owner sets status: active.';
           }
+          // A stale skill the model deliberately loads is relevant again (C4's revive half).
+          if(sk.status==='stale'){
+            try{ const revived=reviveOnUse(r.data,{ now: Date.now() }); if(revived){ const w=await fs.write(p, revived); if(w&&w.ok) skillStatus[name]='active'; } }catch(_){}
+          }
           skillSession.noteRead(name); return 'Skill: '+(sk.name||name)+'\n\n'+sk.body; } }catch(_){}
         const names=Object.keys(skillMap).filter(n=>INJECTED_STATUSES.includes(skillStatus[n]||'active'));
         return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
@@ -1837,9 +1841,29 @@
             if(r&&r.ok){ const sk=parseSkill(r.data); const name=sk.name || e.name;
               // status rides along: buildSkillsIndex injects only active/stale — a staged or
               // quarantined skill must never bind (C1).
-              metas.push({ name, description: sk.description, status: sk.status }); skillMap[name]=e.path+'/SKILL.md'; skillStatus[name]=sk.status; }
+              const stamp=(k)=>{ const m=new RegExp('^'+k+':\\s*(.+)$','m').exec(r.data); return m?m[1].trim():null; };
+              metas.push({ name, description: sk.description, status: sk.status, pinned:/^(true|yes|1)$/i.test(String(stamp('pinned')||'')), created: stamp('created'), updated: stamp('updated') });
+              skillMap[name]=e.path+'/SKILL.md'; skillStatus[name]=sk.status; }
           }catch(_){}
         }
+        // C4 aging, actually applied. The module was imported and never called, so skills never
+        // went stale and never archived (forward-pass NAF-19). Fold how often each skill was
+        // deliberately loaded across this project's records, ask the lifecycle for status moves,
+        // and write them — marked automatic so the transition does not reset the aging clock.
+        try{
+          const recs = (await loadTaskRecords('project')).map(e=>e.record);
+          const usage = foldSkillUsage(recs);
+          for(const pr of skillLifecycle(metas, usage, { now: Date.now() })){
+            const path = skillMap[pr.name]; if(!path) continue;
+            try{
+              const cur = await fs.read(path,{encoding:'utf-8'}); if(!(cur&&cur.ok)) continue;
+              const w = await fs.write(path, applySkillStatus(cur.data, pr.to, { now: Date.now(), automatic:true }));
+              if(!(w&&w.ok)) continue;
+              skillStatus[pr.name]=pr.to;
+              const m=metas.find(x=>x.name===pr.name); if(m) m.status=pr.to;
+            }catch(_){}
+          }
+        }catch(_){}
         skillsIndex = buildSkillsIndex(metas);
       }
     }catch(_){}

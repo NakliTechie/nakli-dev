@@ -144,8 +144,13 @@ await test('NAF-04: the learn fork is reachable — tool registered, handled, an
   assert.match(src, /autoReviewTimer\s*=\s*setTimeout/, 'a deferred review is actually scheduled');
 });
 
-await test('NAF-19: skill lifecycle is wired into the app, not merely exported', async () => {
-  assert.match(src, /skill-lifecycle\.mjs/, 'the app imports the lifecycle module — aging and revival cannot run otherwise');
+await test('NAF-19: skill lifecycle is CALLED, not merely imported', async () => {
+  // An unused import is not a wiring — that is the same stub-shaped defect this audit found.
+  assert.match(src, /skill-lifecycle\.mjs/, 'the app imports the lifecycle module');
+  assert.match(src, /skillLifecycle\(metas,/, 'aging is actually evaluated against the project\'s skills');
+  assert.match(src, /applySkillStatus\([\s\S]{0,90}?automatic:\s*true/, 'a proposed transition is WRITTEN, and marked automatic so it does not reset the aging clock');
+  assert.match(src, /reviveOnUse\(/, 'a deliberately loaded stale skill is revived');
+  assert.match(src, /foldSkillUsage\(/, 'usage is folded from the run records that drive aging');
 });
 
 await test('NAF-01: skill activation is ENFORCED, not advisory', async () => {

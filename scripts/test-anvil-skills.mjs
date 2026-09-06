@@ -16,7 +16,8 @@ assert.match(anvil, /planSkillWrite\(ar\|\|\{\}, \{ existing, existingFiles, ses
 assert.match(anvil, /makeEnvelope\(\{ app:'anvil', tool:'skill_manage', diff: plan\.diff/, 'every skill write is a P0 envelope');
 assert.match(anvil, /if\(mode==='code'\) tools\.push\(skillManageTool\(\)\);/, 'skill_manage is offered in code mode');
 assert.match(anvil, /nm==='skill_manage'\)\)\{/, 'skill_manage is refused outside code mode');
-assert.match(anvil, /metas\.push\(\{ name, description: sk\.description, status: sk\.status \}\)/, 'the index push carries status (a staged skill must not bind)');
+// shape, not signature: the push also carries the pinned/created/updated stamps the lifecycle reads
+assert.match(anvil, /metas\.push\(\{ name, description: sk\.description, status: sk\.status/, 'the index push carries status (a staged skill must not bind)');
 // A non-active skill must never BIND. Since forward-pass NAF-12 a STAGED draft may be shown for
 // revision — it was otherwise unrevisable (skill refused it as staged, skill_manage as unread) —
 // but only downstream of the sentinel re-scan, and labelled as not-instructions.
