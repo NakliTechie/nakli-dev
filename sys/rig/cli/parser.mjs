@@ -25,8 +25,14 @@ const ALIASES = {
 const NAMESPACES = new Set(['fs', 'git']);
 const SHORT = { R: 'recursive', r: 'recursive', n: 'maxResults' };
 
+// A marker for "this character came from inside SINGLE quotes, treat it literally". Tokenizing
+// throws quotes away, so by the time $VAR expansion ran there was no way to tell `'$X'` from
+// `$X` and single quotes protected nothing (forward-pass R2c). Opt-in, so the other caller is
+// unaffected; the shell strips every marker at the end of expansion.
+export const LITERAL_MARK = '\u0001';
+
 // Quote-aware tokenizer. Preserves an empty quoted string as a token.
-export function tokenize(s) {
+export function tokenize(s, { markLiteral = false } = {}) {
   const out = [];
   let cur = '';
   let quote = null;
@@ -35,6 +41,9 @@ export function tokenize(s) {
     const c = s[i];
     if (quote) {
       if (c === quote) quote = null;
+      // `$` is literal only inside SINGLE quotes; `*` and `?` are literal inside EITHER kind,
+      // because a quoted glob must not be filename-expanded (bash behaves the same way).
+      else if (markLiteral && ((quote === "'" && c === '$') || c === '*' || c === '?')) cur += LITERAL_MARK + c;
       else cur += c;
     } else if (c === '"' || c === "'") {
       quote = c; has = true;

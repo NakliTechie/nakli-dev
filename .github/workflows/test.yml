@@ -113,6 +113,8 @@ jobs:
         run: node sys/rig/cli/test/shell.test.mjs
       - name: rig shell conformance
         run: node sys/rig/cli/test/conformance.test.mjs
+      - name: shell false friends (never a wrong exit 0)
+        run: node sys/rig/cli/test/false-friends.test.mjs
 
       - name: Verify the history tool — search and read past runs (the retrieval half)
         run: node scripts/test-anvil-history.mjs

@@ -1,0 +1,148 @@
+// Conformance — the shell must never answer WRONGLY with exit 0.
+//   node sys/rig/cli/test/false-friends.test.mjs
+//
+// A missing command exits 127 and the agent adapts. A wrong exit 0 is believed, and every step
+// downstream inherits a corrupted premise. Thirteen behaviours were in that second category
+// (plan/anvil-command-surface-delta.md, verified live): `grep -v` returned exactly the lines it
+// was asked to exclude, `grep -i` reported no match, the text builtins ignored file arguments and
+// returned "", `find -name` was ignored, single quotes did not protect `$VAR`.
+//
+// Every case below asserts BOTH that the old wrong answer is gone AND that a benign use still
+// works — a widened check that fires on ordinary work gets turned off, which helps nobody.
+import { createShell } from '../shell.mjs';
+import { buildRigRegistry } from '../../registry/index.mjs';
+import { createFileops, MemoryBackend } from '../../fileops/index.mjs';
+import { createGrant, createOpLog, createAgentFace } from '../../agent/index.mjs';
+
+let passed = 0; const failures = [];
+async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function eq(a, b, m) { if (a !== b) throw new Error(`${m || 'ne'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); }
+
+async function shell() {
+  const fs = createFileops({ backend: new MemoryBackend() });
+  const registry = buildRigRegistry({ fs });
+  const grant = createGrant({ prefixes: [''], scopes: ['fs:read', 'fs:write', 'fs:remove', 'git:read', 'git:write', 'git:remote', 'git:push'] });
+  const face = createAgentFace({ registry, grant, opLog: createOpLog({ fs: createFileops({ backend: new MemoryBackend() }) }), actor: 'a' });
+  const sh = createShell({ registry, face });
+  const run = async (c) => { const r = await sh.feed(c); return { out: String(r.output || '').trim(), code: sh.lastCode }; };
+  await run("printf 'Apple\\nbanana\\nCherry\\nbanana\\n' > f.txt");
+  return { sh, run };
+}
+
+// ── R2a — file arguments were silently ignored, so every one of these returned "" ─────────
+await test('R2a: the text builtins read their file arguments', async () => {
+  const { run } = await shell();
+  eq((await run('head -2 f.txt')).out, 'Apple\nbanana', 'head reads the file');
+  eq((await run('tail -1 f.txt')).out, 'banana', 'tail reads the file');
+  eq((await run('wc -l f.txt')).out, '4', 'wc reads the file');
+  eq((await run('sort f.txt')).out, 'Apple\nCherry\nbanana\nbanana', 'sort reads the file');
+  eq((await run("sed 's/Apple/Pear/' f.txt")).out.split('\n')[0], 'Pear', 'sed reads the file');
+  eq((await run("awk '{print $1}' f.txt")).out.split('\n')[0], 'Apple', 'awk reads the file');
+  // stdin still works — the file path is an addition, not a replacement
+  eq((await run('cat f.txt | head -1')).out, 'Apple', 'stdin still feeds head');
+  // and a missing file is an ERROR, not an empty success
+  const miss = await run('head -1 nope.txt');
+  assert(miss.code !== 0, `a missing file must not exit 0: ${JSON.stringify(miss)}`);
+});
+
+// ── R2b — grep answered wrongly ───────────────────────────────────────────────────────────
+await test('R2b: grep -v excludes, -i matches, -c counts, -r refuses', async () => {
+  const { run } = await shell();
+  // the worst one: -v returned exactly the lines it was asked to suppress
+  eq((await run('grep -v banana f.txt')).out, 'Apple\nCherry', '-v EXCLUDES');
+  eq((await run('grep -i apple f.txt')).out, 'Apple', '-i is case-insensitive');
+  eq((await run('grep -c banana f.txt')).out, '2', '-c counts');
+  eq((await run('grep -n Cherry f.txt')).out, '3:Cherry', '-n still numbers');
+  const r = await run('grep -r x f.txt');
+  assert(r.code !== 0 && /rg/.test(r.out), `-r refuses and names the alternative: ${JSON.stringify(r)}`);
+  // benign: a plain grep is unchanged, and a real miss still exits non-zero with no output
+  eq((await run('grep banana f.txt')).out, 'banana\nbanana', 'a plain grep is unchanged');
+  const none = await run('grep zebra f.txt');
+  assert(none.out === '' && none.code !== 0, 'a genuine non-match is still an empty non-zero');
+});
+
+// ── R2c — single quotes protected nothing ────────────────────────────────────────────────
+await test('R2c: single quotes are literal; double quotes still expand', async () => {
+  const { run } = await shell();
+  eq((await run("X=world; echo 'literal $X'")).out, 'literal $X', 'single quotes protect $');
+  eq((await run('X=world; echo "double $X"')).out, 'double world', 'double quotes still expand');
+  eq((await run('X=world; echo $X')).out, 'world', 'a bare $VAR still expands');
+  // a quoted glob is a PATTERN for the command, not a filename for the shell
+  await run("printf 'a\\n' > one.txt"); await run("printf 'b\\n' > sub/two.txt");
+  const found = (await run("find . -name '*.txt'")).out.split('\n').sort();
+  assert(found.includes('sub/two.txt'), `a quoted glob reaches the command: ${JSON.stringify(found)}`);
+  // an UNquoted glob still expands as a filename
+  eq((await run('cat *.txt')).out.includes('a'), true, 'an unquoted glob still expands');
+});
+
+// ── R2d — an unimplemented flag was ignored rather than refused ───────────────────────────
+await test('R2d: an unsupported flag is refused, never silently ignored', async () => {
+  const { run } = await shell();
+  for (const cmd of ['head -q f.txt', 'sort -Z f.txt', 'wc -Q f.txt', 'uniq -Z f.txt', 'grep -Z x f.txt']) {
+    const r = await run(cmd);
+    eq(r.code, 2, `${cmd} must exit 2`);
+    assert(/unsupported flag/.test(r.out), `${cmd} names the flag: ${r.out}`);
+  }
+  // benign: the flags each builtin DOES implement still work
+  eq((await run('sort -r f.txt')).out.split('\n')[0], 'banana', 'sort -r works');
+  eq((await run('sort -u f.txt')).out.split('\n').length, 3, 'sort -u works');
+  eq((await run('uniq -c f.txt | wc -l')).out, '4', 'uniq -c works');
+});
+
+// ── R2e — the remaining silent wrongs ────────────────────────────────────────────────────
+await test('R2e: find predicates, wc line counting, true/false, comments, ls exit, < redirect', async () => {
+  const { run } = await shell();
+  await run("printf 'x\\n' > keep.txt"); await run("printf 'y\\n' > drop.log");
+  const named = (await run("find . -name '*.log'")).out;
+  eq(named, 'drop.log', `-name filters (it used to return everything): ${named}`);
+  assert(!(await run("find . -name '*.log'")).out.includes('keep.txt'), '-name really excludes');
+  await run("printf 'z\\n' > d/deep.txt");
+  assert((await run('find . -type d')).out.includes('d'), '-type d finds a directory');
+  assert(!(await run('find . -type f')).out.split('\n').includes('d'), '-type f excludes directories');
+  const badp = await run('find . -newer x');
+  eq(badp.code, 2, 'an unimplemented predicate is refused, not ignored');
+  // wc counts LINES, so a pipeline no longer undercounts by one
+  eq((await run('grep banana f.txt | wc -l')).out, '2', 'a pipeline count is right');
+  eq((await run('true && echo yes')).out, 'yes', 'true exists');
+  eq((await run('false || echo no')).out, 'no', 'false exists');
+  eq((await run('# just a comment')).out, '', 'a comment is not a command-not-found');
+  eq((await run('echo hi # trailing')).out, 'hi', 'a trailing comment is stripped');
+  const missing = await run('ls nosuchdir');
+  assert(missing.code !== 0, `ls on a missing path must not exit 0: ${JSON.stringify(missing)}`);
+  eq((await run('ls nosuchdir || echo fallback')).out.includes('fallback'), true, 'so || takes the fallback');
+  // < redirect fed nothing at all before
+  eq((await run('tr a-z A-Z < keep.txt')).out, 'X', '< feeds stdin, and tr expands ranges');
+  await run("printf 'a,b,c\\nd,e,f\\n' > t.csv");
+  eq((await run('cut -d, -f2 < t.csv')).out, 'b\ne', 'cut reads a redirect too');
+  eq((await run('cut -d, -f1-2 t.csv')).out, 'a,b\nd,e', 'cut handles a RANGE (it used to read one field)');
+});
+
+// ── R3b — reachable at all ───────────────────────────────────────────────────────────────
+await test('R3b: git clone/fetch/push are reachable from the shell', async () => {
+  const { run } = await shell();
+  for (const [cmd, word] of [['git clone', 'clone'], ['git fetch', 'fetch'], ['git push', 'push']]) {
+    const r = await run(cmd);
+    assert(!/is not a rig git command/.test(r.out), `${cmd} is wired: ${r.out}`);
+    assert(new RegExp(`usage: git ${word}`).test(r.out), `${cmd} states its usage: ${r.out}`);
+  }
+  assert(/clone\|fetch\|push/.test((await run('git')).out), 'the usage line advertises them');
+});
+
+// ── R3a — the advertised surface matches the built one ───────────────────────────────────
+await test('R3a: help describes a curated subset and says flags are refused', async () => {
+  const { run } = await shell();
+  const h = (await run('help')).out;
+  assert(/CURATED/.test(h), 'help says this is not coreutils');
+  assert(/REFUSES an unsupported flag/.test(h), 'help states the unknown-flag policy');
+  assert(/no -r/.test(h) && /rg/.test(h), 'help names grep -r and its alternative');
+  assert(/single quotes are literal/.test(h), 'help states the quoting rule');
+  assert(/No subshells, loops/.test(h), 'help names what the grammar lacks');
+});
+
+if (failures.length) {
+  console.error(`shell false-friends: ${passed} passed, ${failures.length} FAILED`);
+  for (const f of failures) console.error(`  FAIL ${f.n}\n        ${f.message}`);
+  process.exit(1);
+}
+console.log(`shell false-friends: ${passed}/${passed} passed — no builtin answers wrongly with exit 0`);
