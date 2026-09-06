@@ -801,7 +801,8 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     let ai = 0;
     while (ai < argv.length && ASSIGN.test(argv[ai])) {
       const eq = argv[ai].indexOf('=');
-      state.vars.set(argv[ai].slice(0, eq), expand(argv[ai].slice(eq + 1)));
+      // strip here too: a stored value keeps its markers otherwise, and `env` prints them
+      state.vars.set(argv[ai].slice(0, eq), stripArgMarks(expand(argv[ai].slice(eq + 1))));
       ai++;
     }
     if (ai > 0) argv = argv.slice(ai);

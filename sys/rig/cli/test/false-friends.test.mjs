@@ -76,6 +76,19 @@ await test('R2c: single quotes are literal; double quotes still expand', async (
   eq((await run('cat *.txt')).out.includes('a'), true, 'an unquoted glob still expands');
 });
 
+// The quote fix works by marking literal characters internally. That marker is an implementation
+// detail and must never escape — including through a stored variable, which `env` prints.
+await test('R2c: the internal literal marker never reaches a command, a value, or the disk', async () => {
+  const { run } = await shell();
+  const MARK = String.fromCharCode(1);
+  const hasMark = (s) => s.includes(MARK);
+  for (const cmd of ["echo 'lit $X'", "echo '*.txt'", 'echo "*.txt"', "V='a*b'; echo $V",
+                     "export Q='p$q'; env", "echo x > 'out.txt'", "cat 'out.txt'", 'ls']) {
+    const r = await run(cmd);
+    assert(!hasMark(r.out), `marker leaked from \`${cmd}\`: ${JSON.stringify(r.out)}`);
+  }
+});
+
 // ── R2d — an unimplemented flag was ignored rather than refused ───────────────────────────
 await test('R2d: an unsupported flag is refused, never silently ignored', async () => {
   const { run } = await shell();
