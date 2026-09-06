@@ -148,6 +148,28 @@ await test('NAF-19: skill lifecycle is wired into the app, not merely exported',
   assert.match(src, /skill-lifecycle\.mjs/, 'the app imports the lifecycle module — aging and revival cannot run otherwise');
 });
 
+await test('NAF-01: skill activation is ENFORCED, not advisory', async () => {
+  // The sentinel ran only inside skill_manage; the load path trusted the file's own `status:`
+  // field, and nothing stopped the general write/edit tools from reaching the skills directory.
+  // So: create a quarantined skill, edit one line to `status: active`, and it was served.
+  // Defence in depth — refuse the general tools AND re-scan at the point of use.
+  assert.match(src, /scanSkill\(/, 'the load path re-scans the skill it is about to serve');
+  const load = src.slice(src.indexOf('skillSession.noteRead') - 1200, src.indexOf('skillSession.noteRead'));
+  assert.match(load, /scanSkill/, 'the re-scan happens BEFORE the body is handed over');
+  assert.ok(/guard\.state===['"]refused['"]|guard\.state===['"]quarantined['"]/.test(load), 'a failing scan refuses to bind');
+  // and the write guard covers every tool that can put bytes in that directory
+  const guard = /\['write','edit','apply_patch','edit_lines','remove','move'\]\.includes\(nm\)/.test(src);
+  assert.ok(guard, 'the general file tools are refused against the skills directory');
+  assert.ok(/blob\.includes\(SKILLS_DIR\)/.test(src), 'the guard inspects patch/edit payloads too, not just a path argument');
+});
+
+// A sanity check on the harness itself: it must actually be able to fail.
+await test('the harness is not vacuous — a deliberately wrong expectation fails', () => {
+  let threw = false;
+  try { assert.match(src, /this_string_is_not_in_the_module_xyzzy/, 'sentinel'); } catch { threw = true; }
+  assert.ok(threw, 'assertions in this file can fail');
+});
+
 if (failures.length) {
   console.error(`anvil-handlers: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.n}\n        ${f.message}`);

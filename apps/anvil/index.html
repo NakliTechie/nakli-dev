@@ -236,7 +236,7 @@
   import { skillLifecycle, applySkillStatus } from '../../sys/ai/skill-lifecycle.mjs';
   import { contextRemainingTool, checkpointTool, contextBudget, windowFromOllama, windowForPreset, capHandoff } from '../../sys/ai/context-budget.mjs';
   import { runLearnReview, shouldAutoReview, learnReviewTool, AUTO_REVIEW_IDLE_MS } from '../../sys/ai/learn.mjs';
-  import { sentinelLine } from '../../sys/ai/skill-sentinel.mjs';
+  import { sentinelLine, scanSkill } from '../../sys/ai/skill-sentinel.mjs';
   import { makeEnvelope } from '../../sys/staging/envelope.mjs';
   import { registerAppDiffTypes } from '../../sys/staging/diff-types.mjs';
   // A skill write is a P0 envelope (diff type 'anvil-skill') — the first agent-produced diff.
@@ -1581,6 +1581,15 @@
           // A staged or quarantined skill does not bind: it is not served on request either,
           // and its name is not advertised (C1 checker finding).
           if(!INJECTED_STATUSES.includes(sk.status)) return 'Skill "'+name+'" is '+sk.status+' and does not bind until the owner sets status: active.';
+          // Defence in depth (forward-pass NAF-01). `status:` is ordinary text in a file the
+          // agent can edit, so a quarantined skill could be flipped to active and served with
+          // its injection intact. Re-scan at the point of USE: the sentinel's verdict decides,
+          // never the file's own claim about itself.
+          const guard = scanSkill({ name: sk.name||name, description: sk.description||'', body: sk.body||'' });
+          if(guard.state==='refused' || guard.state==='quarantined'){
+            skillStatus[name]='quarantined';
+            return 'Skill "'+name+'" did not pass the sentinel when loaded ('+sentinelLine(guard)+') and will not bind. Its status was edited outside `skill_manage`; re-create it there.';
+          }
           skillSession.noteRead(name); return 'Skill: '+(sk.name||name)+'\n\n'+sk.body; } }catch(_){}
         const names=Object.keys(skillMap).filter(n=>INJECTED_STATUSES.includes(skillStatus[n]||'active'));
         return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
@@ -1734,6 +1743,14 @@
       }
       // (the preTool hook guard now runs at the top of executeTool, so it also
       // covers the Anvil-layer tools that return above this point)
+      // The skills directory is authority, not ordinary content: a file there decides what
+      // instructions bind. The general file tools must not reach it, or the sentinel and the
+      // person-only activation are advisory (forward-pass NAF-01). skill_manage is the one door.
+      if(['write','edit','apply_patch','edit_lines','remove','move'].includes(nm) && ar){
+        const blob = String(ar.path||ar.file||'')+'\n'+String(ar.patch||'')+'\n'+String(ar.edit||'')+'\n'+String(ar.to||'');
+        if(blob.includes(SKILLS_DIR))
+          return 'Refused: '+SKILLS_DIR+'/ is managed by `skill_manage`, which scans a skill before it can bind. Editing it with `'+nm+'` would bypass that check. Use skill_manage (create/patch), and remember only the owner can set status: active.';
+      }
       if((nm==='write'||nm==='edit') && ar && (ar.path||ar.file)){
         const p=ar.path||ar.file;
         try{ const r=await fs.read(p,{encoding:'utf-8'}); preImages[p]= (r&&r.ok)? r.data : ''; }catch(_){ preImages[p]=''; }

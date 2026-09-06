@@ -34,8 +34,11 @@ const INJECTION = [
 
 // In a script-like support file, these are exfiltration or destruction primitives.
 const SHELL = [
-  /\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|python[0-9.]*|node)\b/i,
-  /\brm\s+-[a-z]*r[a-z]*f?\s+(\/|~|\$HOME|\*)/i,
+  // an absolute interpreter path is the same act: `curl … | /bin/sh` (forward-pass NAF-14)
+  /\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(\/\S*\/)?(sh|bash|zsh|python[0-9.]*|node)\b/i,
+  // …and so is an end-of-options separator: `rm -rf -- /`. Require a recursive flag somewhere
+  // on the line, then a dangerous target, with any number of flags or `--` in between.
+  /\brm\b[^\n]*?\s-[a-z]*r[a-z]*\b[^\n]*?\s(?:--\s+)?(\/|~|\$HOME|\*)(\s|$)/i,
   /\beval\s*\(?\s*\$\(/,
   /\bbase64\s+(-d|--decode)\b[^\n]*\|\s*(sh|bash)/i,
   /\bnc\b[^\n]*\s-e\s/,

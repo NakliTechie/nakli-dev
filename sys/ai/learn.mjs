@@ -58,14 +58,17 @@ export async function runLearnReview({ record, infer, ledger = null, propose, no
   const reply = await infer({ messages: [{ role: 'system', content: 'You are a terse reviewer. Reply only with the JSON described.' }, { role: 'user', content: prompt }], tools: [] });
   const proposals = parseProposals(reply?.content ?? '');
   // fingerprint + poison-check: a proposal the reviewer already rejected is dropped.
-  const withFp = proposals.map((p) => ({ ...p, ...forFingerprint(p) }));
+  // Index-carried, because two proposals can share a name and kind: find() then returned the
+  // FIRST match, so a poisoned proposal's CONTENT was staged under a clean one's fingerprint
+  // — the exact re-proposal the poison ledger exists to stop (forward-pass NAF-03).
+  const withFp = proposals.map((p, i) => ({ ...p, ...forFingerprint(p), _idx: i }));
   // Always fingerprint (an empty ledger drops nothing) so every staged proposal carries its fp —
   // the reviewer/poison memory keys on it whether or not a ledger was supplied.
   const { kept, dropped } = await filterProposals(ledger || createProposalLedger(), withFp, { now });
   const staged = [];
   for (const p of kept) {
     // reattach the original proposal fields (kept carries the fingerprint form)
-    const orig = proposals.find((o) => (o.name === p.name && o.kind === p.kind)) || p;
+    const orig = (Number.isInteger(p._idx) ? proposals[p._idx] : null) || p;
     const r = propose ? await propose({ ...orig, fp: p.fp }) : { ok: false };
     if (r && r.ok) staged.push({ kind: orig.kind, name: orig.name, fp: p.fp, staged: r.staged ?? true });
   }
