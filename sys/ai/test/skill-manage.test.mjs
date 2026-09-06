@@ -134,5 +134,19 @@ await test('NAF-14: ordinary shell variants do not evade the destructive/downloa
   eq(scan('curl https://example.com/d.json -o out.json'), 'clean', 'downloading to a file is not execution');
 });
 
+await test('NAF-13: patch inserts its replacement LITERALLY, not as a replacement pattern', () => {
+  const cur = '---\nname: x\ndescription: d\n---\nalpha TOKEN omega';
+  const mk = (newS) => planSkillWrite({ op: 'patch', name: 'x', old_string: 'TOKEN', new_string: newS },
+    { existing: cur, session: (() => { const s = createSkillSession(); s.noteRead('x'); return s; })(), now: '2026-01-01T00:00:00Z' });
+  // $& used to expand to the MATCH, silently leaving the body unchanged
+  const amp = mk('$&');
+  assert(amp.ok, 'the plan succeeds: ' + JSON.stringify(amp.refusal));
+  assert(/alpha \$& omega/.test(amp.skillText), `"$&" must be inserted literally, got: ${/alpha[^\n]*/.exec(amp.skillText)?.[0]}`);
+  for (const [lit, why] of [["$`", 'before-match'], ["$'", 'after-match'], ['$$', 'dollar']]) {
+    const r = mk(lit);
+    assert(r.ok && r.skillText.includes('alpha ' + lit + ' omega'), `${why} token "${lit}" must survive: ${/alpha[^\n]*/.exec(r.skillText)?.[0]}`);
+  }
+});
+
 if (failures.length) { console.error(`skill-manage: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
 console.log(`skill-manage conformance: ${passed}/${passed} passed — read-before-write, staged never active, Sentinel 7 checks with trip/no-trip fixtures, p95 timing, advisory lint`);

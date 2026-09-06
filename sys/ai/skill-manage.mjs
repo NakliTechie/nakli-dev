@@ -108,7 +108,7 @@ export function planSkillWrite(args = {}, { existing = null, existingFiles = [],
     if (!oldS) return { ok: false, refusal: 'Refused: patch needs old_string.' };
     const n = cur.body.split(oldS).length - 1;
     if (n !== 1) return { ok: false, refusal: `Refused: old_string matches ${n} places in "${name}" — it must match exactly one.` };
-    const next = { ...cur, status: cur.status === 'quarantined' ? 'quarantined' : 'staged', updated: now, body: cur.body.replace(oldS, newS) };
+    const next = { ...cur, status: cur.status === 'quarantined' ? 'quarantined' : 'staged', updated: now, body: cur.body.replace(oldS, () => newS) };
     return finish(op, name, SKILL_FILE, existing, next, existingFiles);
   }
 

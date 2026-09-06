@@ -55,10 +55,15 @@ export function reviveOnUse(text, { now } = {}) {
   return serializeSkillFile({ ...s, status: 'active', updated: iso(now) || s.updated });
 }
 
-export function applySkillStatus(text, status, { now } = {}) {
+// `automatic: true` for a transition THIS module proposed. `updated` is one of the anchors
+// aging reads, so stamping it on an automatic stale transition reset the very clock that drives
+// archival — a skill went stale at 30 days and then needed another 90, not 60 (forward-pass
+// NAF-18). An owner's edit still counts as a relevance signal; the curator's own bookkeeping
+// does not.
+export function applySkillStatus(text, status, { now, automatic = false } = {}) {
   if (!SKILL_STATUSES.includes(status)) throw new Error(`unknown skill status "${status}" — one of ${SKILL_STATUSES.join(', ')}`);
   const s = parseSkillText(text);
-  return serializeSkillFile({ ...s, status, updated: iso(now) || s.updated });
+  return serializeSkillFile({ ...s, status, updated: automatic ? s.updated : (iso(now) || s.updated) });
 }
 
 function parseSkillText(text) {

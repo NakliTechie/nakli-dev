@@ -28,11 +28,34 @@ function stable(v) {
 }
 // The fingerprint inputs for a staged mutation (reuses the C3 {goal, steps, paths} shape): the
 // app+tool identity, the whole diff as one canonical step, and any file paths the diff names.
+// A mutation's identity is its exact bytes, but `canonicalize` runs steps through a NATURAL
+// LANGUAGE tokenizer that strips every non-alphanumeric — so `x=1` and `x=-1` fingerprinted
+// identically and discarding one poisoned the other (forward-pass NAF-17). Hand it a hex digest
+// of the serialized diff instead: hex survives tokenization unchanged, so distinct bytes stay
+// distinct while identical bytes still match.
+function diffDigest(text) {
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  const s = String(text ?? '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (c + i), 0x85ebca6b) >>> 0;
+  }
+  return 'd' + h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+}
 function fpInputs({ app, tool, diff }) {
   const paths = [];
   const scan = (o) => { if (!o || typeof o !== 'object') return; for (const k of Object.keys(o)) { if ((k === 'path' || k === 'file') && typeof o[k] === 'string') paths.push(o[k]); const v = o[k]; if (v && typeof v === 'object') scan(v); } };
   scan(diff);
-  return { goal: `${app}:${tool}`, steps: [stable(diff)], paths: [...new Set(paths)] };
+  return { goal: `${app}:${tool}`, steps: [diffDigest(stable(diff))], paths: [...new Set(paths)] };
+}
+
+// A staged proposal must be exactly what was reviewed. Keeping the caller's object let it be
+// mutated between the preview and the commit (forward-pass NAF-15) — a review queue whose
+// content can change after review is not a review queue. Snapshot on the way in.
+function snapshot(v) {
+  try { return structuredClone(v); }
+  catch (_) { try { return JSON.parse(JSON.stringify(v)); } catch (_2) { return v; } }
 }
 
 export function createReviewQueue({ now = () => Date.now(), ledger = null, onApply = null, onReject = null } = {}) {
@@ -43,7 +66,7 @@ export function createReviewQueue({ now = () => Date.now(), ledger = null, onApp
     // Does NOT apply. Does NOT consult the ledger — the caller checks isPoisoned first.
     stage({ app, tool, diff, expires = null, reversible = false } = {}) {
       let envelope;
-      try { envelope = makeEnvelope({ app, tool, diff, expires }); }
+      try { envelope = makeEnvelope({ app, tool, diff: snapshot(diff), expires }); }
       catch (e) { return { error: String(e && e.message || e) }; }
       pending.set(envelope.proposal_id, { envelope, reversible: !!reversible });
       return { proposal_id: envelope.proposal_id };
@@ -60,15 +83,21 @@ export function createReviewQueue({ now = () => Date.now(), ledger = null, onApp
     },
 
     // Commit a proposal. Expiry outranks authority. On allowed: dequeue, onApply(envelope) once.
-    commit(proposal_id, ctx = {}) {
+    // Async because applying is: an onApply that rejected used to leave the queue empty while
+    // commit reported {ok:true, applied:true} and the error surfaced as an unhandled rejection
+    // (forward-pass NAF-16). The proposal is only dropped once the apply has actually succeeded.
+    async commit(proposal_id, ctx = {}) {
       const entry = pending.get(proposal_id);
       if (!entry) return { ok: false, reason: 'no such proposal' };
       const t = now();
       if (isExpired(entry.envelope, t)) return { ok: false, reason: 'expired' };
       const decision = decideCommit({ actor: ctx.actor, tool: entry.envelope.tool, reversible: ctx.reversible ?? entry.reversible, grant: ctx.grant });
       if (!decision.allowed) return { ok: false, reason: decision.reason };
+      if (typeof onApply === 'function') {
+        try { await onApply(entry.envelope); }
+        catch (e) { return { ok: false, reason: 'apply failed: ' + String((e && e.message) || e) }; }
+      }
       pending.delete(proposal_id);
-      if (typeof onApply === 'function') onApply(entry.envelope);
       return { ok: true, applied: true, mode: decision.mode };
     },
 

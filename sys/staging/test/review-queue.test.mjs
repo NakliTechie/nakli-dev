@@ -16,7 +16,7 @@ registerAppDiffTypes(['reckon', 'draft']); // real normalizers so makeEnvelope a
 const RECKON_DIFF = { sheet: 'Sheet1', ops: [{ op: 'setCells', sheet: 'Sheet1', cells: { A1: { v: 2 } } }], inverse: [{ op: 'setCells', sheet: 'Sheet1', cells: { A1: { v: 1 } } }] };
 const DRAFT_DIFF = { docId: 'd1', from: 0, to: 3, hunks: [{ index: 0, kind: 'replace', delText: 'old', insText: 'new' }] };
 
-await test('stage returns an id and applies NOTHING; list carries the normalized preview', () => {
+await test('stage returns an id and applies NOTHING; list carries the normalized preview', async () => {
   let applied = 0;
   const q = createReviewQueue({ onApply: () => applied++ });
   const { proposal_id } = q.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF, reversible: true });
@@ -27,24 +27,24 @@ await test('stage returns an id and applies NOTHING; list carries the normalized
   assert(/A1/.test(JSON.stringify(row.preview.rows)), 'the cell edit is in the preview');
 });
 
-await test('an unregistered app returns { error }, never throws', () => {
+await test('an unregistered app returns { error }, never throws', async () => {
   const q = createReviewQueue();
   const r = q.stage({ app: 'nope', tool: 'x', diff: {} });
   assert(r.error && /diff type/.test(r.error), `error surfaced: ${JSON.stringify(r)}`); eq(q.size(), 0, 'nothing queued');
 });
 
-await test('a person commit fires onApply exactly once and dequeues; a second commit is a no-op', () => {
+await test('a person commit fires onApply exactly once and dequeues; a second commit is a no-op', async () => {
   let applied = []; const q = createReviewQueue({ onApply: (env) => applied.push(env.proposal_id) });
   const { proposal_id } = q.stage({ app: 'draft', tool: 'draft.commit', diff: DRAFT_DIFF, reversible: true });
-  const r = q.commit(proposal_id, { actor: 'person' });
+  const r = await q.commit(proposal_id, { actor: 'person' });
   assert(r.ok && r.applied && r.mode === 'person', JSON.stringify(r)); eq(applied.length, 1, 'applied once'); eq(q.size(), 0, 'dequeued');
-  eq(q.commit(proposal_id, { actor: 'person' }).ok, false, 'a second commit finds nothing'); eq(applied.length, 1, 'not applied twice');
+  eq((await q.commit(proposal_id, { actor: 'person' })).ok, false, 'a second commit finds nothing'); eq(applied.length, 1, 'not applied twice');
 });
 
-await test('an agent WITHOUT an auto-commit grant is refused and the proposal stays queued', () => {
+await test('an agent WITHOUT an auto-commit grant is refused and the proposal stays queued', async () => {
   let applied = 0; const q = createReviewQueue({ onApply: () => applied++ });
   const { proposal_id } = q.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF, reversible: true });
-  const r = q.commit(proposal_id, { actor: 'agent' });
+  const r = await q.commit(proposal_id, { actor: 'agent' });
   eq(r.ok, false, 'refused'); assert(/person-only|auto-commit/.test(r.reason), r.reason); eq(applied, 0, 'not applied'); eq(q.size(), 1, 'still queued for a person');
 });
 
@@ -52,20 +52,20 @@ await test('an agent WITH a reversible auto-commit grant commits a reversible op
   const grant = await issueGrant(newRootKey(), { caveats: [caveat.tools(['setCells']), caveat.autoCommit(true)] });
   let applied = 0; const q = createReviewQueue({ onApply: () => applied++ });
   const revId = q.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF, reversible: true }).proposal_id;
-  eq(q.commit(revId, { actor: 'agent', grant }).mode, 'auto', 'reversible → auto-commit'); eq(applied, 1, 'applied');
+  eq((await q.commit(revId, { actor: 'agent', grant })).mode, 'auto', 'reversible → auto-commit'); eq(applied, 1, 'applied');
   const irrId = q.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF, reversible: false }).proposal_id;
-  eq(q.commit(irrId, { actor: 'agent', grant }).ok, false, 'irreversible still person-only under a reversible grant'); eq(q.size(), 1, 'left queued');
+  eq((await q.commit(irrId, { actor: 'agent', grant })).ok, false, 'irreversible still person-only under a reversible grant'); eq(q.size(), 1, 'left queued');
 });
 
-await test('an expired proposal is refused even for a person, and stays queued', () => {
+await test('an expired proposal is refused even for a person, and stays queued', async () => {
   let t = 1000; let applied = 0; const q = createReviewQueue({ now: () => t, onApply: () => applied++ });
   const { proposal_id } = q.stage({ app: 'draft', tool: 'draft.commit', diff: DRAFT_DIFF, expires: 2000 });
   t = 3000; // past expiry
-  const r = q.commit(proposal_id, { actor: 'person' });
+  const r = await q.commit(proposal_id, { actor: 'person' });
   eq(r.ok, false, 'refused'); eq(r.reason, 'expired', 'reason is expiry'); eq(applied, 0, 'never applied'); eq(q.size(), 1, 'left queued, not silently dropped');
   // a non-expired proposal a person commits does apply and dequeue (the control)
   t = 1500; const ok = q.stage({ app: 'draft', tool: 'draft.commit', diff: DRAFT_DIFF, expires: 5000 }).proposal_id;
-  eq(q.commit(ok, { actor: 'person' }).ok, true, 'a still-valid proposal commits'); eq(applied, 1, 'and applies');
+  eq((await q.commit(ok, { actor: 'person' })).ok, true, 'a still-valid proposal commits'); eq(applied, 1, 'and applies');
 });
 
 await test('discard dequeues, fires onReject, and poisons the fingerprint so the SAME diff is re-detectable', async () => {
@@ -83,9 +83,50 @@ await test('discard dequeues, fires onReject, and poisons the fingerprint so the
 await test('isPoisoned is false with no ledger; unknown proposal_id on commit/discard → {ok:false}, no throw', async () => {
   const q = createReviewQueue();
   eq(await q.isPoisoned({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF }), false, 'no ledger → never poisoned');
-  eq(q.commit('prop_nope', { actor: 'person' }).ok, false, 'unknown commit');
-  eq(q.commit('prop_nope', { actor: 'person' }).reason, 'no such proposal', 'reason');
+  eq((await q.commit('prop_nope', { actor: 'person' })).ok, false, 'unknown commit');
+  eq((await q.commit('prop_nope', { actor: 'person' })).reason, 'no such proposal', 'reason');
   eq((await q.discard('prop_nope', {})).ok, false, 'unknown discard, no throw');
+});
+
+await test('NAF-15: the staged diff is a SNAPSHOT — mutating it after review cannot change what commits', async () => {
+  const applied = [];
+  const q = createReviewQueue({ onApply: (env) => applied.push(env) });
+  const diff = JSON.parse(JSON.stringify(RECKON_DIFF));
+  const { proposal_id } = q.stage({ app: 'reckon', tool: 'setCells', diff });
+  const preview = JSON.stringify(q.list()[0].preview);
+  // the caller mutates the object it handed over, AFTER the reviewer saw the preview
+  diff.ops[0].cells.A1.v = 999;
+  diff.sheet = 'Injected';
+  eq(JSON.stringify(q.list()[0].preview), preview, 'the preview must not change under the reviewer');
+  eq((await q.commit(proposal_id, { actor: 'person' })).ok, true, 'commits');
+  eq(JSON.stringify(applied[0].diff.ops[0].cells.A1.v), '2', 'the REVIEWED value is what applied, not the mutated one');
+  eq(applied[0].diff.sheet, 'Sheet1', 'and not the mutated sheet');
+});
+
+await test('NAF-16: an apply that fails keeps the proposal and reports honestly', async () => {
+  const q = createReviewQueue({ onApply: async () => { throw new Error('disk full'); } });
+  const { proposal_id } = q.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF });
+  const r = await q.commit(proposal_id, { actor: 'person' });
+  eq(r.ok, false, 'a failed apply is not a success');
+  assert(/disk full/.test(r.reason), `the reason names the failure: ${r.reason}`);
+  eq(q.size(), 1, 'the proposal is STILL QUEUED — losing it would drop the change silently');
+  // and it can be committed once the sink works
+  const q2 = createReviewQueue({ onApply: async () => {} });
+  const p2 = q2.stage({ app: 'reckon', tool: 'setCells', diff: RECKON_DIFF }).proposal_id;
+  eq((await q2.commit(p2, { actor: 'person' })).ok, true, 'a working sink still commits');
+  eq(q2.size(), 0, 'and dequeues');
+});
+
+await test('NAF-17: fingerprints keep code punctuation — x=1 and x=-1 are different mutations', async () => {
+  const ledger = createProposalLedger();
+  const q = createReviewQueue({ ledger });
+  const mk = (text) => ({ sheet: 'S', ops: [{ op: 'setCells', sheet: 'S', cells: { A1: { v: text } } }], inverse: [] });
+  const { proposal_id } = q.stage({ app: 'reckon', tool: 'setCells', diff: mk('x=1') });
+  await q.discard(proposal_id, { reason: 'no' });
+  assert(await q.isPoisoned({ app: 'reckon', tool: 'setCells', diff: mk('x=1') }), 'the SAME diff is poisoned');
+  assert(!(await q.isPoisoned({ app: 'reckon', tool: 'setCells', diff: mk('x=-1') })),
+    'x=-1 is a DIFFERENT mutation — the prose tokenizer stripped the minus sign and poisoned it too');
+  assert(!(await q.isPoisoned({ app: 'reckon', tool: 'setCells', diff: mk('x==1') })), 'and so is x==1');
 });
 
 if (failures.length) { console.error(`review-queue: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
