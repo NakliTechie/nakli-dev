@@ -128,20 +128,20 @@ await test('NAF-08: the checkpoint handler can actually reach the run recorder',
   assert.ok(decl >= 0, 'the executor has a run-context binding');
   assert.ok(decl < exec, 'the run context must be declared before executeTool, not after it');
   assert.ok(/runCtx\s*=\s*\{[^}]*rec/.test(src), 'runTask assigns the recorder into the run context');
-  assert.ok(/runCtx\s*=\s*null/.test(src), 'the run context is cleared between runs');
+  assert.ok(/\}finally\{[\s\S]{0,200}?runCtx\s*=\s*null/.test(src), 'the run context is cleared in runTask\'s finally — the declaration alone does not clear it between runs');
   const cp = src.slice(src.indexOf("nm==='checkpoint'"), src.indexOf("nm==='checkpoint'") + 900);
   assert.ok(/runCtx/.test(cp), 'the checkpoint handler reads the run context rather than an out-of-scope binding');
   assert.ok(!/\brec\.checkpoint\(/.test(cp), 'it no longer calls the out-of-scope `rec`');
 });
 
 await test('NAF-04: the learn fork is reachable — tool registered, handled, and deferred not skipped', async () => {
-  assert.match(src, /learnReviewTool/, 'learnReviewTool is imported and registered as a tool');
+  assert.match(src, /tools\.push\(learnReviewTool\(\)\)/, 'learnReviewTool is pushed into the toolset — importing it is not registering it');
   assert.ok(/nm===['"]learn_this_run['"]/.test(src), 'executeTool has a learn_this_run branch — without it the advertised entry point does not exist');
   // the scheduler must DEFER on a local model, not skip forever: idleMs was hardcoded 0, which
   // made `isLocalModel && idleMs < AUTO_REVIEW_IDLE_MS` permanently true.
   assert.ok(!/shouldAutoReview\(\{[^}]*idleMs:\s*0\s*,/.test(src), 'the trigger no longer hardcodes idleMs:0');
   assert.match(src, /AUTO_REVIEW_IDLE_MS/, 'the trigger uses the idle constant');
-  assert.match(src, /autoReviewTimer\s*=\s*setTimeout/, 'a deferred review is actually scheduled');
+  assert.match(src, /autoReviewTimer\s*=\s*setTimeout\(\(\)=>\{[^}]*learnThisRun\(/, 'the deferred timer actually runs the review — a scheduled no-op is not a deferral');
 });
 
 await test('NAF-19: skill lifecycle is CALLED, not merely imported', async () => {

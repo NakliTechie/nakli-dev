@@ -144,7 +144,7 @@ assert.match(anvil, /runLearnReview\(\{ record:\{ events:rec\.events, resolve:re
 assert.match(anvil, /shouldAutoReview\(\{[^}]*outcome:[^}]*stop:/, 'C5 gates the auto-review on the scheduler');
 // forward-pass NAF-04: a local model must DEFER, not skip forever (idleMs was hardcoded 0).
 assert.match(anvil, /autoReviewTimer=setTimeout/, 'the deferred review is actually scheduled');
-assert.match(anvil, /learnThisRun\(t, rec\)\.catch\(\(\)=>\{\}\)/, 'the auto-review is fire-and-forget after the record is saved');
+assert.match(anvil, /if\(decide\(0\)\.review\) learnThisRun\(t, rec\)\.catch\(\(\)=>\{\}\)/, 'the immediate auto-review stays GATED on the scheduler, not unconditional');
 // and it sits AFTER saveRunRecord (the review reads the saved record)
 assert.ok(anvil.indexOf('const saved=await saveRunRecord') < anvil.indexOf('decide(0).review'), 'the auto-review runs after the record is saved');
 
