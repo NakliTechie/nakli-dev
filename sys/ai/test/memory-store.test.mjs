@@ -1,7 +1,7 @@
 // Conformance — structured project memory (pure).
 //   node sys/ai/test/memory-store.test.mjs
 import { parseFact, buildMemoryIndex, noteToFact, recallTool, MEMORY_DIR, MEMORY_TYPES,
-         findDuplicate, duplicateReply, createRememberBudget, budgetSpentReply, MAX_REMEMBER_PER_RUN, NEAR_DUPLICATE_JACCARD,
+         findDuplicate, duplicateReply, slotHolder, createRememberBudget, budgetSpentReply, MAX_REMEMBER_PER_RUN, NEAR_DUPLICATE_JACCARD,
          checkRulesCap, rulesCapReply, RULES_CAP_CHARS, LESSON_CONTRACT, serializeFact }
   from '../memory-store.mjs';
 
@@ -67,9 +67,15 @@ await test('noteToFact: default type + long-first-line truncation', () => {
   assert(f.description.length <= 141 && f.description.endsWith('…'), 'truncated with ellipsis');
 });
 
-await test('noteToFact: empty note → fact slug, no crash', () => {
+await test('noteToFact: an alnum-less note gets a distinct fallback slug, no crash (forward-pass S-5)', () => {
+  // was: every such note slugged to the bare word "fact" and they all collided on one filename
   const f = noteToFact('', 'project');
-  eq(f.slug, 'fact', 'fallback slug');
+  assert(/^fact-[a-z0-9]{1,6}$/.test(f.slug), `fallback slug is namespaced: ${f.slug}`);
+  const a = noteToFact('!!! ???', 'project'), b = noteToFact('@@@ ***', 'project');
+  assert(a.slug !== b.slug, `two alnum-less notes get two slugs: ${a.slug} vs ${b.slug}`);
+  eq(noteToFact('!!! ???', 'project').slug, a.slug, 'the same note still round-trips to the same slug');
+  // a note that DOES carry words is unaffected
+  eq(noteToFact('The build tool is vite', 'project').slug, 'the-build-tool-is-vite', 'worded notes slug as before');
 });
 
 await test('recallTool + constants', () => {
@@ -144,6 +150,27 @@ await test('findDuplicate: superseded — a note matching a retracted or superse
   eq(live && live.reason, 'exact', 'live fact reported first'); eq(live.existing, 'new-db', 'the successor, not the stale row');
 });
 
+await test('supersede CYCLE keeps exactly one live winner (forward-pass S-2)', () => {
+  // A↔B: each claims to supersede the other. Both used to read as stale, so the index tagged
+  // each "superseded by" the other and the claim vanished from the store entirely.
+  const facts = [
+    P('a-claim', { description: 'the cache is redis', supersedes: 'b-claim' }),
+    P('b-claim', { description: 'the cache is memcached', supersedes: 'a-claim' }),
+  ];
+  const idx = buildMemoryIndex(facts);
+  const superseded = (idx.match(/superseded by/g) || []).length;
+  eq(superseded, 1, `exactly one member of the cycle is stale, not both:\n${idx}`);
+  assert(/a-claim/.test(idx) && /b-claim/.test(idx), 'both facts still render');
+  // disk order decides the winner: the last-written member stays live
+  eq(slotHolder([
+    P('a-slot', { description: 'x', supersedes: 'b-slot' }),
+    P('b-slot', { description: 'y', supersedes: 'a-slot' }),
+  ].map((f) => ({ ...f, slot: 'phase' })), 'phase'), 'b-slot', 'the later member of a cycle holds the slot');
+  // a normal (acyclic) supersede is untouched
+  const normal = buildMemoryIndex([P('old-x', { description: 'old' }), P('new-x', { description: 'new', supersedes: 'old-x' })]);
+  eq((normal.match(/superseded by/g) || []).length, 1, 'an ordinary supersede still stales exactly its predecessor');
+});
+
 await test('createRememberBudget: the cap trips on the 6th (default 5), and the reply says so', () => {
   const b = createRememberBudget();
   eq(MAX_REMEMBER_PER_RUN, 5, 'default cap');
@@ -193,10 +220,25 @@ await test('rules: weight round-trips (1–10, default 5 omitted); the cap error
   assert(!/weight:/.test(serializeFact({ ...R('r', 'b'), weight: 5 })), 'default weight not written');
   eq(parseFact('---\nname: r\ntype: rule\nweight: 99\n---\nb').weight, 5, 'out-of-range → default');
   eq(RULES_CAP_CHARS, 4000, 'cap pinned');
+  // The cap counts what is INJECTED, headings and separators included (forward-pass S-4), so a
+  // 3900-char body costs 3907 with its "## big\n" heading, not 3900.
   const big = R('big', 'x'.repeat(3900));
-  const ok = checkRulesCap([big], 'y'.repeat(50)); assert(ok.ok && ok.next === 3950, JSON.stringify(ok));
-  const over = checkRulesCap([big], 'y'.repeat(200)); assert(!over.ok && over.next === 4100 && over.count === 1, JSON.stringify(over));
-  assert(/capped at 4000/.test(rulesCapReply(over)) && /4100/.test(rulesCapReply(over)) && /`revise`/.test(rulesCapReply(over)), rulesCapReply(over));
+  const ok = checkRulesCap([big], 'y'.repeat(50));
+  assert(ok.ok && ok.total === 3907 && ok.next === 3971, JSON.stringify(ok));
+  const over = checkRulesCap([big], 'y'.repeat(200));
+  assert(!over.ok && over.next === 4121 && over.count === 1, JSON.stringify(over));
+  assert(/capped at 4000/.test(rulesCapReply(over)) && /4121/.test(rulesCapReply(over)) && /`revise`/.test(rulesCapReply(over)), rulesCapReply(over));
+  // the property the cap exists for: anything it passes must actually RENDER within the cap
+  const many = [1,2,3,4,5,6,7,8,9,10].map((n) => R('rule-number-' + n, 'z'.repeat(380)));
+  const verdict = checkRulesCap(many, 'w'.repeat(40));
+  const bodiesOnly = many.reduce((t, r) => t + String(r.body || '').length, 0);
+  assert(verdict.total > bodiesOnly, `headings are counted, not just bodies (${verdict.total} > ${bodiesOnly})`);
+  assert(buildMemoryIndex(many).includes(many.map((r) => `## ${r.name}\n${String(r.body).trim()}`).join('\n\n')), 'the cap measures the exact text that is injected');
+  // the incoming rule is measured with ITS OWN heading, not a placeholder: a long slug and a
+  // hypothesis marker both cost real characters in the injected block
+  const plain = checkRulesCap([], 'body');
+  const named = checkRulesCap([], 'body', { name: 'a-very-long-rule-name-indeed', status: 'hypothesis' });
+  assert(named.next > plain.next + 20, `the prospective rule's own heading is counted (${named.next} vs ${plain.next})`);
   const gone = checkRulesCap([R('dead', 'x'.repeat(3900), { status: 'retracted' })], 'y'.repeat(200)); assert(gone.ok, 'a retracted rule frees its space');
   assert(/lessons, not logs/i.test(LESSON_CONTRACT) && /next time/.test(LESSON_CONTRACT), 'the contract says the two load-bearing things');
 });
