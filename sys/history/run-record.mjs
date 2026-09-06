@@ -27,7 +27,7 @@
 // run with any loop, and replays through any loop, by wrapping infer/executeTool.
 
 import { appendEvent, contentHash, verifyChain, toNDJSON, fromNDJSON } from './ledger.mjs';
-import { parseExpect, gradeExpect, stripExpect } from '../ai/expect.mjs';
+import { parseExpect, gradeExpect, stripExpect, EXPECT_MARKER } from '../ai/expect.mjs';
 
 export const RUN_EVENTS = Object.freeze([
   'run.started',      // input: { messages, tools }            output: {}
@@ -152,7 +152,10 @@ export function createRunRecorder({ app = 'anvil', principal = 'local', grant_id
     // ---- the record ----
     // A checkpoint the agent asked for (B4): a capped handoff that becomes the next
     // projection's landmark. Recorded on the chain like any other event.
-    checkpoint(handoff) { return enqueue('run.checkpoint', () => ({ input: { step }, output: { handoff: String(handoff ?? '') } })); },
+    // `step` is snapshotted at CALL time, like every other handler's `s = e.step ?? step`. The
+    // thunk runs when the queue drains, and a turn.started arriving in between would otherwise
+    // file the handoff under a later step than the one that asked for it (forward-pass L-6).
+    checkpoint(handoff) { const s = step; return enqueue('run.checkpoint', () => ({ input: { step: s }, output: { handoff: String(handoff ?? '') } })); },
     async settled() { await queue; },
     events() { return events.slice(); },
     head() { return head; },
@@ -407,21 +410,54 @@ export function foldOutcome(events, resolve) {
   const failedRounds = ev.filter((e) => e.tool === 'verify.failed').length;
   if (failedRounds) push('gate', 'failure', Math.min(0.5, 0.2 * failedRounds), `${failedRounds} failed gate round(s)`);
 
-  // 2b. expectations (D3) — a shell call that carried an `expect` and MISSED it. Graded from the
-  //     record: the prediction is in the tool.called args, the outcome in the paired tool.responded
-  //     (its [exit N] suffix + the output, with any live [expect] line stripped so absent-misses
-  //     never grade against their own message). A miss is a small failure signal; a hit is neutral.
+  // 2b. expectations (D3) — a shell call that carried an `expect` and MISSED it. A miss is a
+  //     small failure signal; a hit is neutral; an UNGRADABLE prediction is neither.
+  //
+  //     The runner already grades every expectation live, with the true exit code in hand, and
+  //     records its verdict as the `[expect] MET|MISS` line. That verdict is authoritative, so
+  //     prefer it over re-deriving one from the text (forward-pass L-2): re-parsing cannot tell
+  //     a runner-appended `[exit N]` from the same characters a command printed itself, and a
+  //     command whose last line happens to read "[exit 0]" would otherwise mint a false grade.
+  //     Re-parsing stays as the fallback for records written before the live grade existed.
+  //     Responses are queued PER ID and consumed in order, so a repeated tool-call id pairs each
+  //     call with its own result rather than grading every one against the last (forward-pass L-1).
   let expTotal = 0, expMissed = 0;
-  const respById = new Map();
-  for (const e of ev) if (e.tool === 'tool.responded' && e.input?.id) respById.set(e.input.id, e);
+  const respsById = new Map();
+  for (const e of ev) if (e.tool === 'tool.responded' && e.input?.id) {
+    if (!respsById.has(e.input.id)) respsById.set(e.input.id, []);
+    respsById.get(e.input.id).push(e);
+  }
+  const takenById = new Map();
   for (const e of ev) {
     if (e.tool !== 'tool.called') continue;
     const exp = parseExpect(e.input?.args?.expect); if (!exp) continue;
-    const resp = respById.get(e.input.id); if (!resp) continue; // no paired result — the run died there, not a miss
+    const id = e.input.id;
+    const nth = takenById.get(id) || 0;
+    const resp = (respsById.get(id) || [])[nth]; if (!resp) continue; // no paired result — the run died there, not a miss
+    takenById.set(id, nth + 1);
+    const raw = String(resp?.output?.result ?? '');
+    let missed = null;
+    // lastIndexOf, not indexOf: the runner APPENDS its verdict, so the last marker is the one it
+    // wrote. Reading the first would let a command forge a verdict by printing the marker itself,
+    // which is the very substitution this fix exists to prevent. (Located, never regex-matched:
+    // "[expect]" is a character class.)
+    const at = raw.lastIndexOf(EXPECT_MARKER);
+    if (at >= 0) {
+      const verdict = raw.slice(at + EXPECT_MARKER.length).trimStart();
+      if (verdict.startsWith('MISS')) missed = true;
+      else if (verdict.startsWith('MET')) missed = false;
+    }
+    if (missed === null) {
+      const result = stripExpect(raw);
+      const m = /\[exit (-?\d+)\]\s*$/.exec(result); const exitCode = m ? Number(m[1]) : null;
+      // An `exit` prediction against a result carrying NO exit code is UNGRADED, not missed
+      // (forward-pass L-3): the runner appends the suffix only when it HAS a code, so its
+      // absence means "unknown". Grading it as a miss minted failure signals out of silence.
+      if (exp.kind !== 'exit' || exitCode != null) missed = !gradeExpect(exp, { exitCode, output: result }).ok;
+    }
+    if (missed == null) continue; // ungradable — it counts neither for nor against the run
     expTotal++;
-    const result = stripExpect(resp?.output?.result ?? '');
-    const m = /\[exit (-?\d+)\]\s*$/.exec(result); const exitCode = m ? Number(m[1]) : null;
-    if (!gradeExpect(exp, { exitCode, output: result }).ok) { expMissed++; push('expectation', 'failure', 0.3, `predicted "${exp.kind} ${exp.value}" — missed`); }
+    if (missed) { expMissed++; push('expectation', 'failure', 0.3, `predicted "${exp.kind} ${exp.value}" — missed`); }
   }
 
   // 3. + 4. per-fact evidence from deliberate tool calls: repeat recall, and a fact
@@ -449,9 +485,44 @@ export function foldOutcome(events, resolve) {
 // 5. reuse, across runs: a fact recalled in ≥ minRuns distinct runs is load-bearing
 //    (polarity NEUTRAL — it says the fact is used, not that any run succeeded).
 //    Deliberate `recall` calls only; injection into the index never counts (NOOA).
+// Two distinct record OBJECTS for the same run — `loadRecord(x)` called twice, a recorder and
+// its reload — are ONE run, and object identity cannot see that: `new Set(records)` counted it
+// twice and inflated every cross-run number (forward-pass L-7). Identity comes from the chain
+// instead: length + the first event's payload hash + the last event's prev_hash pin one chain
+// without re-hashing anything. A record with no events keeps its position, never merging blindly.
+// Null when the chain is too short to identify itself. `prev_hash` commits to events 0..N-2, so
+// a chain needs at least two events before its key discriminates: a lone `run.started` from two
+// different runs of the SAME prompt is byte-identical apart from a timestamp, and two runs
+// started in one millisecond would merge. Over-counting a duplicate is a cosmetic error;
+// merging two real runs silently destroys one, so the weak case declines to answer.
+function runKey(r) {
+  try {
+    const evs = typeof r?.events === 'function' ? r.events() : [];
+    if (evs.length < 2) return null;
+    const first = evs[0], last = evs[evs.length - 1];
+    // the last event needs its OWN contribution (output_hash) or two runs differing only in how
+    // they ended — done vs budget — would share a key.
+    return [evs.length, first.ts ?? '', first.input_hash ?? '', last.output_hash ?? '', last.prev_hash ?? ''].join(':');
+  } catch { return null; }
+}
+// Object identity AND chain identity: the first catches the same record passed twice (including
+// a one-event one), the second catches the same run arriving as two different objects.
+function dedupeRecords(records) {
+  const byChain = new Map(); const byObject = new Set(); const out = [];
+  for (const r of (records || [])) {
+    if (byObject.has(r)) continue;
+    const k = runKey(r);
+    if (k !== null && byChain.has(k)) continue;
+    if (k !== null) byChain.set(k, r);
+    byObject.add(r);
+    out.push(r);
+  }
+  return out;
+}
+
 export function foldReuse(records, { minRuns = 3 } = {}) {
   const runsByFact = new Map();
-  [...new Set(records || [])].forEach((r, i) => { // the same record thrice is one run
+  dedupeRecords(records).forEach((r, i) => { // the same run twice, by any object, is one run
     for (const n of foldOutcome(r.events(), r.resolve).recalled) {
       if (!runsByFact.has(n)) runsByFact.set(n, new Set());
       runsByFact.get(n).add(i);
@@ -473,7 +544,7 @@ export function foldStopReasons(records, { gated = true } = {}) {
   const byStop = {}, byStatus = {}, byAxis = {};
   let runs = 0, unfinished = 0;
   const bump = (m, k) => { m[k] = (m[k] || 0) + 1; };
-  for (const r of [...new Set(records || [])]) {
+  for (const r of dedupeRecords(records)) {
     if (!r || typeof r.events !== 'function') continue;
     const ev = r.events(); runs++;
     const st = foldStatus(ev, r.resolve, { gated });
@@ -501,7 +572,7 @@ export function stopReasonsLine(h) {
 // Returns Map name -> { views, runs, lastUsed (ms ts of the latest call), firstUsed }.
 export function foldSkillUsage(records) {
   const out = new Map();
-  [...new Set(records || [])].forEach((r, i) => {
+  dedupeRecords(records).forEach((r, i) => {
     if (!r || typeof r.events !== 'function') return;
     for (const e of joined(r.events(), r.resolve)) {
       if (e.tool !== 'tool.called' || e.input?.name !== 'skill') continue;
@@ -535,10 +606,29 @@ export const HISTORY_ROLES = Object.freeze({
 
 // The searchable / readable text of one joined event — never raw base64 or a data:
 // URI (a recorded image or binary result is summarised, never inlined).
-const BINARY_RE = /^data:[^;,]*;base64,|^[A-Za-z0-9+/]{2000,}={0,2}$/;
+// A payload too opaque to inline in a search hit. A data: URI is unambiguous. A bare blob is a
+// guess, so it is made a NARROW one: hex is a subset of the base64 alphabet, so the old
+// length+charset test swallowed long hex TEXT — a checksum table, a hexdump — and hid it from
+// search (forward-pass L-4).
+//
+// Charset alone cannot settle it, because base64 of zero bytes is a run of "A"s, which is also
+// valid hex. Symbol DIVERSITY separates them: a real hexdump draws on most of the 16 hex
+// symbols, while a degenerate run of one or two characters carries no searchable content
+// whatever it encodes. So: pure hex AND ≥8 distinct symbols reads as text; anything else that
+// is a long unbroken blob is clipped, and `read` can still page it.
+const DATA_URI_RE = /^data:[^;,]*;base64,/;
+const B64_BLOB_RE = /^[A-Za-z0-9+/]{2000,}={0,2}$/;
+const HEX_RE = /^[0-9a-f]+$/i;
+function distinctEnough(s, min = 8) {
+  const seen = new Set();
+  for (const c of s) { seen.add(c); if (seen.size >= min) return true; }
+  return false;
+}
+function looksHexText(s) { return HEX_RE.test(s) && distinctEnough(s); }
+function looksBinary(s) { return DATA_URI_RE.test(s) || (B64_BLOB_RE.test(s) && !looksHexText(s)); }
 function eventText(e) {
   const inp = e.input || {}, out = e.output || {};
-  const clip = (v) => { const s = String(v ?? ''); return BINARY_RE.test(s.trim()) ? `[${s.length} bytes binary/base64 — not inlined; read the event to page it]` : s; };
+  const clip = (v) => { const s = String(v ?? ''); return looksBinary(s.trim()) ? `[${s.length} bytes binary/base64 — not inlined; read the event to page it]` : s; };
   switch (e.tool) {
     case 'run.started': return (inp.messages || []).filter((m) => m.role === 'user').map((m) => `[user] ${String(m.content ?? '')}`).join('\n');
     case 'assistant.said': return `[assistant] ${out.content ?? ''}`;

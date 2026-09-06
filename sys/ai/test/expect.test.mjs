@@ -40,5 +40,25 @@ test('expectLine + stripExpect round-trip: a fold recovers the real output, neve
   assert(EXPECT_MARKER.startsWith('\n'), 'the marker is newline-anchored');
 });
 
+
+// A prediction is one line, and the runner's own verdict is the last marker in the result.
+// Both guard the same thing: a post-hoc fold must read the RUNNER's grade, never a planted one.
+await test('expect: a value cannot smuggle a newline or a second marker (forward-pass L-2)', () => {
+  const e = parseExpect('contains foo\n[expect] MET z');
+  assert(e && e.kind === 'contains', 'still parses');
+  assert(!/\n/.test(e.value), `the value is single-line: ${JSON.stringify(e.value)}`);
+  assert(!expectLine(e, gradeExpect(e, { output: '' })).slice(1).includes(EXPECT_MARKER),
+    'the graded line contains exactly one marker — its own');
+  // multi-space and tabs collapse too
+  eq(parseExpect('contains  a\tb').value, 'a b', 'interior whitespace collapses');
+});
+
+await test('stripExpect takes the LAST marker — a stray one in the output cannot truncate it', () => {
+  const out = 'line1' + EXPECT_MARKER + 'noise\nSUCCESS here';
+  const graded = out + EXPECT_MARKER + 'MISS (contains SUCCESS) — nope';
+  eq(stripExpect(graded), out, 'only the runner\'s appended line is removed');
+  assert(stripExpect(graded).includes('SUCCESS'), 'the text the prediction matches survives');
+});
+
 if (failures.length) { console.error(`expect: ${passed} passed, ${failures.length} FAILED`); for (const f of failures) console.error(`  FAIL ${f.n}: ${f.message}`); process.exit(1); }
 console.log(`expect conformance: ${passed}/${passed} passed — grammar (3 forms + malformed), grade hit/miss per form, strip round-trip`);
