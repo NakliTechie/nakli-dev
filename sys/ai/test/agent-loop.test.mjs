@@ -130,7 +130,10 @@ await test('the abort signal reaches infer, so an in-flight call can be cancelle
   eq(seen[0].aborted, true, 'and it is the run\'s own signal');
   // Stop must end the run. Before this, abort was only checked BETWEEN turns, so
   // a hung inference ignored both Stop and the wall-clock budget.
-  assert(result.stop === 'aborted' || result.stop === 'error', `run ended on abort, got ${result.stop}`);
+  // A cancelled in-flight inference is the Stop button working — it must read as
+  // 'aborted', never 'error' (Anvil showed 'agent error: aborted' until this was pinned).
+  eq(result.stop, 'aborted', `run ended as an abort, not an error (got ${result.stop})`);
+  assert(!result.error, 'no error field on a user stop');
 });
 
 await test('assistant tool-call turns carry null content + tool_calls, paired by id', async () => {

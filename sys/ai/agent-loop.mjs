@@ -237,6 +237,10 @@ export async function runAgentLoop({
       // checked between turns) — the run becomes uninterruptible.
       reply = await infer({ messages: convo, tools, signal });
     } catch (e) {
+      // A cancelled inference throws — that is the Stop button working, not a
+      // fault. Report it as the abort it is; 'error' is for the model or the host
+      // failing on their own (live finding 2026-09-06: Stop read as 'agent error').
+      if (aborted()) return abortReturn(step);
       onEvent({ type: 'error', error: String(e?.message || e), step });
       return { messages: convo, steps: step, stop: 'error', text: lastText, error: String(e?.message || e) };
     }
