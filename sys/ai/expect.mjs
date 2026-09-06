@@ -10,7 +10,12 @@
 export const EXPECT_KINDS = Object.freeze(['exit', 'contains', 'absent']);
 
 export function parseExpect(str) {
-  const s = String(str == null ? '' : str).trim();
+  // A prediction is ONE LINE. Interior whitespace is collapsed before anything else, because
+  // the graded line echoes this value back inside the runner's own `[expect] …` message: a
+  // value carrying a newline could therefore plant a second EXPECT_MARKER inside the runner's
+  // text and forge the verdict a post-hoc fold reads back. Collapsing kills that at the source
+  // and costs nothing — no legitimate prediction spans lines.
+  const s = String(str == null ? '' : str).replace(/\s+/g, ' ').trim();
   if (!s) return null;
   const sp = s.indexOf(' ');
   const kind = (sp < 0 ? s : s.slice(0, sp)).toLowerCase();
@@ -45,6 +50,9 @@ export function expectLine(exp, grade) {
 // Recover the command's real output from a graded result — everything before the marker.
 export function stripExpect(result) {
   const s = String(result == null ? '' : result);
-  const i = s.indexOf(EXPECT_MARKER);
+  // lastIndexOf: the runner APPENDS its line, so the last marker is the one it wrote. indexOf
+  // truncated the command's real output at any marker the output itself happened to contain,
+  // which could turn a genuine MET into a MISS.
+  const i = s.lastIndexOf(EXPECT_MARKER);
   return i < 0 ? s : s.slice(0, i);
 }

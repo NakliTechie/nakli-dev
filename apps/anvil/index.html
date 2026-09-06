@@ -672,7 +672,7 @@
         const note=String((ar&&ar.note)||'').trim();
         const all=await listFacts();
         const dup=findDuplicate(all, note); if(dup) return duplicateReply(dup); // search before save (A2)
-        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok) return rulesCapReply(cap); } // rules stay capped here too (A3)
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note, { name: noteToFact(note, 'rule', 'hypothesis').slug, status: 'hypothesis' }); if(!cap.ok) return rulesCapReply(cap); } // rules stay capped here too (A3); the prospective rule's OWN heading is counted
         const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { weight: ar&&ar.weight }); if(slug) recorded++; return slug?('Recorded '+slug):'empty note'; }
       return await codeExec(nm,ar,call);
     };
@@ -1624,7 +1624,7 @@
         const dup=findDuplicate(all, note, { exempt }); if(dup){ auditRefusal('duplicate:'+dup.reason, note); return duplicateReply(dup); }
         // A rule is injected whole every run, so rules are capped (A3): over the cap the tool
         // errors and the agent has to merge or retract one first.
-        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note); if(!cap.ok){ auditRefusal('rules-cap', note); return rulesCapReply(cap); } }
+        if(ar&&ar.type==='rule'){ const cap=checkRulesCap(all, note, { name: noteToFact(note, 'rule', 'hypothesis').slug, status: 'hypothesis' }); if(!cap.ok){ auditRefusal('rules-cap', note); return rulesCapReply(cap); } }
         const take=remBudget.take(); if(!take.ok){ auditRefusal('per-run-cap', note); return budgetSpentReply(take); }
         // A fresh learning is a HYPOTHESIS (Agno belief-revision): provisional until a
         // check corroborates it (promote with `revise`) or an observation disproves it.

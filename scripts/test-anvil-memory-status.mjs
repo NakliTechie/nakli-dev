@@ -32,7 +32,9 @@ assert.match(anvil, /recordFact\(note, ar&&ar\.type, 'hypothesis', \{ slot: ar&&
 assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supersedes its current holder at write time');
 // A2: search before save on BOTH remember paths (task loop + prime), and one budget per run.
 assert.equal((anvil.match(/findDuplicate\(all, note(?:, \{ exempt \})?\); if\(dup\)[\s\S]{0,80}?return duplicateReply\(dup\)/g) || []).length, 2, 'both remember paths search before they save (main path also audits the refusal)');
-assert.equal((anvil.match(/const cap=checkRulesCap\(all, note\); if\(!cap\.ok\)[\s\S]{0,80}?return rulesCapReply\(cap\)/g) || []).length, 2, 'both remember paths cap rules');
+// shape, not signature: checkRulesCap takes an options arg (the prospective rule's name/status)
+assert.equal((anvil.match(/checkRulesCap\(all, note[^;]*\); if\(!cap\.ok\)[\s\S]{0,120}?return rulesCapReply\(cap\)/g) || []).length, 2, 'both remember paths cap rules');
+assert.equal((anvil.match(/checkRulesCap\(all, note, \{ name: noteToFact\([^)]*\)\.slug, status: 'hypothesis' \}\)/g) || []).length, 2, 'the cap measures the rule as it will be STORED (its own heading + status)');
 assert.match(anvil, /exempt=\[ar&&ar\.supersedes, ar&&ar\.slot\?slotHolder\(all, ar\.slot\):null\]/, 'a declared replacement is exempt from the duplicate check (the correction exit)');
 assert.match(anvil, /const remBudget=createRememberBudget\(\);[\s\S]{0,400}?const executeTool = async/, 'the remember budget is created once per run, just above the executor');
 assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\)[\s\S]{0,80}?return budgetSpentReply\(take\)/, 'the remember handler spends the budget and refuses when it is gone');
