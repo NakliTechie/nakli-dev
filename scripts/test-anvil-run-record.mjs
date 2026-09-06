@@ -114,3 +114,8 @@ assert.match(anvil, /foldStopReasons\(\[\.\.\.found\.values\(\)\]\.map\(f=>f\.re
 assert.match(anvil, /stopsLine: stopReasonsLine\(stops\)/, 'and returns the one-line histogram');
 assert.match(anvil, /run index rebuilt: .*r\.stopsLine/, 'the boot backfill surfaces it');
 
+// 2b gate, live finding 2026-09-06: the self-check compares the record (one run) against the
+// task log (every run) — it must count only the rows this run appended, from a run-start index.
+assert.match(anvil, /const logStart=t\.log\.length;/, 'runTask captures where this run\'s log rows begin');
+assert.match(anvil, /liveTools=t\.log\.slice\(logStart\)\.filter\(r=>r\.k==='tool'\)\.length/, 'the dual-write self-check counts tool rows from this run only');
+

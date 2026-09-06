@@ -1444,6 +1444,10 @@
     const factMap = {};  // memory-fact name -> .md path, populated below
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
+    // The record covers THIS run; the task's log spans every run of the task. The dual-write
+    // self-check below compares tool rows from here on, or a second run on a task would trip
+    // it against the first run's rows (live finding, 2026-09-06 task xsi6h6l9 run 2).
+    const logStart=t.log.length;
     // A2: at most MAX_REMEMBER_PER_RUN new learnings per run — the hoard is the failure mode.
     const remBudget=createRememberBudget();
     const executeTool = async (nm, ar, callObj)=>{
@@ -1737,7 +1741,7 @@
         const ev=rec.events();
         const folded=foldStatus(ev, rec.resolve, { gated });
         if(folded.status!==t.status) t.log.push({k:'system',text:'⚠ run record disagrees with task status: record says '+folded.status+', app says '+t.status+' — report this'});
-        const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.filter(r=>r.k==='tool').length;
+        const foldedTools=foldLog(ev, rec.resolve).filter(r=>r.k==='tool').length, liveTools=t.log.slice(logStart).filter(r=>r.k==='tool').length;
         if(foldedTools!==liveTools) t.log.push({k:'system',text:'⚠ run record disagrees with the log: record has '+foldedTools+' tool rows, app has '+liveTools+' — report this'});
         const saved=await saveRunRecord(t, rec, { gated });
         const where = saved.tiers.length ? saved.tiers.join(' + ') : 'NOT saved';
