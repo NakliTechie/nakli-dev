@@ -402,20 +402,56 @@ await test('STAGNATION (D2): the same call repeated ≥3× is a stall; many DIFF
   eq(foldStagnation(rk.events(), rk.resolve).signal, 'repeat', 'reordered arg keys still detected as the same repeated call');
 });
 
-await test('STAGNATION: two gate rounds with no new file touched → gate-stuck; touching a new file clears it', async () => {
-  // gate-stuck: write the SAME file, fail twice.
-  const shell = freshShell(); const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+await test('STAGNATION: gate-stuck needs an unchanged EDIT, not just an unchanged filename (forward-pass M-2)', async () => {
+  // Was: this test wrote a.js twice with DIFFERENT content and asserted "stalled" — it encoded
+  // the false positive. Re-editing one file across two failed gate rounds IS the normal fix
+  // loop; only a byte-identical re-edit is a stall.
+  // Each write is followed by a prose turn, so the gate runs between the two edits — otherwise
+  // both writes land before the FIRST failure and nothing is written between the rounds at all.
+  const stagnationOf = async (contents) => {
+    const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+    await rec.start({ messages: MESSAGES, tools: [shellTool()] });
+    const turns = contents.flatMap((c, i) => ([
+      { content: '', toolCalls: [call('write', { path: 'a.js', content: c }, 'w' + i)] },
+      { content: 'done', toolCalls: [] }]));
+    const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()],
+      infer: rec.wrapInfer(scripted(turns)),
+      executeTool: async (nm, a) => (nm === 'write' ? 'wrote ' + a.path : 'out'), onEvent: rec.onEvent, verify: async () => ({ ok: false, exit: 1 }), maxVerifyRounds: 2 });
+    await rec.finish(r); await rec.settled();
+    return foldStagnation(rec.events(), rec.resolve);
+  };
+  const progressing = await stagnationOf(['v1', 'v2']);
+  assert(!progressing.stalled, `same file + NEW content across gate rounds is progress: ${JSON.stringify(progressing)}`);
+  const stuck = await stagnationOf(['v1', 'v1']);
+  assert(stuck.stalled && stuck.signal === 'gate-stuck', `byte-identical re-edit → gate-stuck: ${JSON.stringify(stuck)}`);
+  // a READ-only spin is still a stall: re-reading one file at a new offset each round writes
+  // nothing, so it must not read as progress just because an arg changed.
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
   await rec.start({ messages: MESSAGES, tools: [shellTool()] });
-  let n = 0;
-  const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()],
+  const rr = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()],
     infer: rec.wrapInfer(scripted([
-      { content: '', toolCalls: [call('write', { path: 'a.js', content: 'v1' }, 'w0')] },
-      { content: '', toolCalls: [call('write', { path: 'a.js', content: 'v2' }, 'w1')] },
+      { content: '', toolCalls: [call('read', { path: 'a.js', offset: 1 }, 'r0')] },
+      { content: 'done', toolCalls: [] },
+      { content: '', toolCalls: [call('read', { path: 'a.js', offset: 2 }, 'r1')] },
       { content: 'done', toolCalls: [] }])),
-    executeTool: async (nm, a) => (nm === 'write' ? 'wrote ' + a.path : 'out'), onEvent: rec.onEvent, verify: async () => ({ ok: false, exit: 1 }), maxVerifyRounds: 2 });
-  await rec.finish(r); await rec.settled();
-  const st = foldStagnation(rec.events(), rec.resolve);
-  assert(st.stalled && (st.signal === 'gate-stuck' || st.signal === 'repeat'), `no new file across gate rounds → stuck: ${JSON.stringify(st)}`);
+    executeTool: async () => 'contents', onEvent: rec.onEvent, verify: async () => ({ ok: false, exit: 1 }), maxVerifyRounds: 2 });
+  await rec.finish(rr); await rec.settled();
+  const readSpin = foldStagnation(rec.events(), rec.resolve);
+  assert(readSpin.stalled && readSpin.signal === 'gate-stuck', `a read-only spin is still gate-stuck: ${JSON.stringify(readSpin)}`);
+  // apply_patch and edit_lines write WITHOUT naming a path, so the window keys on the payload,
+  // not on a filename — two different patches across two failed rounds is progress.
+  const pr = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await pr.start({ messages: MESSAGES, tools: [shellTool()] });
+  const pp = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()],
+    infer: pr.wrapInfer(scripted([
+      { content: '', toolCalls: [call('apply_patch', { patch: '*** Begin Patch\n+v1\n*** End Patch' }, 'p0')] },
+      { content: 'done', toolCalls: [] },
+      { content: '', toolCalls: [call('apply_patch', { patch: '*** Begin Patch\n+v2\n*** End Patch' }, 'p1')] },
+      { content: 'done', toolCalls: [] }])),
+    executeTool: async () => 'applied', onEvent: pr.onEvent, verify: async () => ({ ok: false, exit: 1 }), maxVerifyRounds: 2 });
+  await pr.finish(pp); await pr.settled();
+  const patched = foldStagnation(pr.events(), pr.resolve);
+  assert(!patched.stalled, `two different patches is progress, even with no path arg: ${JSON.stringify(patched)}`);
 });
 
 await test('STAGNATION: a run that answered with no tool calls is no-tools; a normal run is not stalled', async () => {

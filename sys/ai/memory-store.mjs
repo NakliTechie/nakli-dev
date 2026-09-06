@@ -276,6 +276,35 @@ function jaccard(a, b){
 }
 export const NEAR_DUPLICATE_JACCARD = 0.8;
 
+// Polarity, for the near-duplicate guard below. A claim and its NEGATION share almost every
+// token ("the build tool is vite" vs "the build tool is NOT vite" score exactly 0.8), so a
+// lexical near-match cannot tell a correction from a restatement — it refused the single most
+// important write there is.
+//
+// Polarity is read off the TOKEN SET, not the raw text, and that is load-bearing: `tokens()`
+// drops words of ≤2 chars, so a bare "no" is not a token. Reading the raw text instead would
+// let "no, the build tool is vite" — a restatement whose tokens are identical — count as a
+// flip and slip through as a non-duplicate.
+//
+// KNOWN LIMIT (pre-existing, not closed here): `norm` strips apostrophes, so "isn't" becomes
+// "isn t" and its negation is invisible — "the build tool isn't vite" is still refused as a
+// near-duplicate. Apostrophe-free forms ("dont", "isnt") are caught. Closing the contraction
+// case needs stemming, which this deterministic no-model matcher deliberately avoids.
+const NEGATIONS = new Set(['not', 'never', 'none', 'cannot', 'cant', 'isnt', 'wasnt', 'arent',
+  'werent', 'doesnt', 'didnt', 'dont', 'wont', 'wouldnt', 'shouldnt', 'couldnt', 'neither', 'nor']);
+function hasNegation(set){ for (const w of set) if (NEGATIONS.has(w)) return true; return false; }
+function withoutNegations(set){ const o = new Set(); for (const w of set) if (!NEGATIONS.has(w)) o.add(w); return o; }
+function sameTokens(a, b){ if (a.size !== b.size) return false; for (const w of a) if (!b.has(w)) return false; return true; }
+// A polarity FLIP — the same claim asserted one way and denied the other — needs both: exactly
+// one side negated, AND the two token sets identical once the negation words are removed. The
+// second half is what keeps the guard narrow: "…run with plain node" vs "…run with plain node,
+// NO runner" is not a flip ("runner" is an added qualifier, not a denial), so it stays a
+// near-duplicate, as it should.
+function polarityFlip(aTokens, bTokens){
+  if (hasNegation(aTokens) === hasNegation(bTokens)) return false;
+  return sameTokens(withoutNegations(aTokens), withoutNegations(bTokens));
+}
+
 // Does this note already exist? Deterministic, no model. Returns null, or a structured
 // refusal the agent can act on (Caura's duplicate_memory: the reason IS the next move):
 //   exact      — same text (normalised) as a live fact          → recall / revise it
@@ -294,10 +323,15 @@ export function findDuplicate(facts, note, { exempt = [] } = {}){
   const all = (facts || []).filter(f => f && f.name && !skip.has(f.name));
   const staleTo = supersededSet(all);
   const isLive = (f) => f.status !== 'retracted' && !staleTo.has(f.name);
-  const nBody = norm(clean), nFirst = tokens(clean.split('\n')[0] || '');
+  const firstLine = clean.split('\n')[0] || '';
+  const nBody = norm(clean), nFirst = tokens(firstLine);
   const matchOf = (f) => {
     if (nBody && (norm(f.body) === nBody || norm(f.description) === nBody)) return 'exact';
-    if (jaccard(nFirst, tokens(f.description)) >= NEAR_DUPLICATE_JACCARD) return 'near';
+    // A polarity flip is a CORRECTION, never a duplicate: the note asserts what the existing
+    // fact denies (or the reverse). Only the lexical `near` branch is fooled by this — an
+    // `exact` match cannot differ in polarity, because the text is identical.
+    const fTokens = tokens(f.description);
+    if (jaccard(nFirst, fTokens) >= NEAR_DUPLICATE_JACCARD && !polarityFlip(nFirst, fTokens)) return 'near';
     return null;
   };
   for (const f of all.filter(isLive)){

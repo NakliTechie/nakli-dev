@@ -697,6 +697,12 @@ export function recoveryNote(rec) {
 // Returns { stalled, signal, detail } — the caller injects ONE capped nudge and re-loops.
 // Key-order-stable JSON: the model may emit the same args with keys in a different order, and a
 // stall is a stall regardless (D2 checker finding). Sort object keys recursively before compare.
+// The arg keys that mean a call WROTE something (as opposed to merely naming a path, which a
+// read does too). Used by the gate-stuck window to tell a fix attempt from a re-read. Covers
+// every write tool in agent-tools.mjs: write{path,content}, edit{path,new_string},
+// apply_patch{patch}, edit_lines{edit} — note the last two carry NO path, which is why the
+// window keys on the payload rather than on a filename.
+const WRITE_PAYLOAD = ['content', 'contents', 'text', 'patch', 'edit', 'data', 'body', 'new_string', 'replacement'];
 function stableArgs(v) {
   if (Array.isArray(v)) return '[' + v.map(stableArgs).join(',') + ']';
   if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableArgs(v[k])).join(',') + '}';
@@ -715,15 +721,27 @@ export function foldStagnation(events, resolve, { repeatN = 3, noToolTurns = 1 }
   }
   for (const [k, n] of sig) if (n >= repeatN) return { stalled: true, signal: 'repeat', detail: `the same call ran ${n}× (${k.slice(0, 80)}) — try a different approach` };
 
-  // 2. gate stuck: between the last two failed rounds, no NEW file was written.
+  // 2. gate stuck: between the last two failed rounds, NOTHING NEW was written. Keyed on the
+  // whole call (path AND content), not the path alone: re-editing the same file with DIFFERENT
+  // content across two failed rounds IS the normal fix loop, and calling that a stall nudged
+  // healthy work. A repeat of a byte-identical edit is still a stall. (forward-pass M-2.)
   const failIdx = ev.map((e, i) => (e.tool === 'verify.failed' ? i : -1)).filter((i) => i >= 0);
   if (failIdx.length >= 2) {
     const [prev, last] = [failIdx[failIdx.length - 2], failIdx[failIdx.length - 1]];
-    const filesBefore = new Set();
-    for (let i = 0; i < prev; i++) { const e = ev[i]; if (e.tool === 'tool.called') { const f = touchedFile(e.input?.args); if (f) filesBefore.add(f); } }
-    let newFile = false;
-    for (let i = prev; i < last; i++) { const e = ev[i]; if (e.tool === 'tool.called') { const f = touchedFile(e.input?.args); if (f && !filesBefore.has(f)) { newFile = true; break; } } }
-    if (!newFile) return { stalled: true, signal: 'gate-stuck', detail: `${failIdx.length} gate rounds and no new file touched since the last failure — the fix is not landing` };
+    // Only a call carrying a write PAYLOAD counts as progress, and the payload — not a path —
+    // is the test. Keying on any path-bearing call would let a read-only spin (one file re-read
+    // at a new offset each round) read as "something new"; requiring a path as well would miss
+    // apply_patch and edit_lines, which write without naming one.
+    const writeSig = (e) => {
+      if (e.tool !== 'tool.called') return null;
+      const a = e.input?.args; if (!a || !WRITE_PAYLOAD.some((k) => a[k] !== undefined)) return null;
+      return `${e.input?.name}:${stableArgs(a)}`;
+    };
+    const seenBefore = new Set();
+    for (let i = 0; i < prev; i++) { const s = writeSig(ev[i]); if (s) seenBefore.add(s); }
+    let progressed = false;
+    for (let i = prev; i < last; i++) { const s = writeSig(ev[i]); if (s && !seenBefore.has(s)) { progressed = true; break; } }
+    if (!progressed) return { stalled: true, signal: 'gate-stuck', detail: `${failIdx.length} gate rounds and nothing new written since the last failure — the fix is not landing` };
   }
 
   // 3. no tools in the latest loop segment (since the last run.started), but turns happened.

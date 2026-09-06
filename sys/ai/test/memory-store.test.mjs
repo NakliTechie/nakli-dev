@@ -105,6 +105,24 @@ await test('findDuplicate: near — first line ≥ 0.8 Jaccard with a live fact\
   eq(NEAR_DUPLICATE_JACCARD, 0.8, 'threshold pinned');
 });
 
+await test('findDuplicate: a NEGATION is a correction, not a near-duplicate (forward-pass M-1)', () => {
+  const facts = [P('build-tool', { description: 'the build tool is vite' })];
+  // the exact repro: {the,build,tool,not,vite} ∩ {the,build,tool,vite} = 4/5 = 0.80, AT the
+  // threshold — so the correction was refused as a duplicate of the claim it corrects.
+  eq(findDuplicate(facts, 'the build tool is NOT vite'), null, 'a polarity flip is not a duplicate');
+  const facts2 = [P('build-tool', { description: 'the build tool is not vite' })];
+  eq(findDuplicate(facts2, 'the build tool is vite'), null, 'the flip is symmetric');
+  // and the guard is narrow: same-polarity near-duplicates are still refused
+  const para = findDuplicate(facts, 'the build tool is vite here');
+  assert(para && para.reason === 'near', 'same-polarity paraphrase still near: ' + JSON.stringify(para));
+  const both = findDuplicate(facts2, 'the build tool is not vite anymore');
+  assert(both && both.reason === 'near', 'two negated restatements still near: ' + JSON.stringify(both));
+  // polarity is read off the TOKEN set, so a bare "no" (≤2 chars, never a token) cannot flip it:
+  // "no, the build tool is vite" is a RESTATEMENT and must still be refused.
+  const restate = findDuplicate(facts, 'no, the build tool is vite');
+  assert(restate && restate.reason === 'near', 'a leading "no" does not make a restatement a correction: ' + JSON.stringify(restate));
+});
+
 await test('findDuplicate: superseded — a note matching a retracted or superseded fact is refused with its successor', () => {
   const facts = [
     P('cache-guess', { description: 'The cache is redis', status: 'retracted' }),
