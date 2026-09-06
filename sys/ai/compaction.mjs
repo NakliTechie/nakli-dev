@@ -63,7 +63,13 @@ export function shake(region, { estimate = estimateTokens, minChars = 200, artif
       const id = `${artifactPrefix}${++counter}`;
       artifacts.set(id, m.content);
       saved += estimate([m]);
-      const ref = `[tool output elided — ${m.content.length} chars saved to ${id}; read it with the read tool if needed]`;
+      // The model-facing text must name a retrieval path that EXISTS. It used to say "read it
+      // with the read tool", but `read` reads workspace files and cannot resolve an
+      // artifact:// id — and no caller keeps the artifacts map, so the content was simply gone
+      // (forward-pass R1a). The run record DOES retain every tool result, and the `history` tool
+      // searches it, so that is what the agent is pointed at. `artifacts` is still returned for a
+      // caller that wants to resolve ids itself; today none does.
+      const ref = `[tool output elided — ${m.content.length} chars. The full result is in this run's record: find it with the \`history\` tool.]`;
       saved -= estimate([{ role: 'tool', content: ref }]);
       return { ...m, content: ref, _artifact: id };
     }

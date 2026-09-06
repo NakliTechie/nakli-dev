@@ -90,14 +90,31 @@ export function estimateTokens(input) {
 // same discipline as tool-output capping, applied to verifier gate output (Prime
 // Agent: "a failed gate returns its bounded output to the agent"). Pure: no file
 // spill (the loop has no workspace face), just a truncation marker.
-export function boundedText(text, { maxLines = 200, maxBytes = 4000 } = {}) {
+// Head AND tail. This kept only the head, and its main caller is the GATE FEEDBACK message — the
+// most important thing the loop says. A test runner prints its summary last, so head-only
+// truncation dropped exactly the diagnosis the agent needed (forward-pass R1b). Slicing is by code
+// POINT, so a surrogate pair can never be split down the middle.
+export function boundedText(text, { maxLines = 200, maxBytes = 4000, tailLines = 40, tailBytes = 1000 } = {}) {
   const s = String(text == null ? '' : text);
   const lines = s.split('\n');
-  let capped = s;
-  let truncated = false;
-  if (lines.length > maxLines) { capped = lines.slice(0, maxLines).join('\n'); truncated = true; }
-  if (capped.length > maxBytes) { capped = capped.slice(0, maxBytes); truncated = true; }
-  return truncated ? capped + `\n… (output truncated: ${lines.length} lines / ${s.length} bytes)` : capped;
+  let out = s, truncated = false;
+  if (lines.length > maxLines) {
+    // the tail can never outgrow the cap itself — with a small maxLines an unclamped tail
+    // produced MORE output than the limit it was enforcing
+    const tn = Math.min(tailLines, Math.max(1, Math.floor(maxLines / 2)));
+    const headN = Math.max(1, maxLines - tn);
+    const head = lines.slice(0, headN), tail = lines.slice(-tn);
+    out = `${head.join('\n')}\n… (${lines.length - head.length - tail.length} lines elided) …\n${tail.join('\n')}`;
+    truncated = true;
+  }
+  const cp = [...out];
+  if (cp.length > maxBytes) {
+    const tb = Math.min(tailBytes, Math.max(1, Math.floor(maxBytes / 2)));
+    const headN = Math.max(1, maxBytes - tb);
+    out = `${cp.slice(0, headN).join('')}\n… (${cp.length - headN - tb} chars elided) …\n${cp.slice(-tb).join('')}`;
+    truncated = true;
+  }
+  return truncated ? out + `\n… (output truncated: ${lines.length} lines / ${s.length} bytes)` : out;
 }
 
 // A capped, model-facing rendering of a verifier verdict — the exact text fed

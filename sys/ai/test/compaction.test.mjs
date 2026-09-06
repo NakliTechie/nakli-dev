@@ -119,6 +119,18 @@ await test('compaction drops the older region (with a marker) when no summarizer
   assert(r.droppedTokens > 0, 'reported dropped tokens');
 });
 
+await test('R1a: the elision names a retrieval path that EXISTS', () => {
+  // It used to say "read it with the read tool" — but `read` reads workspace files and cannot
+  // resolve an artifact:// id, and no caller keeps the artifacts map, so the content was gone.
+  const region = [{ role: 'tool', content: 'x'.repeat(4000) }];
+  const r = shake(region);
+  const ref = r.messages[0].content;
+  assert(!/read tool/.test(ref), `the ref must not point at a tool that cannot resolve it: ${ref}`);
+  assert(/history/.test(ref), `the ref names the tool that CAN retrieve it from the record: ${ref}`);
+  assert(!/artifact:\/\//.test(ref), 'no unresolvable id is shown to the model');
+  assert(r.artifacts.size === 1, 'the map is still returned for a caller that wants to resolve ids');
+});
+
 if (failures.length) {
   console.error(`compaction: ${passed} passed, ${failures.length} FAILED`);
   for (const f of failures) console.error(`  FAIL ${f.name}: ${f.message}`);
