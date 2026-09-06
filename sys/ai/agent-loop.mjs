@@ -35,6 +35,7 @@ export function shellTool() {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'The command line to run.' },
+          expect: { type: 'string', description: 'Optional prediction, graded against the result: "exit <n>", "contains <text>", or "absent <text>". A miss is recorded — predict when you are testing a belief.' },
         },
         required: ['command'],
       },

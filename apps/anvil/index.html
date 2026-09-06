@@ -233,6 +233,7 @@
   import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool, INJECTED_STATUSES } from '../../sys/ai/skills.mjs';
   import { skillManageTool, planSkillWrite, createSkillSession, SKILL_FILE } from '../../sys/ai/skill-manage.mjs';
   import { contextRemainingTool, checkpointTool, contextBudget, windowFromOllama, windowForPreset, capHandoff } from '../../sys/ai/context-budget.mjs';
+  import { runLearnReview, shouldAutoReview } from '../../sys/ai/learn.mjs';
   import { sentinelLine } from '../../sys/ai/skill-sentinel.mjs';
   import { makeEnvelope } from '../../sys/staging/envelope.mjs';
   import { registerAppDiffTypes } from '../../sys/staging/diff-types.mjs';
@@ -257,7 +258,7 @@
   import { runCampaign } from '../../sys/assay/runmode.mjs';
   import { makeCampaignExecutors } from '../../sys/assay/executors.mjs';
   import { verifyWall, verifyTests, replay as replayLineage } from '../../sys/assay/verify.mjs';
-  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote } from '../../sys/history/run-record.mjs';
+  import { createRunRecorder, foldStatus, foldLog, foldTranscript, loadRecord, foldStopReasons, stopReasonsLine, searchRecords, readEvent, historyTool, foldRecovery, recoveryNote, foldStagnation, stagnationNudge, foldOutcome } from '../../sys/history/run-record.mjs';
 
   const $ = (id) => document.getElementById(id);
   const nak = window.naklios || null;
@@ -1348,6 +1349,32 @@
   // never inside the mounted workspace: an agent will edit whatever it can reach
   // (khiladi's driver "fixed" its own event log), and a ledger the agent can rewrite
   // audits nothing. Same posture as the FIF. Returns the saved path, or null.
+  // C2 — the post-run review fork (explicit or automatic). Reviews the finished run's record and
+  // STAGES any proposed skill (planSkillWrite → status staged) or fact (recordFact → hypothesis).
+  // Nothing lands active. Poison-checked (C3) via a per-project proposal ledger so a rejected
+  // proposal is not re-proposed. `rec` is the just-finished recorder.
+  let learnLedger = null; // reused across a task so a rejection sticks within the session
+  async function learnThisRun(t, rec){
+    if(!(nak && nak.capabilities && nak.capabilities.ai)) return null;
+    const propose = async (pr)=>{
+      try{
+        if(pr.kind==='skill'){
+          const plan = planSkillWrite({ op:'create', name:pr.name, description:pr.description||'', content:pr.content||pr.description||pr.name }, { existing:null, session:createSkillSession(), now:new Date().toISOString() });
+          if(!plan.ok) return { ok:false };
+          const dir = SKILLS_DIR+'/'+pr.name; await fs.write(dir+'/'+SKILL_FILE, plan.skillText);
+          return { ok:true, staged:'skill:'+pr.name+' ('+plan.status+')' };
+        }
+        if(pr.kind==='fact'){ const slug=await recordFact(pr.note||pr.description||pr.name, 'project', 'hypothesis'); return { ok: !!slug, staged:'fact:'+slug }; }
+      }catch(_){}
+      return { ok:false };
+    };
+    const rep = await runLearnReview({ record:{ events:rec.events, resolve:rec.resolve }, infer:inferViaHost, ledger:learnLedger, propose, now:Date.now() });
+    if(rep.staged.length) (t.log=t.log||[]).push({ k:'system', text:'Learned from this run — staged for your approval: '+rep.staged.map(x=>x.staged).join(', ')+'. Nothing was saved active.' });
+    else (t.log=t.log||[]).push({ k:'system', text:'Reviewed this run — nothing new worth staging.'+(rep.dropped.length?(' ('+rep.dropped.length+' already-rejected proposal(s) skipped.)'):'') });
+    renderFiles(); renderLog();
+    return rep;
+  }
+
   async function saveRunRecord(t, rec, { gated=false }={}){
     const rel='runs/'+String(state.activeProject||'local')+'/'+String(t.id);
     const name=new Date().toISOString().replace(/[:.]/g,'-')+'.json';
@@ -1832,6 +1859,24 @@
         result = await runAgentLoop({ messages: nudgeMessages, tools, infer: recInfer, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:recEvent });
         await rec.finish(result);
       }
+      // D2 supervisor: after a loop, if the RECORD shows spinning the loop's own consecutive-
+      // identical guard misses — the SAME call repeated non-consecutively, or gate rounds with no
+      // new file — inject ONE capped redirect and re-loop. Fires at most once per run, and never
+      // on a run that finished 'done' (no-tools is already handled by the act-or-nudge above).
+      if(mode==='code' && result.stop!=='done' && !(abortController && abortController.signal.aborted)){
+        try{
+          await rec.settled();
+          const stag=foldStagnation(rec.events(), rec.resolve);
+          if(stag.stalled && stag.signal!=='no-tools'){
+            t.log.push({k:'system', text:'Supervisor: '+stag.detail+' — redirecting.'}); renderLog();
+            convo.push({role:'user', content: stagnationNudge(stag)});
+            const superMessages=[sysMsg(''), ...convo];
+            await rec.start({ messages: superMessages, tools });
+            result = await runAgentLoop({ messages: superMessages, tools, infer: recInfer, executeTool, maxSteps:16, signal: abortController.signal, budget:{tokens:120000, wallClockMs:240000}, verify, maxVerifyRounds:3, onEvent:recEvent });
+            await rec.finish(result);
+          }
+        }catch(_){}
+      }
       const finalAssistant=[...t.log].reverse().find(x=>x.k==='assistant');
       // Layer 2b: the run record is the source of truth. Settle it, then DERIVE the carried
       // transcript and the status from folds — there is no parallel durable writer left to
@@ -1884,6 +1929,14 @@
         // every run, and say what fixes it. A user who reads "evictable" picks the home.
         const nudge = (!homeHandle && opfsPersisted!==true) ? ' — browser storage only; the browser may evict it. Pick an Anvil home (🗄) to keep records on disk.' : '';
         t.log.push({k:'system',text:'record: '+ev.length+' events · chain '+String(rec.head()||'').slice(7,15)+' · '+where+nth+nudge+(saved.errors.length?(' · errors: '+saved.errors.join('; ')):'')});
+        // C5 — automatic post-run review, guarded: skip an aborted run, and defer on a local model
+        // until idle (the scheduler decides). Cancelled implicitly if a new run has started
+        // (running flips true). Fire-and-forget; a review failure never fails the task.
+        try{
+          let isLocal=true; try{ const ep=(nak&&nak.ai&&nak.ai.endpoint)||null; isLocal = ep ? ['ollama','lmstudio','llamacpp'].includes(ep.preset) : true; }catch(_){ isLocal=true; }
+          const decision=shouldAutoReview({ outcome: foldOutcome(ev, rec.resolve).label, stop: result.stop, idleMs: 0, isLocalModel: isLocal });
+          if(decision.review) learnThisRun(t, rec).catch(()=>{});
+        }catch(_){}
       }catch(e){ t.log.push({k:'system',text:'record: could not persist — '+String(e&&e.message||e)}); }
     }catch(e){
       t.status='error';

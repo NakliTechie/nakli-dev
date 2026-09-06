@@ -13,7 +13,8 @@ import { verifyChain } from '../ledger.mjs';
 import { RUN_EVENTS, createRunRecorder, loadRecord, foldStatus, foldLog, foldTranscript,
          replayInfer, replayExecuteTool, compareRuns, requestHash, ReplayMiss,
          OUTCOME_SIGNALS, foldOutcome, foldReuse, foldStopReasons, stopReasonsLine,
-         searchRecords, readEvent, historyTool, HISTORY_ROLES, foldRecovery, recoveryNote } from '../run-record.mjs';
+         searchRecords, readEvent, historyTool, HISTORY_ROLES, foldRecovery, recoveryNote,
+         foldStagnation, stagnationNudge, foldSessionContext, foldDecisions } from '../run-record.mjs';
 
 let passed = 0; const failures = [];
 async function test(n, fn) { try { await fn(); passed++; } catch (e) { failures.push({ n, message: e.message }); } }
@@ -362,6 +363,82 @@ await test('a checkpoint is recorded on the chain and reads back through the his
   assert(hits.some((h) => h.tool === 'run.checkpoint'), 'a checkpoint is in the supervisor slice');
 });
 
+await test('STAGNATION (D2): the same call repeated ≥3× is a stall; many DIFFERENT calls are not', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec.start({ messages: MESSAGES, tools: [shellTool()] });
+  // NON-consecutive repetition: the loop's own guard stops on 2 CONSECUTIVE identical steps, so
+  // it misses A,B,A,B,A — which is exactly the spinning the supervisor is for. 'npm test' 3×.
+  const spin = [
+    { content: '', toolCalls: [call('shell', { command: 'npm test' }, 'c0')] },
+    { content: '', toolCalls: [call('shell', { command: 'ls' }, 'c1')] },
+    { content: '', toolCalls: [call('shell', { command: 'npm test' }, 'c2')] },
+    { content: '', toolCalls: [call('shell', { command: 'ls' }, 'c3')] },
+    { content: '', toolCalls: [call('shell', { command: 'npm test' }, 'c4')] },
+    { content: 'x', toolCalls: [] }];
+  const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: rec.wrapInfer(scripted(spin)), executeTool: async () => 'still failing', onEvent: rec.onEvent, maxSteps: 8 });
+  await rec.finish(r); await rec.settled();
+  const st = foldStagnation(rec.events(), rec.resolve);
+  assert(st.stalled && st.signal === 'repeat', `repeated identical call → stall: ${JSON.stringify(st)}`);
+  assert(/\[coordination\]/.test(stagnationNudge(st)) && /different approach/.test(stagnationNudge(st)), 'the nudge is tagged coordination and redirects');
+  // many DIFFERENT reads are legitimate, not a stall
+  const shell2 = freshShell(); const rec2 = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec2.start({ messages: MESSAGES, tools: [shellTool()] });
+  const reads = [0,1,2,3,4].map((i) => ({ content: '', toolCalls: [call('shell', { command: 'cat file'+i }, 'r'+i)] }));
+  const r2 = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: rec2.wrapInfer(scripted([...reads, { content: 'done', toolCalls: [] }])), executeTool: async () => 'contents', onEvent: rec2.onEvent, maxSteps: 8 });
+  await rec2.finish(r2); await rec2.settled();
+  assert(!foldStagnation(rec2.events(), rec2.resolve).stalled, 'five different reads is progress, not a stall');
+  eq(stagnationNudge({ stalled: false }), '', 'no nudge when not stalled');
+  // key order must not hide a stall: the same call with reordered arg keys still counts as one signature
+  const rk = createRunRecorder({ app: 'anvil', principal: 'p' }); await rk.start({ messages: MESSAGES, tools: [shellTool()] });
+  const mk = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: rk.wrapInfer(scripted([
+    { content: '', toolCalls: [call('shell', { command: 'x', dir: '/a' }, 'k0')] },
+    { content: '', toolCalls: [call('shell', { command: 'y' }, 'k1')] },
+    { content: '', toolCalls: [call('shell', { dir: '/a', command: 'x' }, 'k2')] },
+    { content: '', toolCalls: [call('shell', { command: 'y' }, 'k3')] },
+    { content: '', toolCalls: [call('shell', { command: 'x', dir: '/a' }, 'k4')] },
+    { content: 'z', toolCalls: [] }])), executeTool: async () => 'o', onEvent: rk.onEvent, maxSteps: 8 });
+  await rk.finish(mk); await rk.settled();
+  eq(foldStagnation(rk.events(), rk.resolve).signal, 'repeat', 'reordered arg keys still detected as the same repeated call');
+});
+
+await test('STAGNATION: two gate rounds with no new file touched → gate-stuck; touching a new file clears it', async () => {
+  // gate-stuck: write the SAME file, fail twice.
+  const shell = freshShell(); const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec.start({ messages: MESSAGES, tools: [shellTool()] });
+  let n = 0;
+  const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([
+      { content: '', toolCalls: [call('write', { path: 'a.js', content: 'v1' }, 'w0')] },
+      { content: '', toolCalls: [call('write', { path: 'a.js', content: 'v2' }, 'w1')] },
+      { content: 'done', toolCalls: [] }])),
+    executeTool: async (nm, a) => (nm === 'write' ? 'wrote ' + a.path : 'out'), onEvent: rec.onEvent, verify: async () => ({ ok: false, exit: 1 }), maxVerifyRounds: 2 });
+  await rec.finish(r); await rec.settled();
+  const st = foldStagnation(rec.events(), rec.resolve);
+  assert(st.stalled && (st.signal === 'gate-stuck' || st.signal === 'repeat'), `no new file across gate rounds → stuck: ${JSON.stringify(st)}`);
+});
+
+await test('STAGNATION: a run that answered with no tool calls is no-tools; a normal run is not stalled', async () => {
+  const shell = freshShell(); const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec.start({ messages: MESSAGES, tools: [shellTool()] });
+  const r = await runAgentLoop({ messages: MESSAGES, tools: [shellTool()], infer: rec.wrapInfer(scripted([{ content: 'I would run the tests.', toolCalls: [] }])), executeTool: makeShellExecutor(shell), onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  eq(foldStagnation(rec.events(), rec.resolve).signal, 'no-tools', 'prose-only run → no-tools');
+  eq(foldStagnation((await recordRun()).rec.events(), (await recordRun()).rec.resolve).stalled, false, 'a normal 3-tool run is not stalled');
+});
+
+await test('SESSION CONTEXT + DECISIONS folds (C2): goal, files, outcome; tool→gate pairing', async () => {
+  const gated = await recordRun({ verify: async () => ({ ok: true, exit: 0, stdout: '', stderr: '' }) });
+  const ctx = foldSessionContext(gated.rec.events(), gated.rec.resolve);
+  assert(/Create src\/a\.txt/.test(ctx.goal), 'goal is the first owner input'); eq(ctx.outcome, 'success', 'gated pass → success');
+  assert(ctx.filesTouched.length === 0 || Array.isArray(ctx.filesTouched), 'filesTouched is a list (shell commands carry no path arg here)');
+  const dec = foldDecisions(gated.rec.events(), gated.rec.resolve);
+  assert(dec.length === 3 && dec.every((d) => typeof d.toolSignature === 'string'), 'one decision per tool call, each with a signature');
+  assert(dec.some((d) => d.outcome === 'passed'), 'a decision is paired with the gate pass');
+  const ungated = await recordRun();
+  eq(foldSessionContext(ungated.rec.events(), ungated.rec.resolve).outcome, 'unknown', 'ungated → unknown outcome');
+});
+
 await test('the fixed vocabulary is frozen and complete for the loop', () => {
   assert(Object.isFrozen(RUN_EVENTS), 'frozen');
   for (const v of ['run.started', 'turn.started', 'llm.requested', 'llm.responded', 'tool.called', 'tool.responded', 'tool.failed', 'verify.passed', 'verify.failed', 'run.stopped', 'run.checkpoint'])
@@ -446,6 +523,32 @@ async function recordMemRun({ verify = null } = {}) {
   await rec.finish(result); await rec.settled();
   return rec;
 }
+
+await test('OUTCOME expectation (D3): a shell call that missed its predicted exit is failure evidence; a hit is neutral', async () => {
+  const shell = freshShell();
+  const rec = createRunRecorder({ app: 'anvil', principal: 'p' });
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'run it' }];
+  await rec.start({ messages: msgs, tools: [shellTool()] });
+  // The model predicts exit 0 but the command fails; the recorded result carries [exit 1].
+  const r = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'false', expect: 'exit 0' }, 'c0')] }, { content: 'done', toolCalls: [] }])),
+    executeTool: async () => 'command failed\n[exit 1]', onEvent: rec.onEvent });
+  await rec.finish(r); await rec.settled();
+  const o = foldOutcome(rec.events(), rec.resolve);
+  eq(o.expectations.total, 1, 'one prediction'); eq(o.expectations.missed, 1, 'it missed');
+  const sig = o.signals.find((x) => x.kind === 'expectation'); assert(sig && sig.polarity === 'failure' && /exit 0.*missed/.test(sig.detail), `a miss is failure evidence: ${sig && sig.detail}`);
+  // a HIT records no expectation failure
+  const shell2 = freshShell(); const rec2 = createRunRecorder({ app: 'anvil', principal: 'p' });
+  await rec2.start({ messages: msgs, tools: [shellTool()] });
+  const r2 = await runAgentLoop({ messages: msgs, tools: [shellTool()],
+    infer: rec2.wrapInfer(scripted([{ content: '', toolCalls: [call('shell', { command: 'true', expect: 'exit 0' }, 'c0')] }, { content: 'done', toolCalls: [] }])),
+    executeTool: async () => 'ok\n[exit 0]', onEvent: rec2.onEvent });
+  await rec2.finish(r2); await rec2.settled();
+  const o2 = foldOutcome(rec2.events(), rec2.resolve);
+  eq(o2.expectations.missed, 0, 'a met prediction is not a failure'); assert(!o2.signals.some((x) => x.kind === 'expectation'), 'no expectation signal on a hit');
+  // a call with NO expect contributes nothing
+  eq(foldOutcome((await recordRun()).rec.events(), (await recordRun()).rec.resolve).expectations.total, 0, 'no expect → no expectation accounting');
+});
 
 await test('OUTCOME per-fact: repeat recall and recall-then-retract are failure evidence on the FACT', async () => {
   const rec = await recordMemRun();
