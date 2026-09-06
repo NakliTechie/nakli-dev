@@ -29,7 +29,8 @@ const RM_FLAGS = { r: 'recursive', R: 'recursive', f: 'force' };
 // ── path helpers: cwd lives inside the fileops root; '' is the root, and a
 // path can never climb above it. ──
 function normalizePath(cwd, arg) {
-  const raw = String(arg == null ? '' : arg);
+  // the quote fix's internal marker is never part of a real path
+  const raw = String(arg == null ? '' : arg).replace(/\u0001/g, '');
   const abs = raw.startsWith('/');
   const base = abs ? [] : cwd.split('/').filter(Boolean);
   for (const seg of raw.split('/')) {
@@ -344,14 +345,18 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     async head(argv, stdin) {
       const { flags, positionals } = splitArgs(argv, { valueFlags: ['-n'] });
       const bad = unsupportedFlag('head', flags, ['n']); if (bad) return flagErr('head', bad);
+      const n = flagNum(argv, 10);
+      if (n && typeof n === 'object' && n.bad !== undefined) return { text: `head: invalid line count: ${n.bad}`, code: 2 };
       const inp = await textInput('head', positionals, stdin); if (inp.failed) return inp;
-      return { text: linesOf(inp.text).slice(0, flagNum(argv, 10)).join('\n'), code: 0 };
+      return { text: linesOf(inp.text).slice(0, n).join('\n'), code: 0 };
     },
     async tail(argv, stdin) {
       const { flags, positionals } = splitArgs(argv, { valueFlags: ['-n'] });
       const bad = unsupportedFlag('tail', flags, ['n']); if (bad) return flagErr('tail', bad);
+      const n = flagNum(argv, 10);
+      if (n && typeof n === 'object' && n.bad !== undefined) return { text: `tail: invalid line count: ${n.bad}`, code: 2 };
       const inp = await textInput('tail', positionals, stdin); if (inp.failed) return inp;
-      const lines = linesOf(inp.text); const n = flagNum(argv, 10);
+      const lines = linesOf(inp.text);
       return { text: lines.slice(Math.max(0, lines.length - n)).join('\n'), code: 0 };
     },
     async wc(argv, stdin) {
@@ -408,6 +413,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     // path routed every `ls X` through fs.list, so `ls afile` threw ENOTDIR and
     // misled callers into thinking a file was a directory.
     async ls(argv) {
+      { const bad = unsupportedFlag('ls', argv.filter((a) => a.startsWith('-')), ['R', 'a', 'l']); if (bad) return flagErr('ls', bad); }
       const long = argv.some((a) => /^-\w*l/.test(a));
       const positionals = argv.filter((a) => !a.startsWith('-'));
       const targets = positionals.length ? positionals : [null];
@@ -465,6 +471,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       if (argv.some((a) => a === '-i' || a.startsWith('-i'))) {
         return { text: 'sed: -i (in-place) is not implemented — use the `edit` tool, which is checked and reversible', code: 2 };
       }
+      { const bad = unsupportedFlag('sed', argv.filter((a) => a.startsWith('-')), ['n', 'E', 'r']); if (bad) return flagErr('sed', bad); }
       const pos = argv.filter((a) => !a.startsWith('-'));
       const script = pos[0] || '';
       // a file argument used to be IGNORED, so `sed 's/a/b/' f.txt` returned "" exit 0 (R2a)
@@ -511,6 +518,7 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     },
     // awk — the common one-liner subset: `awk [-F sep] '{print $N}'` / `'{print}'`.
     async awk(argv, stdin) {
+      { const bad = unsupportedFlag('awk', argv.filter((a) => a.startsWith('-') && !a.startsWith('-F')), ['F']); if (bad) return flagErr('awk', bad); }
       let sep = null; const parts = [];
       for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '-F') { sep = argv[++i]; }
@@ -609,7 +617,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       };
       const from = expandRange(positionals[0]);
       const to = del ? [] : expandRange(positionals[1]);
-      const text = stdin || '';
+      const files = positionals.slice(del ? 1 : 2);
+      const inp = await textInput('tr', files, stdin); if (inp.failed) return inp;
+      const text = inp.text;
       let out = '';
       for (const ch of text) {
         const k = from.indexOf(ch);
@@ -721,9 +731,15 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
     return { text: parts.join(''), code: 0 };
   }
 
+  // Returns a number, or { bad } when -n was given a non-numeric value — which used to fall back
+  // to the default and quietly return a different amount of text than was asked for.
   function flagNum(argv, dflt) {
     const i = argv.findIndex((a) => a === '-n');
-    if (i >= 0 && argv[i + 1]) return Number(argv[i + 1]) || dflt;
+    if (i >= 0) {
+      const v = argv[i + 1]; const n = Number(v);
+      if (v === undefined || !Number.isFinite(n)) return { bad: v === undefined ? '-n' : v };
+      return n;
+    }
     const m = argv.find((a) => /^-\d+$/.test(a));
     return m ? Number(m.slice(1)) : dflt;
   }
@@ -836,8 +852,16 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
       for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (a === '-name') { name = args[++i]; continue; }
-        if (a === '-type') { type = args[++i]; continue; }
-        if (a === '-maxdepth') { maxdepth = Number(args[++i]); continue; }
+        if (a === '-type') {
+          type = args[++i];
+          if (type !== 'f' && type !== 'd') return { text: `find: -type ${type ?? ''}: expected f or d`, code: 2 };
+          continue;
+        }
+        if (a === '-maxdepth') {
+          const v = args[++i]; maxdepth = Number(v);
+          if (!Number.isInteger(maxdepth) || maxdepth < 0) return { text: `find: -maxdepth ${v ?? ''}: expected a non-negative integer`, code: 2 };
+          continue;
+        }
         if (a.startsWith('-')) { bad = a; break; }
         if (base == null) base = a;
       }
@@ -956,8 +980,14 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
 
   async function runPipeline(pipeline, stdinFrom = null) {
     let stdin = '';
+    if (stdinFrom && pipeline.length > 1) {
+      // bash attaches `<` to the command it is written beside; this shell records it per
+      // STATEMENT and cannot say which stage owns it. A guess is the failure this batch removes.
+      return { text: '<: input redirection combined with a pipe is ambiguous here — feed the file explicitly (`cat FILE | ...`)', code: 2 };
+    }
     if (stdinFrom) {
-      const res = await face.invoke('fs.read', { path: normalizePath(state.cwd, stdinFrom), encoding: 'utf-8' });
+      // `< $F` never expanded the variable and reported the literal name as missing
+      const res = await face.invoke('fs.read', { path: normalizePath(state.cwd, expand(stdinFrom)), encoding: 'utf-8' });
       if (!res.ok) return { text: `${stdinFrom}: ${res.code || 'ENOENT'}`, code: 1 };
       stdin = decodeData(res.data);
     }
@@ -1022,7 +1052,9 @@ export function createShell({ registry, face, cwd = '', kiln = null } = {}) {
           data = (cur.ok ? decodeData(cur.data) : '') + chunk;
         }
         const w = await face.invoke('fs.write', { path, data, createParents: true });
-        if (!w.ok) write(`${path}: ${w.message || 'write failed'}`);
+        // a redirect that wrote NOTHING used to leave the pipeline's exit 0, so `cmd > bad && next`
+        // ran `next` as though the write had succeeded
+        if (!w.ok) { write(`${path}: ${w.message || 'write failed'}`); lastCode = 1; }
       } else {
         // Terminal display: drop the single trailing newline (the screen adds
         // its own line break); inner newlines are preserved.
