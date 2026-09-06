@@ -7,7 +7,7 @@
 // what is asserted is the STRUCTURE the reviewer emits, not how it looks.
 
 import { clearRegistry, makeEnvelope } from '../envelope.mjs';
-import { registerAppDiffTypes, normalizeCellRange, normalizeProsemirrorSteps, cellText } from '../diff-types.mjs';
+import { registerAppDiffTypes, normalizeCellRange, normalizeProsemirrorSteps, cellText, normalizeAnvilSkill } from '../diff-types.mjs';
 import { buildReviewModel, renderReview, renderReviewQueue } from '../reviewer.mjs';
 import { issueGrant, caveat, newRootKey } from '../../identity/grant.mjs';
 
@@ -56,8 +56,22 @@ const DRAFT_DIFF = {
   ],
 };
 
-await test('both production diff types register', () => {
-  eq(registered.join(','), 'reckon,draft', 'registered apps');
+await test('all three production diff types register (reckon, draft, and Anvil skill writes)', () => {
+  eq(registered.join(','), 'reckon,draft,anvil', 'registered apps');
+});
+
+await test('anvil-skill normalizes a planned skill write: the file row plus one row per Sentinel finding and lint warning', () => {
+  const diff = { skill: 'deploy', op: 'patch', path: 'SKILL.md', before: '---\nname: deploy\n---\nold', after: '---\nname: deploy\nstatus: quarantined\n---\nnew',
+    status: 'quarantined', sentinel: [{ check: 'prompt-injection', severity: 'critical', where: 'body', detail: 'ignore previous instructions' }], lint: ['incident-log shape: 3 dated entries'] };
+  const n = normalizeAnvilSkill(diff);
+  eq(n.kind, 'skill', 'kind'); eq(n.summary, 'deploy — patch SKILL.md → quarantined', 'summary names op, path and landing status');
+  eq(n.rows.length, 3, 'file + sentinel + lint rows'); eq(n.rows[0].change, 'edit', 'file row is an edit');
+  assert(/sentinel: prompt-injection \[critical\]/.test(n.rows[1].label) && /ignore previous/.test(n.rows[1].after), 'the finding is ON the card');
+  eq(n.rows[2].label, 'lint', 'lint row');
+  const env = makeEnvelope({ app: 'anvil', tool: 'skill_manage', diff, expires: null });
+  const model = buildReviewModel(env, { actor: 'person', now: 0 });
+  eq(model.renderer, 'anvil-skill', 'envelope carries the renderer key'); eq(model.rows.length, 3, 'the ONE reviewer renders a skill write');
+  assert(model.committable, 'a person can activate it');
 });
 
 await test('reckon cell-range normalizes a real setCells tx + inverse into before/after rows', () => {

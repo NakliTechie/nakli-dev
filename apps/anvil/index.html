@@ -230,7 +230,13 @@
   import { runAgentLoop } from '../../sys/ai/agent-loop.mjs';
   import { codingToolset, makeToolExecutor, makeShellVerifier } from '../../sys/ai/agent-tools.mjs';
   import { buildProjectContext, rememberTool } from '../../sys/ai/project-context.mjs';
-  import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool } from '../../sys/ai/skills.mjs';
+  import { SKILLS_DIR, parseSkill, buildSkillsIndex, skillTool, INJECTED_STATUSES } from '../../sys/ai/skills.mjs';
+  import { skillManageTool, planSkillWrite, createSkillSession, SKILL_FILE } from '../../sys/ai/skill-manage.mjs';
+  import { sentinelLine } from '../../sys/ai/skill-sentinel.mjs';
+  import { makeEnvelope } from '../../sys/staging/envelope.mjs';
+  import { registerAppDiffTypes } from '../../sys/staging/diff-types.mjs';
+  // A skill write is a P0 envelope (diff type 'anvil-skill') — the first agent-produced diff.
+  registerAppDiffTypes(['anvil']);
   import { MEMORY_DIR, parseFact, buildMemoryIndex, noteToFact, recallTool, applyRevision, applyDemotion, dependantsOf, slotHolder, reviseTool, findDuplicate, duplicateReply, createRememberBudget, budgetSpentReply, checkRulesCap, rulesCapReply, LESSON_CONTRACT } from '../../sys/ai/memory-store.mjs';
   import { HOOKS_FILE, parseHooks, preToolDecision, postToolCommands } from '../../sys/ai/hooks.mjs';
   import { compactConversation } from '../../sys/ai/compaction.mjs';
@@ -1440,7 +1446,8 @@
       };
     }
     const baseExec = makeToolExecutor({ shell, face, mode, infer: inferViaHost, spawnIsolated });
-    const skillMap = {}; // skill name -> SKILL.md path, populated below
+    const skillMap = {};
+    const skillStatus={}; // name -> lifecycle status: a staged/quarantined skill is never served or listed // skill name -> SKILL.md path, populated below
     const factMap = {};  // memory-fact name -> .md path, populated below
     let hooksCfg = { preTool:[], postTool:[] }; // .anvil/hooks.json, loaded below
     const safeSeg = (s)=> s && !s.includes('/') && !s.includes('\\') && !s.includes('..');
@@ -1450,6 +1457,8 @@
     const logStart=t.log.length;
     // A2: at most MAX_REMEMBER_PER_RUN new learnings per run — the hoard is the failure mode.
     const remBudget=createRememberBudget();
+    // C1: read-before-write — which skills THIS run has loaded through the `skill` tool.
+    const skillSession=createSkillSession();
     const executeTool = async (nm, ar, callObj)=>{
       // Pre-tool hook guard, hoisted to the TOP: skill/recall/remember/revise/
       // synthesize all return below before the old guard site, so a project's
@@ -1462,7 +1471,7 @@
       // when mode==='code', so reaching one from plan/ask means the model invented
       // a name it was never handed. A MODE_TOOLS lookup would be wrong here —
       // skill and recall are deliberately offered in every mode.
-      if(mode!=='code' && (nm==='remember'||nm==='revise'||nm==='synthesize')){
+      if(mode!=='code' && (nm==='remember'||nm==='revise'||nm==='synthesize'||nm==='skill_manage')){
         return 'Error: the "'+nm+'" tool is not available in '+mode+' mode (read-only).';
       }
       // Skills (progressive disclosure): load one skill's full body on demand.
@@ -1471,12 +1480,16 @@
         // A skill name is a single safe segment — never a path. Guards the
         // fallback path against traversal if the model invents a name.
         if(!safeSeg(name)){
-          const names=Object.keys(skillMap);
+          const names=Object.keys(skillMap).filter(n=>INJECTED_STATUSES.includes(skillStatus[n]||'active'));
           return 'Invalid skill name.'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
         }
         const p = skillMap[name] || (SKILLS_DIR+'/'+name+'/SKILL.md');
-        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const sk=parseSkill(r.data); return 'Skill: '+(sk.name||name)+'\n\n'+sk.body; } }catch(_){}
-        const names=Object.keys(skillMap);
+        try{ const r=await fs.read(p,{encoding:'utf-8'}); if(r&&r.ok){ const sk=parseSkill(r.data);
+          // A staged or quarantined skill does not bind: it is not served on request either,
+          // and its name is not advertised (C1 checker finding).
+          if(!INJECTED_STATUSES.includes(sk.status)) return 'Skill "'+name+'" is '+sk.status+' and does not bind until the owner sets status: active.';
+          skillSession.noteRead(name); return 'Skill: '+(sk.name||name)+'\n\n'+sk.body; } }catch(_){}
+        const names=Object.keys(skillMap).filter(n=>INJECTED_STATUSES.includes(skillStatus[n]||'active'));
         return 'No skill named "'+name+'".'+(names.length?' Available: '+names.join(', ')+'.':' This project has no skills.');
       }
       // Recall: load one memory fact's full detail on demand.
@@ -1509,6 +1522,31 @@
         const slug=await recordFact(note, ar&&ar.type, 'hypothesis', { slot: ar&&ar.slot, derived_from: ar&&ar.derived_from, supersedes: ar&&ar.supersedes, weight: ar&&ar.weight });
         if(slug) factMap[slug]=MEMORY_DIR+'/'+slug+'.md';
         return slug?('Recorded fact "'+slug+'" (hypothesis) — promote or retract it with `revise` as evidence arrives.'):'Nothing recorded.';
+      }
+      // skill_manage (C1): the agent writes its own skills — read-before-write enforced,
+      // Sentinel-scanned, and STAGED through P0 (never active until a person activates it).
+      // Anvil has no reviewer pane yet, so the envelope's summary and the Sentinel verdict
+      // go to the task log; the file lands with status staged (or quarantined).
+      if(nm==='skill_manage'){
+        const name=String((ar&&ar.name)||'').trim();
+        if(!safeSeg(name)) return 'Invalid skill name (a lowercase slug).';
+        const dir=SKILLS_DIR+'/'+name, skillPath=dir+'/'+SKILL_FILE;
+        let existing=null; try{ const r=await fs.read(skillPath,{encoding:'utf-8'}); if(r&&r.ok) existing=r.data; }catch(_){}
+        // The folder's support files ride along so Sentinel re-scans the whole skill and a
+        // write_file diff shows the real before.
+        const existingFiles=[]; try{ const ls=await fs.list(dir,{recursive:true}); for(const e of ((ls&&ls.entries)||[])){ if(e.type==='dir') continue; const rel=String(e.path).slice(dir.length+1); if(rel===SKILL_FILE) continue; const fr=await fs.read(e.path,{encoding:'utf-8'}); if(fr&&fr.ok) existingFiles.push({ path: rel, content: fr.data }); } }catch(_){}
+        const plan=planSkillWrite(ar||{}, { existing, existingFiles, session: skillSession, now: new Date().toISOString() });
+        if(!plan.ok) return plan.refusal;
+        const env=makeEnvelope({ app:'anvil', tool:'skill_manage', diff: plan.diff, expires: null });
+        await fs.write(skillPath, plan.skillText);
+        if(plan.path!==SKILL_FILE) await fs.write(dir+'/'+plan.path, plan.after);
+        skillMap[name]=skillPath; skillStatus[name]=plan.status; renderFiles();
+        // The envelope is not persisted as a staging record yet (Anvil has no reviewer pane);
+        // its proposal id and this card ride the run's chain in the tool reply — the only
+        // durable trace until the host bridge ships the diff (Chunk 2).
+        const card='Staged skill "'+name+'" ('+plan.op+' '+plan.path+' → '+plan.status+') · proposal '+env.proposal_id+' · '+sentinelLine(plan.sentinel)+(plan.lint.length?(' · lint: '+plan.lint.join('; ')):'');
+        t.log.push({k:'system', text:card}); renderLog();
+        return card+'. It binds only after the owner sets status: active.';
       }
       // Belief revision: promote a corroborated hypothesis to verified, or retract one
       // an observation disproved (so it stops re-asserting a wrong note).
@@ -1602,7 +1640,9 @@
           try{
             const r=await fs.read(e.path+'/SKILL.md',{encoding:'utf-8'});
             if(r&&r.ok){ const sk=parseSkill(r.data); const name=sk.name || e.name;
-              metas.push({ name, description: sk.description }); skillMap[name]=e.path+'/SKILL.md'; }
+              // status rides along: buildSkillsIndex injects only active/stale — a staged or
+              // quarantined skill must never bind (C1).
+              metas.push({ name, description: sk.description, status: sk.status }); skillMap[name]=e.path+'/SKILL.md'; skillStatus[name]=sk.status; }
           }catch(_){}
         }
         skillsIndex = buildSkillsIndex(metas);
@@ -1642,6 +1682,7 @@
     // something to load.
     const tools = codingToolset(mode,{subagents:true, supervisor: mode==='code', completion: !!verify});
     if(mode==='code') tools.push(rememberTool());
+    if(mode==='code') tools.push(skillManageTool());
     if(mode==='code') tools.push(synthesizeTool());
     if(skillsIndex) tools.push(skillTool());
     if(memoryIndex) tools.push(recallTool());

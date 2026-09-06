@@ -34,7 +34,7 @@ assert.match(anvil, /slotHolder\(await listFacts\(\), r\.slot\)/, 'a slot supers
 assert.equal((anvil.match(/findDuplicate\(all, note(?:, \{ exempt \})?\); if\(dup\) return duplicateReply\(dup\);/g) || []).length, 2, 'both remember paths search before they save');
 assert.equal((anvil.match(/const cap=checkRulesCap\(all, note\); if\(!cap\.ok\) return rulesCapReply\(cap\);/g) || []).length, 2, 'both remember paths cap rules');
 assert.match(anvil, /exempt=\[ar&&ar\.supersedes, ar&&ar\.slot\?slotHolder\(all, ar\.slot\):null\]/, 'a declared replacement is exempt from the duplicate check (the correction exit)');
-assert.match(anvil, /const remBudget=createRememberBudget\(\);\n\s*const executeTool = async/, 'the remember budget is created once per run, beside the executor');
+assert.match(anvil, /const remBudget=createRememberBudget\(\);[\s\S]{0,400}?const executeTool = async/, 'the remember budget is created once per run, just above the executor');
 assert.match(anvil, /const take=remBudget\.take\(\); if\(!take\.ok\) return budgetSpentReply\(take\);/, 'the remember handler spends the budget and refuses when it is gone');
 
 // The memory panel must SHOW a retracted fact rather than listing it as live —
